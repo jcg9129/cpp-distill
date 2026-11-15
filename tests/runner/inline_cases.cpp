@@ -205,7 +205,11 @@ int run(int argc, char** argv) {
         const auto guard = onceGuardName(require(fileIdentity(original / "once.h")));
         write(original / "collision.h", "// SPDX-License-Identifier: GPL-3.0-or-later\nint " + guard + ";\n");
       }
-      auto inlined = inlineSources(command, search);
+      InlineOptions inlineOptions;
+      // Fixture headers model a complete inventory; production defaults remain
+      // conservative until Windows/macOS lists have been generated and reviewed.
+      inlineOptions.names.extensions = {{"fixture", {"FIXTURE_EXTENSION"}}};
+      auto inlined = inlineSources(command, search, inlineOptions);
       if (std::filesystem::exists(original / "expect-error.txt")) {
         const auto expected = uncomment(read(original / "expect-error.txt"));
         check(!inlined.ok(), "expected error: " + expected);

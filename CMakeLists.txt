@@ -19,8 +19,13 @@ if(NOT WIN32)
   unset(CMAKE_REQUIRED_DEFINITIONS)
 endif()
 include(cmake/EmbedNames.cmake)
+include(cmake/EmbedProfiles.cmake)
 add_library(distill_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/embedded_profiles.cpp"
+  src/core/profile/toml.cpp
+  src/core/profile/profile.cpp
+  src/core/profile/facts.cpp
   src/core/lex/scan.cpp
   src/core/names/names.cpp
   src/core/inline/search.cpp
@@ -30,6 +35,11 @@ add_library(distill_core STATIC
   src/core/process/posix.cpp
   src/core/process/windows.cpp
   src/core/probe/probe.cpp)
+if(MSVC)
+  # Cross-version A1 inventories can contain more than 65K distinct strings.
+  set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp"
+    PROPERTIES COMPILE_OPTIONS /bigobj)
+endif()
 target_include_directories(distill_core PUBLIC src)
 target_link_libraries(distill_core PUBLIC Threads::Threads)
 if(DISTILL_HAVE_ADDCHDIR_NP AND NOT DISTILL_FORCE_FORK_SPAWN)

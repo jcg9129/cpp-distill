@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Synthetic fixture: NOT a real judge snapshot or an exhaustive compiler capture.
+name = "mingw"
+description = "Synthetic MinGW fixture"
+triple = "x86_64-w64-mingw32"
+compiler = { family = "gcc", version = "14.2" }
+std = "c++23"
+flags = ["-DONLINE_JUDGE"]
+libraries = ["mingw-w64", "libstdc++"]
+predefined = "mingw-predefined.txt"
+check = ["x86_64-w64-mingw32-g++"]
+updated = "2026-11-15"
+sources = ["https://gcc.gnu.org/gcc-14/"]
+build = { package = "synthetic:fixture=14.2.0-1" }

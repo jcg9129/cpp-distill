@@ -32,7 +32,7 @@ std::string onceGuardName(FileIdentity, std::uint64_t salt = 0);
 struct InlineOptions {
   std::size_t maxIncludeDepth = 200, maxOutputBytes = 64 * 1024 * 1024;
   NameLists names;
-  std::optional<std::string> library;
+  std::vector<std::string> libraries;
 };
 struct UserFile {
   std::filesystem::path path;

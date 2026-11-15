@@ -2,6 +2,8 @@
 #include "core/names/names.h"
 #include <algorithm>
 #include <iterator>
+#include <sstream>
+#include <stdexcept>
 
 namespace distill {
 namespace embedded {
@@ -9,6 +11,8 @@ extern const std::string_view headers[];
 extern const std::size_t headersCount;
 extern const std::string_view macros[];
 extern const std::size_t macrosCount;
+const std::string_view* extensionData(std::size_t index);
+std::size_t extensionCount(std::size_t index);
 }
 bool isStandardHeader(std::string_view name) {
   if (name.starts_with('/')) return false;
@@ -50,12 +54,47 @@ bool isStandardMacroName(std::string_view name) {
 bool isReserved(std::string_view name) {
   return name.find("__") != name.npos || (name.size() >= 2 && name[0] == '_' && name[1] >= 'A' && name[1] <= 'Z');
 }
-bool NameLists::protectedUserMacro(std::string_view name, std::optional<std::string_view> library) const {
-  if (isReserved(name) || isStandardMacroName(name)) return false;
-  if (library) {
-    const auto found = extensions.find(*library);
-    return found == extensions.end() || !found->second.contains(name);
+Result<ExtensionNames> parseExtensionList(std::string_view text, std::string_view file) {
+  ExtensionNames names;
+  std::istringstream lines{std::string(text)};
+  std::string line, previous;
+  std::size_t lineNumber = 0;
+  while (std::getline(lines, line)) {
+    ++lineNumber;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty() || line.starts_with('#')) continue;
+    const auto first = [](char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; };
+    if (!first(line[0]) || !std::all_of(line.begin() + 1, line.end(), [&](char c) { return first(c) || (c >= '0' && c <= '9'); }) ||
+        isReserved(line) || isStandardMacroName(line) || (!previous.empty() && line <= previous))
+      return Error{std::string(file) + ":" + std::to_string(lineNumber) + ": invalid, reserved, standard, duplicate or unsorted extension name"};
+    names.insert(line); previous = line;
   }
-  return std::none_of(extensions.begin(), extensions.end(), [&](const auto& entry) { return entry.second.contains(name); });
+  return names;
+}
+const ExtensionLists& embeddedExtensionLists() {
+  static const ExtensionLists lists = [] {
+    ExtensionLists result;
+    std::size_t i = 0;
+    for (const char* library : {"glibc", "libstdc++", "mingw-w64", "macos-libc"}) {
+      std::string text;
+      const auto* entries = embedded::extensionData(i);
+      const auto count = embedded::extensionCount(i++);
+      for (std::size_t n = 0; n < count; ++n) { text += entries[n]; text += '\n'; }
+      auto parsed = parseExtensionList(text, library);
+      if (!parsed.ok()) throw std::runtime_error(parsed.error().message); // Invalid build-time data.
+      result.emplace(library, std::move(parsed.value()));
+    }
+    return result;
+  }();
+  return lists;
+}
+bool NameLists::extensionListReady(const std::vector<std::string>& libraries) const {
+  if (libraries.empty()) return !extensions.empty() && std::all_of(extensions.begin(), extensions.end(), [](const auto& entry) { return !entry.second.empty(); });
+  return std::all_of(libraries.begin(), libraries.end(), [&](const auto& name) { const auto it = extensions.find(name); return it != extensions.end() && !it->second.empty(); });
+}
+bool NameLists::protectedUserMacro(std::string_view name, const std::vector<std::string>& libraries) const {
+  if (isReserved(name) || isStandardMacroName(name) || !extensionListReady(libraries)) return false;
+  if (libraries.empty()) return std::none_of(extensions.begin(), extensions.end(), [&](const auto& entry) { return entry.second.contains(name); });
+  return std::none_of(libraries.begin(), libraries.end(), [&](const auto& library) { return extensions.at(library).contains(name); });
 }
 } // namespace distill

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Available snapshot compiler and exact dependency closure, checked 2026-11-15.
+# Resolved from these packages' .PKGINFO depend/provides records against
+# https://repo.msys2.org/mingw/mingw64/ (not the judge's package manifest).
+# Keep exact filenames: the installer validates availability and closure before pacman.
+mingw-w64-x86_64-binutils-2.44-1-any.pkg.tar.zst
+mingw-w64-x86_64-crt-13.0.0.r388.gbb8673e5f-1-any.pkg.tar.zst
+mingw-w64-x86_64-gcc-14.2.0-3-any.pkg.tar.zst
+mingw-w64-x86_64-gcc-libs-14.2.0-3-any.pkg.tar.zst
+mingw-w64-x86_64-gettext-runtime-0.24-1-any.pkg.tar.zst
+mingw-w64-x86_64-gmp-6.3.0-2-any.pkg.tar.zst
+mingw-w64-x86_64-headers-13.0.0.r388.gbb8673e5f-1-any.pkg.tar.zst
+mingw-w64-x86_64-isl-0.27-1-any.pkg.tar.zst
+mingw-w64-x86_64-libiconv-1.18-1-any.pkg.tar.zst
+mingw-w64-x86_64-libwinpthread-12.0.0.r747.g1a99f8514-1-any.pkg.tar.zst
+mingw-w64-x86_64-mpc-1.3.1-2-any.pkg.tar.zst
+mingw-w64-x86_64-mpfr-4.2.1-2-any.pkg.tar.zst
+mingw-w64-x86_64-windows-default-manifest-6.4-4-any.pkg.tar.zst
+mingw-w64-x86_64-winpthreads-12.0.0.r747.g1a99f8514-1-any.pkg.tar.zst
+mingw-w64-x86_64-zlib-1.3.1-1-any.pkg.tar.zst
+mingw-w64-x86_64-zstd-1.5.7-1-any.pkg.tar.zst

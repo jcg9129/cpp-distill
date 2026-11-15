@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# distill-snapshot: 1
+# compiler-path: /synthetic/g++
+# compiler-version: synthetic GCC 14.2.0 (unit fixture, not a real compiler capture)
+# gcc-version: 14.2.0
+# dumpmachine: x86_64-w64-mingw32
+# profile-triple: x86_64-w64-mingw32
+# build: package=synthetic:fixture=14.2.0-1
+# reproduced: yes
+# std: c++23
+# builtin-registry: gcc-14.2
+# native-model: none
+# flag: -DONLINE_JUDGE
+# end-header
+#define _WIN32 1
+#define _WIN64 1
+#define __GNUC_MINOR__ 2
+#define __GNUC_PATCHLEVEL__ 0
+#define __GNUC__ 14
+#define __STRICT_ANSI__ 1
+#define __cplusplus 202302L
+#define __x86_64__ 1
+#define WIN32 1
+#define FUNCTION(x,...) x + __VA_ARGS__
+# command-operation #define ONLINE_JUDGE 1
+# state _Pragma defined-unknown special-builtin
+# probe _Pragma defined
+# state __BASE_FILE__ defined-unknown special-builtin
+# probe __BASE_FILE__ defined
+# state __COUNTER__ defined-unknown special-builtin
+# probe __COUNTER__ defined
+# state __DATE__ defined-unknown special-builtin
+# probe __DATE__ defined
+# state __FILE_NAME__ defined-unknown special-builtin
+# probe __FILE_NAME__ defined
+# state __FILE__ defined-unknown special-builtin
+# probe __FILE__ defined
+# state __INCLUDE_LEVEL__ defined-unknown special-builtin
+# probe __INCLUDE_LEVEL__ defined
+# state __LINE__ defined-unknown special-builtin
+# probe __LINE__ defined
+# state __STDC__ defined-unknown special-builtin
+# probe __STDC__ defined
+# state __TIMESTAMP__ defined-unknown special-builtin
+# probe __TIMESTAMP__ defined
+# state __TIME__ defined-unknown special-builtin
+# probe __TIME__ defined
+# state __has_attribute defined-unknown special-builtin
+# probe __has_attribute defined
+# state __has_builtin defined-unknown special-builtin
+# probe __has_builtin defined
+# state __has_c_attribute defined-unknown special-builtin
+# probe __has_c_attribute defined
+# state __has_cpp_attribute defined-unknown special-builtin
+# probe __has_cpp_attribute defined
+# state __has_extension defined-unknown special-builtin
+# probe __has_extension defined
+# state __has_feature defined-unknown special-builtin
+# probe __has_feature defined
+# state __has_include defined-unknown special-builtin
+# probe __has_include defined
+# state __has_include_next defined-unknown special-builtin
+# probe __has_include_next defined

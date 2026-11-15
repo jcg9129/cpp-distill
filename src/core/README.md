@@ -1,4 +1,5 @@
-# Core library (D2a–D2b)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+# Core library (D2a–D2c)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -88,9 +89,11 @@ former standard headers, C23 headers and the specified libstdc++ extensions.
 Macro names deliberately overapproximate, including C functions which C permits
 to be macros, optional IEC 60559/Annex K names, and historical macros. Numeric
 integer-width families also recognize implementation-provided widths beyond
-8/16/32/64. `NameLists` takes extension sets keyed by library; D2b defaults to
-empty sets, and D2c will provide generated embedded lists. Without a selected
-library the union applies. Reserved identifiers contain `__` or start `_A`–`_Z`.
+8/16/32/64. `NameLists` embeds generated extension sets keyed by library; callers can
+replace them for synthetic fixtures. Without selected libraries the union applies.
+An empty or absent selected list means protection is unavailable; the union is
+also unavailable if any participating list is empty. Linux profiles explicitly select both `glibc` and `libstdc++`;
+a missing part disables protection. Reserved identifiers contain `__` or start `_A`–`_Z`.
 
 `inline/` exposes `buildIncludeSearch`, `lookupHeader` and `inlineSources`.
 Search directories retain command spelling and are deduplicated by filesystem
@@ -161,3 +164,91 @@ or Apple's `g++` skips compiler checks with a message, retaining inliner checks.
 POSIX alias fixtures create real symlinks; Windows uses a second dot spelling
 without requiring symlink privileges. Collision fixtures derive the candidate
 guard from the copied file's actual identity.
+
+
+`profile/` parses and validates judge profiles without reading the host environment
+or executing a compiler. `parseProfileToml` is explicitly a **TOML subset**, not
+a general TOML implementation: flat bare/quoted keys, basic and literal
+single-line strings, the escapes `\\`, `\"`, `\n`, `\t`, `\uXXXX`, `\UXXXXXXXX`,
+signed 64-bit integers (decimal, or unsigned `0x`/`0o`/`0b`, with TOML digit
+separators), booleans, string arrays with comments/newlines/trailing commas, and
+single-line inline tables of strings without trailing commas. LF, CRLF and a
+file-initial UTF-8 BOM are accepted. Tables, dotted keys, dates as values, floats,
+multiline strings, additional escapes, duplicates, invalid UTF-8 and raw control
+characters are errors with file/line diagnostics. Schema validation rejects
+unknown keys and wrong types, validates calendar dates, HTTP(S) provenance URLs,
+macro spellings, compiler versions, supported numeric dialects (98/03 through 26),
+libraries and snapshot filenames. `std` omits the `-std=` prefix. C++26 currently
+uses GCC's provisional `202400L` value; a finalized dialect needs an update.
+
+`Profile` keeps the declared target/compiler/dialect, ordered `flags` and macro
+operations, `link`, `inert`, `build`, `snapshotCompiler` (TOML `snapshot_compiler`),
+selected `libraries`, check compilers and file/date/source provenance. Obsolete `defines`, `library` and `allowed` keys
+are rejected. Profile flags use the command classifier; rejected options cannot
+be declared inert and `-std=` belongs in `std`. `-fmodules` and `-fopenmp` are
+modelled options because they affect macros. Explicit `-D` and `-U` operations
+preserve order, empty replacement text and function-like definitions.
+
+`initialState(name)` returns a four-state `MacroFact` with optional definition
+and provenance: compiler builtin, startup header, command operation, special
+builtin, native model, A5, A4 or approximate allow-list. Reproduced mode requires
+a matching named build, affirmative snapshot provenance and a complete embedded
+compiler-version registry. `snapshot_compiler` records the actual alternate
+compiler's exact package or recipe; its matching `snapshot-compiler` header is
+required. A `reproduced: yes` snapshot without a profile `build` is rejected.
+Approximate mode uses only the commented data allow-list
+for snapshot facts; explicit command operations remain known. Unlisted names use
+A5 (non-reserved), A4 (reproduced reserved), or remain unknown. Special builtin
+availability and invocation are distinct: `activeSpecialBuiltin()` follows the
+current binding; a command definition is ordinary, and a final `-U` is undefined.
+`checkA3` checks effective definedness and reports all known conflicts. The raw
+`predefined` table includes every known snapshot definition; callers must consult
+the fact provenance when applying A2(a), rather than treating startup-header
+definitions as compiler builtins.
+
+`loadProfile` reads a file and its sibling snapshot. `lookupProfile` treats a
+separator or `.toml` suffix as a path; otherwise the injected user directory
+precedes embedded data. The real home/environment is never inspected implicitly.
+An invalid override or missing named snapshot is an error. CMake embeds profiles,
+snapshots, the approximate allow-list, special registries and native models;
+adding/removing data triggers reconfiguration. The Linux fixture is a real local
+GCC 15.2 capture with approximate provenance. The reproduced MinGW fixture is
+explicitly synthetic and tests format/fact semantics, not a real judge inventory.
+
+Snapshot format and research are specified completely in
+[`data/judges/README.md`](../../data/judges/README.md). The loader validates the
+versioned header, effective argv, target/compiler/dialect, per-name facts,
+startup/header provenance, complete special probes and native-model coverage.
+`ci/profiles/snapshot.py` captures the full profile command, uses separate line
+markers to detect startup headers, probes every registered special name, and
+joins supported native configurations after all options and macro operations.
+Unknown startup headers or variation outside the native model fail closed.
+The profile workflow installs the exact MSYS2 package/dependency set or builds
+AtCoder GCC from its published configure recipe, then uploads review artifacts.
+Codeforces has no published package revision: its `snapshot_compiler` selects
+available MSYS2 GCC 14.2.0-3 and the snapshot remains approximate. The installer
+checks the pinned dependency closure against the live listing and each package's
+`.PKGINFO` depend/provides records before installation. Shipped snapshots stay
+absent until the CI artifacts are reviewed.
+
+Generate A1 inventories with Python 3.11+:
+
+```sh
+python3 ci/extensions/scan.py --platform linux --compiler g++ --output-dir out/extensions --headers-version 'glibc/GCC versions'
+timeout 120 python3 -m unittest discover -s ci/extensions -p 'test_*.py'
+timeout 120 python3 -m unittest discover -s ci/profiles -p 'test_*.py'
+```
+
+The generator starts from all available standard-header-list entries and every
+header under `ext/pb_ds/`, follows textual include/include_next operands in both
+active and inactive regions using the compiler's `-E -v` search order, and scans
+only reached files. Computed includes are not followed, a limitation recorded in
+every generated list. Files are attributed separately to glibc, libstdc++,
+MinGW-w64 or macOS SDK directories; compiler intrinsic headers are traversed but
+not attributed to a library. Version-2 scans replace broad inventories; workflow
+merging unions only reachable-header inventories across compatibility versions.
+Reserved and standard names (including numeric width families) are excluded.
+The local GCC 15.2/glibc 2.42 lists have 149/1461 names; Windows/macOS sets remain
+empty placeholders until CI. `NameLists` and `InlineOptions` take a list of
+libraries: protection requires absence from every selected set and fails closed
+if any selected set is empty/missing. With no selection all libraries apply.

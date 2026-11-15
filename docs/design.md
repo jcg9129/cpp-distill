@@ -1,6 +1,9 @@
 # cpp-distill design
 
-Status: **approved v6**, 2026-11-15 (user). Opus drafted v1; Codex
+Status: **approved v7**, 2026-11-15 (user): v6 plus the §4.3 amendment (judge
+command, build provenance, special builtins, host-dependent options, A5),
+challenged by Codex in two rounds (`docs/reviews/2026-11-15-codex-profiles-r1.md`,
+`-r2.md`, cited as *P1-n*, *P2-n*). Opus drafted v1; Codex
 challenged v1–v5 (`docs/reviews/2026-11-15-codex-design-r1.md` … `-r5.md`,
 cited as *R1-n* … *R5-n*). Round 5 found no blocker for D2; v6 closes its two
 D3 holes (§4.7: predefined macros used as values, template-selected aliases).
@@ -91,8 +94,13 @@ these, and only these; the report lists each one an output depended on, and
   `##`, R5-3).
 - **A3** The judge doesn't predefine (on its command line or in the compiler)
   a macro that the user's code itself `#define`s, such as an include guard.
-- **A4** A judge profile's facts are accurate as of its `updated` date,
-  including its complete inventory of predefined macros (§4.3).
+- **A4** A judge profile's facts are accurate as of its `updated` date: its
+  command, and for a *reproduced build* (§4.3) that the judge's compiler is the
+  named package or was built from the published recipe, without further patches,
+  specs or startup headers, so the reproduced compiler's preprocessing
+  environment is the judge's.
+- **A5** (user, 2026-11-15) The judge's compiler and command add no
+  non-reserved macro beyond the profile's macro operations.
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -133,7 +141,7 @@ accepted and noted.
 **Result.** The written artifact is the most transformed one that passed its
 checks (§4.6): `pruned`, else `flat` (resolved, not pruned), else `raw`
 (inlined only). Its verification level is `target` (checked with a compiler
-whose probed facts match every profile fact) or `local` (checked with a
+whose preprocessing environment is the judge's, §4.6) or `local` (checked with a
 compiler that matches only the facts the transformation used). Runtime
 comparison has its own status: `compared N samples`, `skipped: can't run
 target binaries here`, or `not requested`.
@@ -183,7 +191,7 @@ first.
 
 `-D`/`-U` in the compile command are local settings (e.g. `-DLOCAL`): they
 apply to the baseline and the `raw` checks only; configurations that check
-`flat.cpp` and the candidate replace them with the profile's defines (§4.6).
+`flat.cpp` and the candidate replace them with the profile's macro operations (§4.6).
 
 Processes are started with `posix_spawn` on POSIX and `CreateProcessW` with
 explicit MSVC-runtime argument quoting on Windows, never through a shell. The
@@ -205,44 +213,103 @@ them), the probed triple and dialect, the modelled flags. Clang keeps its own
 predefined macros. A parse error in a system header disables pruning.
 
 A **cross compiler** for the judge's target (e.g. `x86_64-w64-mingw32-g++` for
-Codeforces, `brew install mingw-w64`) gives verification `target` for builds;
+Codeforces, `brew install mingw-w64`) can give verification `target` for builds (§4.6);
 the Clang parse then uses the judge's triple.
 
 ### 4.3 Judge profiles
 
 A data file (TOML), shipped for **Codeforces** and **AtCoder** first; user
-profiles in `~/.config/distill/judges/<name>.toml`:
+profiles in `~/.config/distill/judges/<name>.toml` (`%APPDATA%\distill\judges`
+on Windows):
 
 ```toml
 name = "codeforces"
-description = "Codeforces, GNU G++ 64-bit (Windows)"   # researched when written
+description = "Codeforces, GNU G++23 14.2 (64 bit, msys2)"
 triple = "x86_64-w64-mingw32"
-compiler = { family = "gcc", version = "14.2" }
-std = "gnu++23"                 # the language the user selects on the judge
-defines = ["ONLINE_JUDGE"]
-library = "mingw-w64"            # selects the A1 extension list
-predefined = "codeforces-predefined.txt"   # complete `-dM -E` snapshot of the judge compiler
-check = ["x86_64-w64-mingw32-g++"]   # compilers for the judge's target, tried in order
+compiler = { family = "gcc", version = "14.2.0" }
+std = "c++23"                      # the language the user selects on the judge
+flags = ["-O2", "-DONLINE_JUDGE"]  # compile options in order, -D/-U in place
+link = ["-static", "-Wl,--stack=268435456", "-lstdc++exp"]
+# Judge package revision unknown; this compiler produces an approximate snapshot.
+snapshot_compiler = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-3" }
+libraries = ["mingw-w64"]          # selects the A1 extension lists
+predefined = "codeforces-predefined.txt"
+check = ["x86_64-w64-mingw32-g++"] # compilers for the judge's target, tried in order
 updated = "2026-11-15"
+sources = ["https://codeforces.com/blog/entry/133046"]
 ```
 
 Researched from the judge's published information when written, dated, and
-updated by PR. The profile's `std` overrides `-std=` in the compile command
-(warning if they differ). Without a profile the dialect comes from the compile
-command and nothing else about the judge is known.
+updated by PR. Without a profile the dialect comes from the compile command
+and nothing else about the judge is known.
+
+**Command** (P1-5, P1-6, P2-6). `flags` is parsed structurally by the §4.1
+command model with the same rejected list (no `-include`, `-imacros`, `-Wp,…`,
+`-specs=`, `-B…`, …); an unmodelled option is a profile error unless the
+profile lists it in `inert` (options it documents as not affecting
+preprocessing, such as `-fconstexpr-depth=…`). `-D`/`-U` stay an ordered list
+of macro operations with exact replacement text (`-DX` is `1`, `-DX=` is
+empty). The profile's `std` is the dialect: a `-std=` in `flags` is a profile
+error, and `std` overrides `-std=` in the user's compile command (warning if
+they differ). `link` holds linker-only options and never affects macros.
+
+**Build provenance** (P1-4, P2-1, P2-2). `build` names the judge's compiler:
+an exact distribution package or the judge's published build recipe (source
+release and configure line). The snapshot is produced in CI by that package or
+by a compiler built there from that recipe: a **reproduced build**. A profile
+whose snapshot comes from another compiler of the same version and target is
+**approximate**. When the judge build is unknown, omit `build`; the optional
+`snapshot_compiler` names the actual snapshot compiler using the same exact
+`package` or published `recipe` form. It supplies provenance, not reproduction:
+the snapshot records `snapshot-compiler` and `reproduced: no`. A snapshot claiming
+reproduction without `build` is rejected. Codeforces publishes only
+"GNU G++23 14.2 (64 bit, msys2)", with no package revision, so its profile uses
+an available MSYS2 package as `snapshot_compiler` and remains approximate.
+
+**Snapshot** (P2-3): the macro state at the first token of an empty source
+under `-x c++ -std=<std> <flags>` (macro operations included, in order),
+recorded per name with its provenance: compiler builtin, startup header
+(`stdc-predef.h`, detected from the line markers of a separate `-E` run, since
+`-H` starts tracing after it), or command operation. Any other header
+processed before the source is a profile error.
+
+**Special builtins** (P1-1, P1-2, P2-5). An embedded registry per compiler
+family and version, taken from the compiler's source (`libcpp/init.cc` for
+GCC): `__LINE__`, `__FILE__`, `__COUNTER__`, `__has_include`, `__has_embed`,
+`__has_extension`, …. The snapshot step probes each with `#ifdef` under the
+profile's command. A name's state follows the probe and the effective macro
+operations (`-U__has_include` makes it undefined; `-D__has_include(x)=0` makes
+it an ordinary known macro); a name the registry lists and the probe confirms,
+without an ordinary definition, is *defined, definition unknown*. A condition
+is unknown when it invokes an active special builtin (directly or through
+expansion), not when it only tests `defined(name)`. A compiler version without
+a complete registry entry makes the profile approximate.
+
+**Host-dependent options** (`-march=native`, `-mtune=native`, `-mcpu=native`;
+P1-3, P2-4). Their effect is modelled by an audited, versioned **native
+dependency model**: every macro the compiler can derive from the CPU it runs
+on, from its target code (`gcc/config/i386/i386-c.cc` for x86: ISA feature
+macros, `__tune_*`, CPU-name macros) and its common code
+(`c-family/c-cppbuiltin.cc`: `__FP_FAST_FMA*`, `__GCC_DESTRUCTIVE_SIZE`,
+`__GCC_CONSTRUCTIVE_SIZE`, …). The snapshot step evaluates the effective
+command (later options and macro operations included) for every CPU
+configuration the model allows and joins the results per name: absent
+everywhere is *undefined*, the same definition everywhere is known, present
+everywhere with differing definitions is *defined, definition unknown*,
+otherwise *unknown*. `-mtune=native` alone varies only tuning-derived macros. A
+sweep over the compiler's `-march=` values is a regression check of the model,
+not its proof.
 
 **Facts** a profile supplies, each with its provenance recorded:
 
-- judge macros: exactly `defines`;
-- **every predefined macro** of the judge compiler, reserved or not, with its
-  value: the `predefined` snapshot, produced when the profile is written by
-  running a compiler matching `triple` and `compiler` (a cross compiler for
-  Windows judges) with `-dM -E` in the profile's dialect, and checked in.
-  The snapshot is exhaustive by construction, so a name not in it and not in
-  `defines` is not predefined on the judge (R4-E, under A4).
-- Where the snapshot can't be produced for a judge, the profile instead lists
-  only allow-listed facts (platform, architecture, compiler identity), and
-  every other name starts *unknown*.
+- reproduced build: every name as the snapshot, the special-builtin probes and
+  the native dependency model give it;
+- approximate profile: only allow-listed facts (compiler identity, target OS
+  and architecture, dialect, type sizes and limits, character signedness) are
+  taken from its snapshot; every other reserved name is *unknown* (P2-1);
+- every profile: an unlisted non-reserved name is *undefined* (A5); an
+  unlisted reserved name is *undefined* for a reproduced build (A4) and
+  *unknown* for an approximate one.
 
 ### 4.4 Inliner (text level)
 
@@ -294,16 +361,14 @@ requirements* of a resolution (§4.6):
 
 - the dialect (`__cplusplus`), the target's preprocessor arithmetic and
   character signedness;
-- with a profile snapshot: every predefined macro as in the snapshot plus
-  `defines`; every other name *undefined*, except as below;
-- with a profile without snapshot: the allow-listed facts; every other
-  reserved name *unknown*;
+- with a profile: the facts of §4.3 (reproduced build or approximate), except
+  as below;
 - without a profile: every reserved name *unknown*;
 - a non-reserved name that the user's code `#define`s anywhere: *undefined*
   until its first definition on the path (A3). A profile that predefines or
   `defines` such a name is a conflict with A3: resolution is disabled with an
   error naming it;
-- any other non-reserved name: *undefined* with a snapshot (above), *unknown*
+- any other non-reserved name: *undefined* with a profile (A5), *unknown*
   otherwise.
 
 States reached later from `#define`/`#undef` in the source are *derived*;
@@ -380,9 +445,11 @@ the user's library is measured.
 ### 4.6 Validation configurations
 
 A **configuration** is an object: compiler (path, family, version, triple),
-dialect, defines, include paths, options. A configuration **satisfies** a
-resolution if rerunning the resolver with the configuration's own external
-requirements (its probe: `-dM -E` with its defines, dialect, arithmetic,
+dialect, ordered macro operations, include paths, options, recorded as the
+exact argument vector, including any profile option it dropped or replaced
+(P2-6). A configuration **satisfies** a resolution if rerunning the resolver with
+the configuration's own external requirements (its probe in exactly that form:
+`-dM -E`, the special-builtin probes, dialect, arithmetic,
 character signedness) in place of the judge's makes the same decision for
 every condition the resolution decided (R4-C). Derived source states are
 recomputed by that rerun, not compared. Builds of
@@ -393,7 +460,7 @@ the user's `-I`/`-iquote` paths, so a missed inline is a build error.
 |---|---|---|
 | baseline | local (compile command as given) | builds; runs samples |
 | `raw` | local | preprocess check against the original; builds; runs equal the baseline |
-| `flat` | the first configuration that satisfies the resolution: a `check` compiler from the profile, else the local compiler with the profile's defines replacing local `-D`/`-U` | preprocess check `raw` vs `flat` in that configuration; builds; runs equal the original built in the same configuration |
+| `flat` | the first configuration that satisfies the resolution: a `check` compiler from the profile, else the local compiler with the profile's macro operations replacing local `-D`/`-U` | preprocess check `raw` vs `flat` in that configuration; builds; runs equal the original built in the same configuration |
 | `pruned` | same as `flat` | builds; static name invariant (§4.7); runs equal `flat`'s |
 
 The **preprocess check** compares the two files' `-E` output in that
@@ -407,8 +474,11 @@ headers. It can't detect a difference that the configuration doesn't
 exhibit.
 
 Verification level of the written artifact: `target` if its configuration
-satisfies *every* profile fact (cross compiler matching triple and compiler
-version); otherwise `local`. If no configuration satisfies the facts a
+has the judge's preprocessing environment: the profile is a reproduced build,
+the configuration's compiler probes identically to the snapshot (macros and
+special builtins) under the profile's full `flags`, and the command has no
+host-dependent option (a local `-march=native` describes the local host,
+P2-6); otherwise `local`. If no configuration satisfies the facts a
 `flat` resolution used, `flat` and `pruned` are not candidates and `raw` is
 written, with the reason in the report. A build in a non-satisfying
 configuration may be run as a diagnostic and is reported as such; it never

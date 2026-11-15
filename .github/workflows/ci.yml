@@ -67,6 +67,11 @@ jobs:
           Write-Host 'MinGW GCC unavailable; case runner will skip compiler comparisons'
           'DISTILL_TEST_GXX=distill-gcc-unavailable' >> $env:GITHUB_ENV
           exit 0
+      - name: Data tooling self-tests
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m unittest discover -s ci/extensions -p 'test_*.py'
+          python3 -m unittest discover -s ci/profiles -p 'test_*.py'
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} ${{ matrix.cmake_options }}
       - name: Build

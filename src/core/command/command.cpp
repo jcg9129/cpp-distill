@@ -75,10 +75,10 @@ bool warning(std::string_view s) {
   });
 }
 bool rejected(std::string_view s) {
-  if (oneOf(s, {"-c", "-S", "-E", "-Xpreprocessor", "-Xlinker", "-Xassembler", "-M", "-MM", "--sysroot"}))
+  if (oneOf(s, {"-c", "-S", "-E", "-Xpreprocessor", "-Xlinker", "-Xassembler", "-M", "-MM", "--sysroot", "-specs", "--specs"}))
     return true;
   // These are specific GCC options with joined arguments, not broad flag families.
-  for (auto prefix : {"-include", "-imacros", "-Wp,", "-Wl,", "-Wa,", "-B", "-isysroot", "--sysroot="})
+  for (auto prefix : {"-include", "-imacros", "-Wp,", "-Wl,", "-Wa,", "-B", "-isysroot", "--sysroot=", "-specs=", "--specs=", "-fplugin="})
     if (s.starts_with(prefix)) return true;
   return s == "-save-temps" || s.starts_with("-save-temps=");
 }
@@ -130,19 +130,19 @@ Result<CompileCommand> parse(std::vector<std::string> argv, std::filesystem::pat
         }
       }
       if (!matched) {
-        for (auto option : {"-std=", "-march=", "-mtune=", "-fdiagnostics-color=", "-fmax-errors=", "-fsanitize="}) {
+        for (auto option : {"-std=", "-march=", "-mtune=", "-mcpu=", "-fdiagnostics-color=", "-fmax-errors=", "-fsanitize="}) {
           const std::string_view opt(option);
           if (word.starts_with(opt) && word.size() > opt.size()) {
             arg.option = opt;
             arg.value = word.substr(opt.size());
-            arg.classification = oneOf(opt, {"-std=", "-march=", "-mtune="}) ? Class::modelled : Class::harmless;
+            arg.classification = oneOf(opt, {"-std=", "-march=", "-mtune=", "-mcpu="}) ? Class::modelled : Class::harmless;
             matched = true;
             break;
           }
         }
       }
       if (!matched) {
-        if (oneOf(word, {"-m32", "-m64", "-funsigned-char", "-fsigned-char", "-fshort-wchar", "-fno-exceptions", "-fno-rtti"}))
+        if (oneOf(word, {"-m32", "-m64", "-funsigned-char", "-fsigned-char", "-fshort-wchar", "-fno-exceptions", "-fno-rtti", "-fmodules", "-fopenmp"}))
           arg.classification = Class::modelled;
         else if (oneOf(word, {"-MD", "-MMD"})) arg.classification = Class::controlled;
         else if (warning(word) || oneOf(word, {"-O0", "-O1", "-O2", "-O3", "-Os", "-Og", "-Ofast", "-g", "-g0", "-g1", "-g2", "-g3", "-w", "-pedantic", "-pedantic-errors", "-pthread", "-static", "-static-libstdc++", "-static-libgcc", "-s", "-pipe"}))
