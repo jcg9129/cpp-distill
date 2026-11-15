@@ -57,9 +57,14 @@ def sha256(path):
 def release(version):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.]+)?", version):
         raise ValueError("Invalid LLVM version")
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "cpp-distill-D1"}
+    # Anonymous API calls share a 60/hour limit per runner IP; use the job token.
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         f"https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-{version}",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "cpp-distill-D1"})
+        headers=headers)
     with urllib.request.urlopen(request, timeout=120) as response:
         return json.load(response)
 
