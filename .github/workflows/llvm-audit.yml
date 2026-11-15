@@ -38,6 +38,7 @@ jobs:
       SDK_REV: '1'
       SDK_PLATFORM: ${{ matrix.platform }}
       SDK_CONTAINER: ${{ matrix.container }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Python for native CI orchestration
