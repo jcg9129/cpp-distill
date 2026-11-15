@@ -1,4 +1,4 @@
-# Core library (D2a)
+# Core library (D2a–D2b)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -66,3 +66,98 @@ g++ 15.2.0 on AArch64 (`-xc++ -E -v`, `-xc++ -dM -E`, `-dumpmachine`) on 2026-11
 files with `synthetic` in their names model other hosts. The real probe test
 uses `g++` from PATH and skips if it is absent (on macOS that name may identify
 Apple Clang). `spike/` remains an independent project.
+
+`lex/` scans preprocessing tokens and directives without evaluating conditions.
+Logical lines retain original byte ranges and physical start/end lines; tokens
+retain their original offsets and physical line numbers. Backslash-LF and
+backslash-CRLF splices, including GCC horizontal-whitespace splices, are removed
+before tokenization, including in comments and ordinary literals. Raw strings span lines and their closing delimiters are
+recognized in the original bytes (phase-2 splices inside raw contents are
+reverted by C++; GCC restores whitespace splice gaps as one space). Newlines
+inside raw tokens and block comments remain within their logical line,
+retaining trailing macro replacement tokens and ignored directive tokens.
+Ordinary unterminated quotes stop at newline, so skipped branches remain
+scannable. Only a file-initial UTF-8 BOM is ignored. `%:` at
+directive position is rejected with a diagnostic; ordinary digraph tokens are
+scanned. Identifier collection excludes comments, header names and literals.
+
+`names/` embeds `data/names/standard-headers.txt` and `standard-macros.txt` at
+CMake configure time, with automatic reconfiguration when either file changes.
+No runtime data files are needed. The tables cover C++ headers through C++26,
+former standard headers, C23 headers and the specified libstdc++ extensions.
+Macro names deliberately overapproximate, including C functions which C permits
+to be macros, optional IEC 60559/Annex K names, and historical macros. Numeric
+integer-width families also recognize implementation-provided widths beyond
+8/16/32/64. `NameLists` takes extension sets keyed by library; D2b defaults to
+empty sets, and D2c will provide generated embedded lists. Without a selected
+library the union applies. Reserved identifiers contain `__` or start `_A`–`_Z`.
+
+`inline/` exposes `buildIncludeSearch`, `lookupHeader` and `inlineSources`.
+Search directories retain command spelling and are deduplicated by filesystem
+equivalence (canonical paths as fallback); `-I` paths matching system directories
+are suppressed from the user chain. Quoted searches start next to the actual
+includer, then `-iquote`, then the angle chain. GCC-internal probe directories
+are included as system directories. Framework search entries use
+`Name.framework/Headers/header`. Absolute existing includes are user headers
+unless their resolved path lies beneath a system directory; missing absolute
+angle names stay, and missing quoted names fail. Relative searches classify by
+the directory through which they were found, including next-to-includer lookup.
+
+GCC filename spellings are retained separately from filesystem identities:
+`main.cpp` finds `near.h`, `./main.cpp` finds `./near.h`, `-I ./lib` finds
+`./lib/a.h`, and `-I lib/../lib` finds `lib/../lib/a.h`. Nested quoted names
+use the includer's spelled parent, retaining dot components. Markers escape
+backslashes and quotes. Each opened spelling has its own user-file metadata
+record (including the main source), with identity, byte size and render count.
+System include metadata is per occurrence, including skipped branches.
+
+Discovery reads every reachable user file before rendering, including inactive
+branches. This makes later identifier collisions, `#undef`s and macro-stack
+operations visible to recursion checks. Guard hashes use FNV-1a over device,
+inode (Windows volume serial/file index) and salt as fixed little-endian 64-bit
+integers. The salt starts at zero, and collisions with input identifiers or
+other generated guards are retried. Recursive includes require a whole-file
+guard without an outer `#else`/`#elif`, the first inner directive defining it,
+and all design §4.4 protections. Nonrecursive repeated includes are copied.
+The include depth counts the main source as level one. Output limits include
+markers and generated guards. Input bytes are not charged against that limit:
+a long directive with whitespace can legitimately produce a smaller output.
+
+Unchanged source spans are copied as bytes, including CRLF and missing final
+newlines. Splices add the newline needed to delimit generated directives;
+file-initial BOMs are removed before generated markers. Replacements preserve
+prefix comments and drop the rest of the edited directive's logical line,
+including suffix comments and extra include tokens (which GCC ignores).
+Resynchronization markers after edits and conditional switches/ends follow the
+whole logical line, so multiline comment suffixes cannot swallow them or turn
+ignored tokens into live code. Every enclosing group containing an edit is resynchronized, even when the edit was skipped. The line
+map has one entry per output physical line; generated markers/guards have no
+source location, and original spans retain their source location.
+`source_location` is rejected as an identifier anywhere outside comments and
+literals: this intentionally overapproximates `std::source_location`.
+
+Run both suites (each has a CTest hard timeout of 120 seconds):
+
+```sh
+cmake --build build -j2
+timeout 120 build/tests/unit/distill_unit_tests
+timeout 120 build/tests/runner/distill_inline_cases
+ctest --test-dir build --output-on-failure --timeout 120
+```
+
+The case runner accepts `--filter substring`. Fixtures live in
+`tests/cases/inline/<name>/`: `cmd.txt` uses shell-style token quoting without
+shell expansion; `expect-error.txt`, when present, is an error substring.
+Comment headers beginning `#` are ignored in these two metadata files.
+Inputs are copied byte-exact to a temporary directory under the runner's cwd;
+`raw.cpp` goes in a sibling directory, without user include search paths.
+The runner uses D2a's process/probe components, compares GCC preprocessor token
+spellings and every token's file/line, then builds/runs cases with `main` and
+compares stdout and exit/signal status. GCC marker flags do not advance the
+logical line, while blank source lines do. Normalizer self-checks verify token
+boundaries and detect changed filenames/line numbers. Set `DISTILL_TEST_GXX`
+to a GCC executable (e.g. Homebrew `g++-15`, or MinGW `g++.exe`); unavailable GCC
+or Apple's `g++` skips compiler checks with a message, retaining inliner checks.
+POSIX alias fixtures create real symlinks; Windows uses a second dot spelling
+without requiring symlink privileges. Collision fixtures derive the candidate
+guard from the copied file's actual identity.

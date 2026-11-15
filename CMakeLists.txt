@@ -18,7 +18,13 @@ if(NOT WIN32)
   check_symbol_exists(posix_spawn_file_actions_addchdir_np "spawn.h" DISTILL_HAVE_ADDCHDIR_NP)
   unset(CMAKE_REQUIRED_DEFINITIONS)
 endif()
+include(cmake/EmbedNames.cmake)
 add_library(distill_core STATIC
+  "${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp"
+  src/core/lex/scan.cpp
+  src/core/names/names.cpp
+  src/core/inline/search.cpp
+  src/core/inline/inline.cpp
   src/core/command/command.cpp
   src/core/process/process.cpp
   src/core/process/posix.cpp
@@ -35,4 +41,5 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   add_subdirectory(tests/unit)
+  add_subdirectory(tests/runner)
 endif()
