@@ -20,7 +20,8 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
 |---|---|
 | D0 design | done: v6 approved 2026-11-15 after five Codex rounds |
 | D1 distribution spike | in progress: workflows merged (#1–#3); first SDK build and official-archive audit running |
-| D2 preprocessing half | next |
+| D2 preprocessing half | started with D2a; profiles/inliner/resolver/validation remain |
+| D2a command/process/probe | implemented and tested locally (42 passed, 0 failed, 0 skipped): C++20 core, unit/helper tests and Linux/macOS/Windows CI; native macOS/Windows validation pending CI |
 | D3 pruning | after D2; needs a short Codex round on the v6 pruning rules first |
 | D4–D5 | see design §7 |
 

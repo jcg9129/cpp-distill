@@ -1,0 +1,12 @@
+#define __GNUC__ 4
+#define __GNUC_MINOR__ 2
+#define __GNUC_PATCHLEVEL__ 1
+#define __clang__ 1
+#define __clang_major__ 17
+#define __clang_minor__ 0
+#define __clang_patchlevel__ 0
+#define __apple_build_version__ 17000013
+#define __cplusplus 202302L
+#define __STRICT_ANSI__ 1
+#define __VERSION__ "Apple LLVM 17.0.0 (clang-1700.0.13)"
+#define __has_feature(x) 0

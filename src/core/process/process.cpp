@@ -1,0 +1,90 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "core/process/process.h"
+#include "core/path.h"
+#include <cstdlib>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace distill {
+namespace {
+bool executableFile(const std::filesystem::path& path) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec)) return false;
+#ifdef _WIN32
+  return true;
+#else
+  return access(path.c_str(), X_OK) == 0;
+#endif
+}
+Result<std::filesystem::path> resolve(const std::filesystem::path& executable,
+                                     const std::filesystem::path& cwd) {
+  if (executable.empty()) return Error{"empty executable"};
+  const auto name = pathToUtf8(executable);
+  if (name.find('\0') != std::string::npos) return Error{"NUL in executable"};
+  std::error_code ec;
+  const auto base = std::filesystem::absolute(cwd, ec);
+  if (ec) return Error{"invalid cwd: " + ec.message()};
+  auto candidate = [&](const std::filesystem::path& path) -> std::optional<std::filesystem::path> {
+    auto full = (base / path).lexically_normal();
+    if (executableFile(full)) return full;
+#ifdef _WIN32
+    if (full.extension().empty()) {
+      full += L".exe";
+      if (executableFile(full)) return full;
+    }
+#endif
+    return std::nullopt;
+  };
+  if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos || executable.has_root_name()) {
+    if (auto found = candidate(executable)) return *found;
+    return Error{"executable not found: " + name};
+  }
+  std::string paths;
+#ifdef _WIN32
+  const auto size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+  if (size) {
+    std::wstring buffer(size, L'\0');
+    const auto copied = GetEnvironmentVariableW(L"PATH", buffer.data(), size);
+    if (copied >= size) return Error{"PATH changed during lookup"};
+    buffer.resize(copied);
+    paths = pathToUtf8(std::filesystem::path(buffer));
+  }
+  constexpr char separator = ';';
+#else
+  if (const char* value = std::getenv("PATH")) paths = value;
+  constexpr char separator = ':';
+#endif
+  std::size_t begin = 0;
+  do {
+    auto end = paths.find(separator, begin);
+    auto entry = paths.substr(begin, end == std::string::npos ? end : end - begin);
+#ifdef _WIN32
+    if (entry.size() >= 2 && entry.front() == '"' && entry.back() == '"') entry = entry.substr(1, entry.size() - 2);
+#endif
+    if (auto found = candidate(pathFromUtf8(entry) / executable)) return *found;
+    if (end == std::string::npos) break;
+    begin = end + 1;
+  } while (true);
+  return Error{"executable not found on PATH: " + name};
+}
+} // namespace
+Result<std::filesystem::path> resolveExecutable(const std::filesystem::path& executable,
+                                               const std::filesystem::path& cwd) {
+  try { return resolve(executable, cwd); }
+  catch (const std::exception& e) { return Error{std::string("executable lookup: ") + e.what()}; }
+}
+Result<ProcessResult> runProcess(const ProcessSpec& spec) {
+  try {
+    if (spec.argv.empty()) return Error{"empty process argv"};
+    for (const auto& arg : spec.argv)
+      if (arg.find('\0') != std::string::npos) return Error{"NUL in process argument"};
+    if (spec.timeout.count() < 0) return Error{"negative process timeout"};
+    auto executable = resolveExecutable(pathFromUtf8(spec.argv[0]), spec.cwd);
+    if (!executable.ok()) return executable.error();
+    return detail::runNative(spec, executable.value());
+  } catch (const std::exception& e) { return Error{std::string("process: ") + e.what()}; }
+}
+} // namespace distill

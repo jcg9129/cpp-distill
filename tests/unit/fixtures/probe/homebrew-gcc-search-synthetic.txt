@@ -1,0 +1,11 @@
+synthetic: Homebrew GCC 15 on arm64 macOS, including a framework directory
+Using built-in specs.
+#include "..." search starts here:
+ /Users/developer/quote headers
+#include <...> search starts here:
+ /opt/homebrew/Cellar/gcc/15.2.0/include/c++/15
+ /opt/homebrew/Cellar/gcc/15.2.0/lib/gcc/current/gcc/aarch64-apple-darwin24/15/include
+ /opt/homebrew/Cellar/gcc/15.2.0/lib/gcc/current/gcc/aarch64-apple-darwin24/15/include-fixed
+ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+ /System/Library/Frameworks (framework directory)
+End of search list.

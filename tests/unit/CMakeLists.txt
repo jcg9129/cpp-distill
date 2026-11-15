@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+add_executable(distill_test_helper helper.cpp)
+target_link_libraries(distill_test_helper PRIVATE distill_core)
+if(WIN32)
+  target_compile_definitions(distill_test_helper PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp)
+target_link_libraries(distill_unit_tests PRIVATE distill_core)
+target_compile_definitions(distill_unit_tests PRIVATE DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
+add_dependencies(distill_unit_tests distill_test_helper)
+add_test(NAME unit COMMAND distill_unit_tests)
+set_tests_properties(unit PROPERTIES TIMEOUT 120)

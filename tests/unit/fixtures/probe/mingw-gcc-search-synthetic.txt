@@ -1,0 +1,9 @@
+synthetic: MinGW-w64 GCC 15, drive-letter paths and GCC's dot-dot target path
+#include "..." search starts here:
+#include <...> search starts here:
+ C:/msys64/ucrt64/include/c++/15.2.0
+ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/15.2.0/include
+ C:\msys64\ucrt64\lib\gcc\x86_64-w64-mingw32\15.2.0\include-fixed
+ C:/msys64/ucrt64/lib/gcc/x86_64-w64-mingw32/15.2.0/../../../../x86_64-w64-mingw32/include
+ C:/Program Files/SDK/include
+End of search list.
