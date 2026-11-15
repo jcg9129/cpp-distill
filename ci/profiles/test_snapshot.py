@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 from snapshot import (capture, inventory, startup_origins, join_native, native_runs, cpu_values,
-                      compatible_triple, data, ROOT)
+                      compatible_triple, data, run, ROOT)
 from flags import operations
 from matrix import matrix
 
@@ -170,6 +170,40 @@ predefined = "fixture-predefined.txt"
         diagnostic = "cc1plus: note: valid arguments to ‘-march=’ switch are: a b native c; did you mean a?\n"
         with patch('snapshot.subprocess.run', return_value=subprocess.CompletedProcess([], 1, '', diagnostic)):
             self.assertEqual(cpu_values('g++', '-march'), ['a', 'b', 'c'])
+
+    def test_windows_compiler_commands_preserve_native_paths(self):
+        compiler = r'C:\MSYS2 tools\mingw64\bin\g++.exe'
+        source = r'D:\work tree\.distill-snapshot-test\empty.cpp'
+        with patch('snapshot.subprocess.run', return_value=subprocess.CompletedProcess([], 0, 'macros', '')) as execute:
+            self.assertEqual(run(compiler, '-x', 'c++', '-dM', '-E', source), 'macros')
+            execute.assert_called_once_with([compiler, '-x', 'c++', '-dM', '-E', source], check=True,
+                                            text=True, encoding='utf-8', errors='replace',
+                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        diagnostic = 'valid arguments to -march= switch are: a b native;\n'
+        with patch('snapshot.subprocess.run', return_value=subprocess.CompletedProcess([], 1, '', diagnostic)) as execute:
+            self.assertEqual(cpu_values(compiler, '-march'), ['a', 'b'])
+            execute.assert_called_once_with([compiler, '-march=distill-invalid-cpu', '-x', 'c++', '-E', '-'],
+                                            input='', text=True, capture_output=True, timeout=30, env=None)
+        trace = '# 1 "D:\\\\work tree\\\\.distill-snapshot-test\\\\empty.cpp"\n#define X 1\n'
+        self.assertEqual(startup_origins(trace, PureWindowsPath(source)), {'X': 'compiler-builtin'})
+
+    def test_compiler_reads_closed_absolute_temp_files_with_spaces(self):
+        compiler = str(Path('compiler with spaces/g++.exe').resolve())
+
+        def execute(command, **kwargs):
+            self.assertEqual(command[0], compiler)
+            if command[-1].endswith('.cpp'):
+                self.assertTrue(Path(command[-1]).is_absolute())
+                self.assertIn('snapshot space ', command[-1])
+                # The fixture reads both source files during the subprocess
+                # call, after the writer has closed them (required on Windows).
+            return subprocess.CompletedProcess(command, 0, self.run_compiler(*command), '')
+
+        with tempfile.TemporaryDirectory(prefix='snapshot space ', dir='.') as temp, \
+                patch('snapshot.shutil.which', return_value=compiler), \
+                patch('snapshot.subprocess.run', side_effect=execute):
+            capture(self.profile(temp), compiler)
+            self.assertEqual(list(Path(temp).glob('.distill-snapshot-*')), [])
 
     def test_flags_order_errors_and_inert(self):
         self.assertEqual(operations(['-DX', '-UX', '-D', 'X=', '-DF(x)=0']), [('X', '#define X 1'), ('X', None), ('X', '#define X '), ('F', '#define F(x) 0')])

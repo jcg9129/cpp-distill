@@ -72,7 +72,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (!(Test-Path C:\msys64\usr\bin\bash.exe)) { throw 'MSYS2 missing' }
-          & C:\msys64\usr\bin\bash.exe -lc 'cd "$GITHUB_WORKSPACE" && bash ci/profiles/install-mingw.sh "$COMPILER_PROVENANCE"'
+          & C:\msys64\usr\bin\bash.exe -lc 'cd "$(/usr/bin/cygpath -u "$GITHUB_WORKSPACE")" && /usr/bin/bash ci/profiles/install-mingw.sh "$COMPILER_PROVENANCE"'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Snapshot Codeforces effective command
         if: runner.os == 'Windows'
@@ -82,7 +82,7 @@ jobs:
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           $provenanceArgs = @()
           if ($env:BUILD_PROVENANCE) { $provenanceArgs = @('--reproduced-build', $env:BUILD_PROVENANCE) }
-          python ci/profiles/snapshot.py data/judges/codeforces.toml --compiler C:/msys64/mingw64/bin/g++.exe @provenanceArgs
+          & "$env:pythonLocation/python.exe" ci/profiles/snapshot.py data/judges/codeforces.toml --compiler C:/msys64/mingw64/bin/g++.exe @provenanceArgs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

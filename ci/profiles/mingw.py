@@ -2,14 +2,27 @@
 """Download and validate the locked MSYS2 compiler dependency closure; never install."""
 import argparse
 from html.parser import HTMLParser
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 import re
 import subprocess
+import sys
 import tarfile
+import tempfile
 
 REPOSITORY = 'https://repo.msys2.org/mingw/mingw64/'
 FILE = re.compile(r'(mingw-w64-x86_64-[A-Za-z0-9.+_-]+)-([0-9][A-Za-z0-9.+_~:-]*-[0-9]+)-any\.pkg\.tar\.zst')
 DEPENDENCY = re.compile(r'(mingw-w64-x86_64-[A-Za-z0-9.+_-]+)(?:(=|>=|<=|>|<)([A-Za-z0-9.+_~:-]+))?')
+
+
+def tool(name):
+    if sys.platform != 'win32':
+        return name
+    variable = 'MSYS2_' + name.upper()
+    path = os.environ.get(variable, '')
+    if not PureWindowsPath(path).is_absolute():
+        raise ValueError(f'{variable} must be an absolute Windows path to the MSYS2 {name} executable')
+    return path
 
 
 class Listing(HTMLParser):
@@ -37,7 +50,16 @@ def metadata(path):
         with tarfile.open(path) as archive:
             text = archive.extractfile('.PKGINFO').read().decode('utf-8')
     except tarfile.ReadError:
-        text = subprocess.check_output(['tar', '--force-local', '-xOf', path.as_posix(), '.PKGINFO'], text=True, encoding='utf-8')
+        if sys.platform == 'win32':
+            # Native Python does not perform MSYS2's argv/path conversion. Pass
+            # archive data through handles, and never let tar find zstd on PATH.
+            with path.open('rb') as source, tempfile.TemporaryFile(dir=path.parent) as archive:
+                subprocess.run([tool('zstd'), '-dc'], stdin=source, stdout=archive, check=True)
+                archive.seek(0)
+                text = subprocess.check_output([tool('tar'), '-xOf', '-', '.PKGINFO'],
+                                               stdin=archive, text=True, encoding='utf-8')
+        else:
+            text = subprocess.check_output(['tar', '--force-local', '-xOf', path.as_posix(), '.PKGINFO'], text=True, encoding='utf-8')
     result = {}
     for line in text.splitlines():
         if not line or line.startswith('#'):
@@ -60,7 +82,7 @@ def satisfies(actual, operator, required):
         actual = actual.rsplit('-', 1)[0]
     if operator == '=':
         return actual == required
-    comparison = int(subprocess.check_output(['vercmp', actual, required], text=True).strip())
+    comparison = int(subprocess.check_output([tool('vercmp'), actual, required], text=True).strip())
     return {'>': comparison > 0, '<': comparison < 0, '>=': comparison >= 0, '<=': comparison <= 0}[operator]
 
 
@@ -94,7 +116,7 @@ def closure(root, packages):
 
 
 def download(url, destination):
-    subprocess.run(['curl', '--fail', '--location', '--retry', '3', url, '-o', str(destination)], check=True)
+    subprocess.run([tool('curl'), '--fail', '--location', '--retry', '3', url, '-o', destination.as_posix()], check=True)
 
 
 def prepare(provenance, lock, directory):
@@ -126,6 +148,9 @@ def main():
     parser.add_argument('--directory', type=Path, default=Path('out/mingw-packages'))
     args = parser.parse_args()
     try:
+        # Fail before downloading if the native Windows process lacks any tool.
+        for name in ('tar', 'zstd', 'curl', 'vercmp'):
+            tool(name)
         files = prepare(args.compiler, args.lock, args.directory)
     except (OSError, ValueError, tarfile.TarError, subprocess.SubprocessError) as error:
         parser.exit(1, f'MSYS2 dependency resolution failed: {error}\n')
