@@ -133,7 +133,9 @@ Result<ProbeResult> probe(const std::filesystem::path& compiler, const CompileCo
                           const ProbeOptions& options) {
   TempDirectory temp;
   std::error_code ec;
-  const auto root = std::filesystem::absolute(options.temporaryRoot.value_or(command.cwd), ec);
+  const auto temporaryRoot = options.temporaryRoot ? *options.temporaryRoot : std::filesystem::temp_directory_path(ec);
+  if (ec) return Error{"temporary root: " + ec.message()};
+  const auto root = std::filesystem::absolute(temporaryRoot, ec);
   if (ec) return Error{"temporary root: " + ec.message()};
   auto created = temp.create(root);
   if (!created.ok()) return created.error();

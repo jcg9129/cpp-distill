@@ -140,3 +140,21 @@ TEST(probe_failure_cleans_temporary_files) {
   CHECK(!probeCompiler(test::helper, cmd).ok());
   CHECK(std::filesystem::is_empty(temp.path));
 }
+TEST(probe_temporary_root_default_and_override) {
+  test::TempDirectory temp;
+  const auto cmd = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
+  for (const bool overrideRoot : {false, true}) {
+    ProbeOptions options;
+    if (overrideRoot) options.temporaryRoot = temp.path;
+    const auto result = probeCompiler(test::helper, cmd, options);
+    CHECK(!result.ok());
+    const std::string prefix = "compiler probe failed: ";
+    CHECK(result.error().message.starts_with(prefix));
+    const auto source = pathFromUtf8(result.error().message.substr(prefix.size()));
+    CHECK_EQ(source.filename(), "empty.cpp");
+    CHECK(std::filesystem::equivalent(source.parent_path().parent_path(),
+        overrideRoot ? temp.path : std::filesystem::temp_directory_path()));
+    CHECK(!std::filesystem::exists(source.parent_path()));
+    CHECK(std::filesystem::is_empty(temp.path));
+  }
+}

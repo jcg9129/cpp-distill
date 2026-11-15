@@ -21,6 +21,10 @@ jobs:
           - platform: linux
             os: ubuntu-24.04
             compiler: g++
+          - platform: linux, fork
+            os: ubuntu-24.04
+            compiler: g++
+            cmake_options: -DDISTILL_FORCE_FORK_SPAWN=ON
           - platform: macos
             os: macos-15
             compiler: clang++
@@ -34,7 +38,7 @@ jobs:
         with:
           arch: x64
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} ${{ matrix.cmake_options }}
       - name: Build
         run: cmake --build build --target distill_core distill_unit_tests -j2
       - name: Test

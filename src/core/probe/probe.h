@@ -28,7 +28,7 @@ struct Dialect { std::string name; bool gnu; long cplusplus; };
 struct ProbeOptions {
   bool keepLocalMacros = true;
   std::vector<std::string> defines;
-  // Defaults to the command cwd; keeps probe files inside the caller's workspace.
+  // Defaults to std::filesystem::temp_directory_path().
   std::optional<std::filesystem::path> temporaryRoot;
 };
 struct ProbeResult {

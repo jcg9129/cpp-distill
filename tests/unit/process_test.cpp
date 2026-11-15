@@ -2,7 +2,11 @@
 #include "support.h"
 #include "core/process/process.h"
 #include <future>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <cstdint>
+#include <sstream>
+#include <windows.h>
+#else
 #include <csignal>
 #endif
 
@@ -36,7 +40,7 @@ TEST(process_argv_roundtrip) {
   CHECK(!result.timedOut);
 }
 TEST(process_exit_codes) {
-  for (const auto code : {0, 1, 42, 123}) CHECK_EQ(run(spec({"exit", std::to_string(code)})).exitCode, code);
+  for (const auto code : {0, 1, 42, 123, 127}) CHECK_EQ(run(spec({"exit", std::to_string(code)})).exitCode, code);
 }
 TEST(process_signal_death) {
 #ifdef _WIN32
@@ -87,6 +91,23 @@ TEST(process_exit_grace_kills_descendants) {
   CHECK_EQ(result.stdoutText, "started\n");
   CHECK(!result.timedOut);
   CHECK(result.wall < 5s);
+}
+TEST(process_windows_cancels_readers_with_external_pipe_holders) {
+#ifdef _WIN32
+  const auto result = run(spec({"export-pipe-handles", std::to_string(GetCurrentProcessId())}));
+  std::uintptr_t out = 0, err = 0;
+  std::istringstream handles(result.stdoutText);
+  handles >> out >> err;
+  if (out) CloseHandle(reinterpret_cast<HANDLE>(out));
+  if (err) CloseHandle(reinterpret_cast<HANDLE>(err));
+  CHECK(out != 0); CHECK(err != 0);
+  CHECK_EQ(result.exitCode, 0);
+  CHECK(!result.timedOut);
+  CHECK(result.stdoutTruncated); CHECK(result.stderrTruncated);
+  CHECK(result.wall < 5s);
+#else
+  throw test::Skip{"Windows synchronous pipe cancellation"};
+#endif
 }
 TEST(process_output_cap_drains_both_streams) {
   auto process = spec({"flood", "10485760"});
@@ -162,6 +183,25 @@ TEST(process_thread_safety) {
     CHECK(result.ok());
     CHECK_EQ(result.value().stdoutText, "1:" + std::to_string(i) + '\n');
   }
+}
+TEST(process_exec_failures_are_errors) {
+#ifdef _WIN32
+  throw test::Skip{"POSIX exec failure reporting"};
+#else
+  test::TempDirectory temp;
+  auto process = spec({"exit", "0"});
+  process.cwd = temp.path;
+  // Call the native runner to exercise ENOENT/EACCES after executable lookup.
+  CHECK(!detail::runNative(process, temp.path / "missing").ok());
+  temp.write("denied", "not executable\n");
+  std::filesystem::permissions(temp.path / "denied", std::filesystem::perms::owner_read);
+  CHECK(!detail::runNative(process, temp.path / "denied").ok());
+  // An executable text file must fail execve, without a shell interpreting it.
+  temp.write("invalid", "exit 0\n");
+  std::filesystem::permissions(temp.path / "invalid", std::filesystem::perms::owner_all);
+  process.argv[0] = pathToUtf8(temp.path / "invalid");
+  CHECK(!runProcess(process).ok());
+#endif
 }
 TEST(process_memory_limit_smoke) {
   auto process = spec({"exit", "0"});

@@ -11,6 +11,13 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 find_package(Threads REQUIRED)
+option(DISTILL_FORCE_FORK_SPAWN "Use fork/exec instead of posix_spawn on POSIX" OFF)
+if(NOT WIN32)
+  include(CheckSymbolExists)
+  set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+  check_symbol_exists(posix_spawn_file_actions_addchdir_np "spawn.h" DISTILL_HAVE_ADDCHDIR_NP)
+  unset(CMAKE_REQUIRED_DEFINITIONS)
+endif()
 add_library(distill_core STATIC
   src/core/command/command.cpp
   src/core/process/process.cpp
@@ -19,6 +26,9 @@ add_library(distill_core STATIC
   src/core/probe/probe.cpp)
 target_include_directories(distill_core PUBLIC src)
 target_link_libraries(distill_core PUBLIC Threads::Threads)
+if(DISTILL_HAVE_ADDCHDIR_NP AND NOT DISTILL_FORCE_FORK_SPAWN)
+  target_compile_definitions(distill_core PRIVATE DISTILL_HAVE_ADDCHDIR_NP=1)
+endif()
 if(WIN32)
   target_compile_definitions(distill_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601)
 endif()

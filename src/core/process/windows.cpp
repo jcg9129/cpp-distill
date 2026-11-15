@@ -61,12 +61,42 @@ struct Readers {
   HANDLE job;
   std::thread out, err;
   std::atomic<bool> failed{false};
+  std::atomic<bool> stopping{false};
+  bool outIncomplete = false, errIncomplete = false;
   explicit Readers(HANDLE handle) : job(handle) {}
+  void join() {
+    HANDLE threads[2];
+    DWORD count = 0;
+    if (out.joinable()) threads[count++] = out.native_handle();
+    if (err.joinable()) threads[count++] = err.native_handle();
+    if (!count) return;
+    // Even a process outside the job can hold an inherited pipe open.
+    const auto wait = WaitForMultipleObjects(count, threads, TRUE, 1000);
+    if (wait == WAIT_FAILED) failed = true;
+    if (wait != WAIT_OBJECT_0) {
+      outIncomplete = out.joinable() && WaitForSingleObject(out.native_handle(), 0) != WAIT_OBJECT_0;
+      errIncomplete = err.joinable() && WaitForSingleObject(err.native_handle(), 0) != WAIT_OBJECT_0;
+      stopping = true;
+    }
+    auto finish = [&](std::thread& thread, bool& incomplete) {
+      if (!thread.joinable()) return;
+      const auto handle = thread.native_handle();
+      incomplete |= WaitForSingleObject(handle, 0) != WAIT_OBJECT_0;
+      while (WaitForSingleObject(handle, 0) != WAIT_OBJECT_0) {
+        CancelSynchronousIo(handle);
+        // Repeat cancellation to cover a read starting just after cancellation.
+        // stopping prevents the reader from starting another iteration.
+        WaitForSingleObject(handle, 10);
+      }
+      thread.join();
+    };
+    finish(out, outIncomplete);
+    finish(err, errIncomplete);
+  }
   ~Readers() {
     if (out.joinable() || err.joinable()) {
       TerminateJobObject(job, 1);
-      if (out.joinable()) { CancelSynchronousIo(out.native_handle()); out.join(); }
-      if (err.joinable()) { CancelSynchronousIo(err.native_handle()); err.join(); }
+      join();
     }
   }
 };
@@ -143,11 +173,12 @@ Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::
   Readers readers(job.value);
   auto drain = [&](HANDLE pipe, std::string& text, bool& truncated) {
     char buffer[16384];
-    for (;;) {
+    while (!readers.stopping) {
       DWORD count = 0;
       if (!ReadFile(pipe, buffer, sizeof(buffer), &count, nullptr)) {
         const auto error = GetLastError();
-        if (error != ERROR_BROKEN_PIPE && error != ERROR_OPERATION_ABORTED) readers.failed = true;
+        if (error == ERROR_OPERATION_ABORTED) truncated = true;
+        else if (error != ERROR_BROKEN_PIPE) readers.failed = true;
         break;
       }
       if (!count) break;
@@ -171,9 +202,11 @@ Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::
   if (drained == WAIT_FAILED) return winError("wait readers");
   if (drained == WAIT_TIMEOUT) {
     if (grace < 2000 && !result.timedOut) result.timedOut = true;
-    TerminateJobObject(job.value, 1);
   }
-  readers.out.join(); readers.err.join();
+  TerminateJobObject(job.value, 1);
+  readers.join();
+  result.stdoutTruncated |= readers.outIncomplete;
+  result.stderrTruncated |= readers.errIncomplete;
   if (readers.failed) return Error{"cannot capture process output"};
   DWORD exitCode;
   if (!GetExitCodeProcess(child.value, &exitCode)) return winError("exit code");

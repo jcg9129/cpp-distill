@@ -3,6 +3,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -67,6 +68,27 @@ int run(const std::vector<std::string>& argv) {
       left -= static_cast<unsigned long long>(size);
     }
   } else if (command == "cat-stdin") std::cout << std::cin.rdbuf();
+#ifdef _WIN32
+  else if (command == "export-pipe-handles" && argv.size() == 3) {
+    // Keep writers alive outside the runner's job, in the unit-test process.
+    const auto parent = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(std::stoul(argv[2])));
+    if (!parent) return 3;
+    HANDLE out = nullptr, err = nullptr;
+    const bool copied = DuplicateHandle(GetCurrentProcess(), GetStdHandle(STD_OUTPUT_HANDLE),
+        parent, &out, 0, FALSE, DUPLICATE_SAME_ACCESS) &&
+        DuplicateHandle(GetCurrentProcess(), GetStdHandle(STD_ERROR_HANDLE),
+        parent, &err, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    CloseHandle(parent);
+    if (!copied) return 3;
+    std::cout << reinterpret_cast<std::uintptr_t>(out) << ' '
+              << reinterpret_cast<std::uintptr_t>(err) << '\n' << std::flush;
+  }
+#endif
+  else if (command == "-xc++" && argv.size() >= 5) {
+    // A failing compiler stub exposes the probe source path to the test.
+    std::cerr << argv[4];
+    return 1;
+  }
   else if (command == "pwd") std::cout << distill::pathToUtf8(std::filesystem::current_path()) << '\n';
   else return 2;
   return 0;
