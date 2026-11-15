@@ -228,8 +228,9 @@ AtCoder GCC from its published configure recipe, then uploads review artifacts.
 Codeforces has no published package revision: its `snapshot_compiler` selects
 available MSYS2 GCC 14.2.0-3 and the snapshot remains approximate. The installer
 checks the pinned dependency closure against the live listing and each package's
-`.PKGINFO` depend/provides records before installation. Shipped snapshots stay
-absent until the CI artifacts are reviewed.
+`.PKGINFO` depend/provides records before installation. The shipped CI snapshots
+are exercised directly by embedded-profile tests; run provenance is recorded in
+`data/judges/README.md`.
 
 Generate A1 inventories with Python 3.11+:
 
@@ -248,7 +249,7 @@ MinGW-w64 or macOS SDK directories; compiler intrinsic headers are traversed but
 not attributed to a library. Version-2 scans replace broad inventories; workflow
 merging unions only reachable-header inventories across compatibility versions.
 Reserved and standard names (including numeric width families) are excluded.
-The local GCC 15.2/glibc 2.42 lists have 149/1461 names; Windows/macOS sets remain
-empty placeholders until CI. `NameLists` and `InlineOptions` take a list of
-libraries: protection requires absence from every selected set and fails closed
+The shipped merged CI lists contain 1505 glibc, 167 libstdc++, 409 MinGW-w64
+and 600 macOS libc names. `NameLists` and `InlineOptions` take a list of libraries:
+protection requires absence from every selected set and fails closed
 if any selected set is empty/missing. With no selection all libraries apply.

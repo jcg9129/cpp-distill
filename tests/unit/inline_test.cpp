@@ -212,8 +212,10 @@ TEST(inline_missing_extension_inventory_disables_guard_recursion) {
   Fixture f; f.temp.write("main.cpp", "#include \"a.h\"\n");
   f.temp.write("a.h", "#ifndef DISTILL_TEST_GUARD_712\n#define DISTILL_TEST_GUARD_712\n#include \"a.h\"\n#endif\n");
   InlineOptions options;
+  options.names.extensions = {{"libstdc++", {"FIXTURE_EXTENSION"}}, {"mingw-w64", {}}, {"macos-libc", {}}};
   options.libraries = {"mingw-w64"}; CHECK(!f.run(options).ok());
   options.libraries = {"macos-libc"}; CHECK(!f.run(options).ok());
+  options.libraries = {"missing"}; CHECK(!f.run(options).ok());
   options.libraries.clear(); CHECK(!f.run(options).ok());
   options.libraries = {"libstdc++"}; CHECK(f.run(options).ok());
 }
