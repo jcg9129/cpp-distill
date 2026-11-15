@@ -1,0 +1,8 @@
+synthetic: Apple Clang 17 on macOS, including a framework directory
+#include "..." search starts here:
+#include <...> search starts here:
+ /Library/Developer/CommandLineTools/usr/include/c++/v1
+ /Library/Developer/CommandLineTools/usr/lib/clang/17/include
+ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include
+ /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks (framework directory)
+End of search list.

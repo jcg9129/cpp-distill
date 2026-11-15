@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Core unit tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: unit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    name: unit (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-24.04
+            compiler: g++
+          - platform: linux, fork
+            os: ubuntu-24.04
+            compiler: g++
+            cmake_options: -DDISTILL_FORCE_FORK_SPAWN=ON
+          - platform: macos
+            os: macos-15
+            compiler: clang++
+          - platform: windows
+            os: windows-2025
+            compiler: cl
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@a102174a2b586eec2ea151a69e6fd14404a8ce7c # v1.13.0
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} ${{ matrix.cmake_options }}
+      - name: Build
+        run: cmake --build build --target distill_core distill_unit_tests -j2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --timeout 120
