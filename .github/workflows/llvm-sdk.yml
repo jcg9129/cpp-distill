@@ -75,14 +75,14 @@ jobs:
             dnf install -y time xz
             source ci/llvm/environment.sh
           fi
-          python3 -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.12.1
+          python3 -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
           python3 ci/llvm/build-sdk.py --version "$LLVM_VERSION" --rev "$SDK_REV" --platform "$SDK_PLATFORM"
       - name: SDK build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.12.1
+          python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python ci/llvm/build-sdk.py --version $env:LLVM_VERSION --rev $env:SDK_REV --platform $env:SDK_PLATFORM
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

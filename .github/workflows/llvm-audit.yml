@@ -73,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.12.1
+          python3 -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
           python3 ci/llvm/acquire.py --source official --version "$LLVM_VERSION" --platform "$SDK_PLATFORM"
           python3 ci/llvm/audit-official.py --platform "$SDK_PLATFORM"
       - name: Audit Windows archive
@@ -81,7 +81,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.12.1
+          python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python ci/llvm/acquire.py --source official --version $env:LLVM_VERSION --platform $env:SDK_PLATFORM
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
