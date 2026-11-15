@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A1 macos-libc; generator ci/extensions/generate.py v1; date 2026-11-15
+# Not yet generated. Headers and versions will come from extensions.yml.
+# Empty means protection is unavailable, including for the union of libraries.

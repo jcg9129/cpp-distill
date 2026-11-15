@@ -1,4 +1,5 @@
-# Core library (D2a–D2b)
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+# Core library (D2a–D2c)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -88,9 +89,11 @@ former standard headers, C23 headers and the specified libstdc++ extensions.
 Macro names deliberately overapproximate, including C functions which C permits
 to be macros, optional IEC 60559/Annex K names, and historical macros. Numeric
 integer-width families also recognize implementation-provided widths beyond
-8/16/32/64. `NameLists` takes extension sets keyed by library; D2b defaults to
-empty sets, and D2c will provide generated embedded lists. Without a selected
-library the union applies. Reserved identifiers contain `__` or start `_A`–`_Z`.
+8/16/32/64. `NameLists` embeds generated extension sets keyed by library; callers can
+replace them for synthetic fixtures. Without a selected library the union applies.
+An empty or absent selected list means protection is unavailable; the union is
+also unavailable if any participating list is empty. Linux `libstdc++` protection
+includes the glibc inventory; a missing part disables that combined inventory. Reserved identifiers contain `__` or start `_A`–`_Z`.
 
 `inline/` exposes `buildIncludeSearch`, `lookupHeader` and `inlineSources`.
 Search directories retain command spelling and are deduplicated by filesystem
@@ -161,3 +164,77 @@ or Apple's `g++` skips compiler checks with a message, retaining inliner checks.
 POSIX alias fixtures create real symlinks; Windows uses a second dot spelling
 without requiring symlink privileges. Collision fixtures derive the candidate
 guard from the copied file's actual identity.
+
+
+`profile/` parses and validates judge profiles without reading the host environment
+or executing a compiler. `parseProfileToml` is explicitly a **TOML subset**, not
+a general TOML implementation: flat bare/quoted keys, basic and literal
+single-line strings, the escapes `\\`, `\"`, `\n`, `\t`, `\uXXXX`, `\UXXXXXXXX`,
+signed 64-bit integers (decimal, or unsigned `0x`/`0o`/`0b`, with TOML digit
+separators), booleans, string arrays with comments/newlines/trailing commas, and
+single-line inline tables of strings without trailing commas. LF, CRLF and a
+file-initial UTF-8 BOM are accepted. Tables, dotted keys, dates as values, floats,
+multiline strings, additional escapes, duplicates, invalid UTF-8 and raw control
+characters are errors with file/line diagnostics. Schema validation rejects
+unknown keys and wrong types, validates calendar dates, HTTP(S) provenance URLs,
+macro spellings, compiler versions, supported numeric dialects (98/03 through 26),
+libraries and snapshot filenames. `std` omits the `-std=` prefix. C++26 currently
+uses GCC's provisional `202400L` value; a finalized dialect needs an update.
+
+`Profile` keeps the declared target, GCC identity (and whether patch was supplied),
+dialect, judge definitions as both strings and a macro table, compiler-default
+macro table, inventory completeness, library, check compilers and file/date/source
+provenance. `allowed` supplies partial `NAME` or `NAME=value` facts only without
+`predefined`; absent facts remain unknown. Snapshot loading calls D2a `parseMacros`
+after removing metadata comments, preserving function-like definitions and
+replacement bytes. It cross-checks GCC identity, `__cplusplus`, strict/GNU mode
+and recognized architecture/OS macros against the declared target. This checks
+consistency; it cannot prove an arbitrary hand-written inventory exhaustive.
+Unrecognized target architectures have no invented architecture checks.
+`Profile::checkA3` reports every collision between user definitions and the
+snapshot/allow-list/judge definitions; callers must disable resolution on error.
+
+`loadProfile` reads a file and its sibling snapshot. `lookupProfile` treats a
+separator (either slash) or `.toml` suffix as a path; otherwise it tries the
+injected user directory before `embeddedProfileFiles()`. `ProfileLookup` supplies
+the environment and optional explicit directory; nothing reads the real home
+implicitly. POSIX uses an absolute XDG_CONFIG_HOME, else HOME/.config; Windows uses
+APPDATA. Invalid overrides never fall through to embedded data. CMake embeds all
+judge TOML/snapshot files and extension lists at configure time, tracks edits,
+and reconfigures on adding/removing snapshots. Shipped profiles currently fail
+clearly with `snapshot missing`; the Linux unit fixture is a real local capture,
+while the MinGW fixture is explicitly synthetic.
+
+Regenerate profiles with `ci/profiles/snapshot.py`, or dispatch `profiles.yml`;
+see `data/judges/README.md` for research, review and update requirements. That
+workflow uses pinned official GCC images for Linux and refuses a different GCC
+version when an old MinGW package is unavailable. Snapshot collection deliberately
+uses only the profile dialect, as required by D2c. AtCoder's additional
+macro-changing flags and exact judge build/CPU still need modelling before a
+snapshot can meet the full A4 contract. Also, GCC `-dM` omits special builtins
+such as `__LINE__`, `__FILE__` and `__has_include` even though `defined(...)`
+reports them defined. The `exhaustive` flag currently identifies a complete
+`-dM` capture as specified by D2c; the future resolver must model these special
+builtins separately, rather than infer their absence from this table.
+
+Generate A1 inventories with Python 3.11+ (no third-party modules):
+
+```sh
+python3 ci/extensions/generate.py --library glibc --include /usr/include --exclude-dir c++ --headers-version 'glibc <version>'
+python3 ci/extensions/generate.py --library libstdc++ --include <gcc-c++-include> --include <target-c++-include> --headers-version 'GCC <version>'
+python3 -m unittest discover -s ci/extensions -p 'test_*.py'
+python3 -m unittest discover -s ci/profiles -p 'test_*.py'
+```
+
+The generator scans all files recursively, joins backslash continuations before
+dropping comments, includes inactive `#define` and `#undef` names, excludes reserved
+and standard macro names (including numeric width families), and unions with the
+existing list. Scans retain their version/header/date provenance. The broad local
+glibc scan intentionally includes installed non-C++ third-party/kernel headers;
+this overapproximation only prevents resolutions. `parseExtensionList` validates
+identifier spelling, sort order, uniqueness and exclusion rules. Empty inventories
+are valid but never grant protection. `mingw-w64` and `macos-libc` are currently
+header-only placeholders. Dispatch `extensions.yml` for GCC profile versions plus
+newest GCC, AlmaLinux 8, MSYS2 CRT+libstdc++, and both macOS SDK architectures; its
+final artifact merges all versions with checked-in data for review, without
+publishing or committing anything. Update the matrix pins when profiles change.

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Synthetic MinGW fixture, 2026-11-15; NOT an exhaustive real compiler inventory.
+#define _WIN32 1
+#define _WIN64 1
+#define __GNUC_MINOR__ 2
+#define __GNUC_PATCHLEVEL__ 0
+#define __GNUC__ 14
+#define __STRICT_ANSI__ 1
+#define __cplusplus 202302L
+#define __x86_64__ 1
+#define WIN32 1
+#define FUNCTION(x,...) x + __VA_ARGS__

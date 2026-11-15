@@ -13,7 +13,13 @@ struct Fixture {
     command = parseCompileCommand(args, temp.path).value();
     search = buildIncludeSearch(command, {}).value();
   }
-  Result<InlineResult> run(InlineOptions options = {}) { return inlineSources(command, search, options); }
+  Result<InlineResult> run(InlineOptions options) { return inlineSources(command, search, options); }
+  Result<InlineResult> run() {
+    InlineOptions options;
+    // These synthetic fixtures model a complete library inventory.
+    options.names.extensions = {{"fixture", {"FIXTURE_EXTENSION"}}};
+    return run(options);
+  }
 };
 }
 TEST(inline_search_precedence_spelling_and_duplicates) {
@@ -139,7 +145,7 @@ TEST(inline_recursion_checks_later_global_undef_and_ancestor_paths) {
   f.temp.write("main.cpp", "#include \"a.h\"\n");
   f.temp.write("b.h", "#include <vendor.h>\n#include \"a.h\"\n"); CHECK(!f.run().ok());
   f.temp.write("b.h", "#include <vector>\n#include \"a.h\"\n"); CHECK(f.run().ok());
-  InlineOptions options; options.names.extensions["fixture"].insert("G"); CHECK(!f.run(options).ok());
+  InlineOptions options; options.names.extensions = {{"fixture", {"G"}}, {"other", {"OTHER_EXTENSION"}}}; CHECK(!f.run(options).ok());
   options.library = "other"; CHECK(f.run(options).ok());
   options.library = "fixture"; CHECK(!f.run(options).ok());
 }
@@ -200,4 +206,14 @@ TEST(inline_comment_extent_drops_ignored_tokens_and_maps_following_code) {
   CHECK(r.value().lineMap.at(outputLine).has_value());
   CHECK_EQ(r.value().lineMap.at(outputLine)->line, 3u);
   CHECK_EQ(r.value().lineMap.at(outputLine)->file, "main.cpp");
+}
+
+TEST(inline_missing_extension_inventory_disables_guard_recursion) {
+  Fixture f; f.temp.write("main.cpp", "#include \"a.h\"\n");
+  f.temp.write("a.h", "#ifndef DISTILL_TEST_GUARD_712\n#define DISTILL_TEST_GUARD_712\n#include \"a.h\"\n#endif\n");
+  InlineOptions options;
+  options.library = "mingw-w64"; CHECK(!f.run(options).ok());
+  options.library = "macos-libc"; CHECK(!f.run(options).ok());
+  options.library.reset(); CHECK(!f.run(options).ok());
+  options.library = "libstdc++"; CHECK(f.run(options).ok());
 }
