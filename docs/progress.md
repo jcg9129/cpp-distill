@@ -19,13 +19,13 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
 | M | State |
 |---|---|
 | D0 design | done: v6 approved 2026-11-15 after five Codex rounds |
-| D1 distribution spike | in progress: workflows merged (#1–#3); first SDK build and official-archive audit running |
-| D2 preprocessing half | started with D2a; profiles/inliner/resolver/validation remain |
-| D2a command/process/probe | implemented and tested locally (42 passed, 0 failed, 0 skipped): C++20 core, unit/helper tests and Linux/macOS/Windows CI; native macOS/Windows validation pending CI |
+| D1 distribution spike | done: SDK `llvm-23.1.5-1` published for all five platforms; spike passes everywhere (results in [`d1-spike.md`](d1-spike.md#results)) |
+| D2 preprocessing half | D2a done; D2b (judge profiles + text inliner) next, waiting for the user's go; then resolver and validation |
+| D2a command/process/probe | done (#5): C++20 core with unit tests, green on Linux (posix_spawn and fork paths), macOS and Windows CI |
 | D3 pruning | after D2; needs a short Codex round on the v6 pruning rules first |
 | D4–D5 | see design §7 |
 
-## D1 findings so far (2026-11-15)
+## D1 findings (2026-11-15)
 
 - The official LLVM 23.1.5 archives (Linux x86_64/arm64, macOS arm64,
   Windows x86_64; none for macOS x86_64) contain every library we need, and
@@ -37,3 +37,9 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
   the shared 60/hour limit.
 - Workflows with `workflow_dispatch` must be on `main` before they can be run;
   the token needs Actions: read and write.
+- Our static SDK builds take 42–98 min per platform on the free runners and
+  stay under 3 GB peak RSS per process; archives are 68–103 MB. The linked
+  spike executable is 40–86 MB.
+- The release `publish` job's `GITHUB_TOKEN` is refused (HTTP 403) when it
+  creates a release, cause not yet known; see [`d1-spike.md`](d1-spike.md#results).
+- AlmaLinux 8 images ship `coreutils-single`; don't install `coreutils` there.
