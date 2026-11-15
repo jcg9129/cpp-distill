@@ -91,10 +91,25 @@ The fixture tests cover platform selection, dependency/deployment parsing and ta
 
 ## Results
 
+Measured 2026-11-15: SDK run 43736770036 (`llvm-23.1.5-1`, settings rev 1), spike
+run 43748637012 (from the published release). Build time is the `ninja` step only;
+peak RSS is the largest single build process. Disk: source / build tree / install.
+Stub size is the statically linked spike executable.
+
 | Platform | Build time | Peak RSS | Disk (source/build/install) | Archive size | Official archive usable? | glibc / minos / CRT | Smoke result |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Linux x86_64 | | | | | | | |
-| Linux arm64 | | | | | | | |
-| macOS arm64 | | | | | | | |
-| macOS x86_64 | | | | | N/A: no official archive | | |
-| Windows x86_64 | | | | | | | |
+| Linux x86_64 | 98 min | 2.6 GB | 2.2 / 1.1 / 0.64 GB | 103 MB | libraries yes; exports need zlib + zstd | glibc ≤ 2.28 (audit pass) | pass: Ubuntu g++ 2.3 s / 205 MB; AlmaLinux 8 g++ pass; stub 82.6 MB |
+| Linux arm64 | 66 min | 2.8 GB | 2.2 / 1.1 / 0.62 GB | 94 MB | libraries yes; exports need zlib + zstd | glibc ≤ 2.28 (audit pass) | pass: Ubuntu g++ 7.1 s / 201 MB; AlmaLinux 8 g++ pass; stub 85.6 MB |
+| macOS arm64 | 42 min | 1.5 GB | 2.2 / 1.1 / 0.43 GB | 68 MB | libraries yes; exports need zlib + zstd | minos 14.0; libSystem + libc++ only | pass: Homebrew g++-15 3.1 s / 220 MB; stub 70.6 MB |
+| macOS x86_64 | 90 min | 1.1 GB | 2.2 / 1.1 / 0.44 GB | 75 MB | N/A: no official archive | minos 14.0; libSystem + libc++ only | pass: Homebrew g++-15 5.8 s / 218 MB; stub 65.3 MB |
+| Windows x86_64 | 60 min | not measured | 2.2 / 4.0 / 0.96 GB | 94 MB | libraries yes (LIBCMT); exports need zlib + zstd | static CRT; system DLLs only | pass: MinGW-w64 UCRT g++ 16.2 3.9 s / 217 MB; stub 39.8 MB |
+
+Every platform also passed the embedded-resource listing (7.8 MB of Clang headers),
+`--self-check`, and the optional foreign-triple parse (x86_64-w64-mingw32).
+
+Publishing: the `publish` job's `GITHUB_TOKEN` got HTTP 403 on `POST /releases`
+(with `contents: write`, with the tag created beforehand, and after switching the
+repository's workflow permissions to read and write). The repository token
+succeeded, so `llvm-23.1.5-1` was published by running `ci/llvm/publish.py` from
+the downloaded run artifacts. `publish.py` now prints API error bodies (#6), so the
+next SDK revision will show the cause.
