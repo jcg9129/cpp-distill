@@ -37,9 +37,39 @@ jobs:
         uses: ilammy/msvc-dev-cmd@a102174a2b586eec2ea151a69e6fd14404a8ce7c # v1.13.0
         with:
           arch: x64
+      - name: Select Homebrew GCC for equivalence tests
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew list gcc || true
+          selected=''
+          for candidate in /opt/homebrew/bin/g++-15 /usr/local/bin/g++-15 /opt/homebrew/bin/g++-[0-9]* /usr/local/bin/g++-[0-9]*; do
+            if [[ -x $candidate ]]; then selected=$candidate; break; fi
+          done
+          if [[ -n $selected ]]; then
+            echo "DISTILL_TEST_GXX=$selected" >> "$GITHUB_ENV"
+          else
+            echo 'Homebrew GCC unavailable; case runner will skip compiler comparisons'
+            echo 'DISTILL_TEST_GXX=distill-gcc-unavailable' >> "$GITHUB_ENV"
+          fi
+      - name: Select MSYS2 MinGW GCC for equivalence tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path C:\msys64\usr\bin\bash.exe) {
+            & C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc'
+            if ($LASTEXITCODE -eq 0 -and (Test-Path C:\msys64\ucrt64\bin\g++.exe)) {
+              'C:\msys64\ucrt64\bin' >> $env:GITHUB_PATH
+              'DISTILL_TEST_GXX=C:/msys64/ucrt64/bin/g++.exe' >> $env:GITHUB_ENV
+              exit 0
+            }
+          }
+          Write-Host 'MinGW GCC unavailable; case runner will skip compiler comparisons'
+          'DISTILL_TEST_GXX=distill-gcc-unavailable' >> $env:GITHUB_ENV
+          exit 0
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} ${{ matrix.cmake_options }}
       - name: Build
-        run: cmake --build build --target distill_core distill_unit_tests -j2
+        run: cmake --build build --target distill_core distill_unit_tests distill_inline_cases -j2
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 120

@@ -20,8 +20,10 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
 |---|---|
 | D0 design | done: v6 approved 2026-11-15 after five Codex rounds |
 | D1 distribution spike | done: SDK `llvm-23.1.5-1` published for all five platforms; spike passes everywhere (results in [`d1-spike.md`](d1-spike.md#results)) |
-| D2 preprocessing half | D2a done; D2b (judge profiles + text inliner) next, waiting for the user's go; then resolver and validation |
+| D2 preprocessing half | D2a and D2b done; D2c profiles/extension lists next, then resolver and validation |
 | D2a command/process/probe | done (#5): C++20 core with unit tests, green on Linux (posix_spawn and fork paths), macOS and Windows CI |
+| D2b scanner/names/inliner | done: text scanner, embedded C++26/C23 name tables, include search and guarded recursion, line-preserving raw output, unit and GCC equivalence/runtime case runner |
+| D2c judge profiles and A1 lists | next: TOML loader; researched Codeforces/AtCoder profiles; predefined-macro snapshots generated in CI with matching compilers; per-library A1 extension lists and their generator script |
 | D3 pruning | after D2; needs a short Codex round on the v6 pruning rules first |
 | D4–D5 | see design §7 |
 
