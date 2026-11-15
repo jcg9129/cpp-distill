@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+cmake_minimum_required(VERSION 3.24)
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
+endif()
+cmake_policy(SET CMP0091 NEW)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
+project(distill_distribution_spike LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT LLVM_SDK)
+  message(FATAL_ERROR "Pass -DLLVM_SDK=<SDK prefix>")
+endif()
+get_filename_component(LLVM_SDK "${LLVM_SDK}" ABSOLUTE)
+# Do not silently use a runner's unrelated LLVM installation.
+set(LLVM_DIR "${LLVM_SDK}/lib/cmake/llvm" CACHE PATH "" FORCE)
+set(Clang_DIR "${LLVM_SDK}/lib/cmake/clang" CACHE PATH "" FORCE)
+find_package(Clang REQUIRED CONFIG NO_DEFAULT_PATH PATHS "${Clang_DIR}")
+
+set(RESOURCE_DIR "${LLVM_SDK}/lib/clang/${LLVM_VERSION_MAJOR}/include")
+if(NOT EXISTS "${RESOURCE_DIR}/stddef.h")
+  message(FATAL_ERROR "Missing Clang resource headers: ${RESOURCE_DIR}")
+endif()
+file(GLOB_RECURSE RESOURCE_FILES CONFIGURE_DEPENDS LIST_DIRECTORIES false
+  RELATIVE "${RESOURCE_DIR}" "${RESOURCE_DIR}/*")
+list(SORT RESOURCE_FILES)
+# One translation unit per header bounds the generated-array compiler's memory.
+set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/embedded")
+set(GENERATED_FILES "${GENERATED_DIR}/table.cpp")
+set(RESOURCE_DEPENDS)
+set(INDEX 0)
+foreach(HEADER IN LISTS RESOURCE_FILES)
+  list(APPEND GENERATED_FILES "${GENERATED_DIR}/resource_${INDEX}.cpp")
+  list(APPEND RESOURCE_DEPENDS "${RESOURCE_DIR}/${HEADER}")
+  math(EXPR INDEX "${INDEX} + 1")
+endforeach()
+add_executable(embed-resources embed-resources.cpp)
+add_custom_command(OUTPUT ${GENERATED_FILES}
+  COMMAND embed-resources "${RESOURCE_DIR}" "${GENERATED_DIR}"
+  DEPENDS embed-resources ${RESOURCE_DEPENDS}
+  VERBATIM COMMENT "Embedding Clang resource headers as byte arrays")
+add_library(embedded-resources STATIC ${GENERATED_FILES})
+target_include_directories(embedded-resources PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(distill-stub main.cpp)
+target_include_directories(distill-stub SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
+separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND "${LLVM_DEFINITIONS}")
+target_compile_options(distill-stub PRIVATE ${LLVM_DEFINITIONS_LIST})
+# LLVM's default builds have RTTI disabled; match them at the API boundary.
+if(NOT LLVM_ENABLE_RTTI)
+  target_compile_options(distill-stub PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/GR->
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-rtti>)
+endif()
+set(CLANG_LIBS clangTooling clangFrontend clangDriver clangSerialization clangParse
+  clangSema clangAnalysis clangASTMatchers clangAST clangLex clangBasic clangEdit)
+foreach(LIB IN LISTS CLANG_LIBS)
+  if(NOT TARGET ${LIB})
+    message(FATAL_ERROR "SDK is missing ${LIB}")
+  endif()
+  get_target_property(LIB_TYPE ${LIB} TYPE)
+  if(NOT LIB_TYPE STREQUAL "STATIC_LIBRARY")
+    message(FATAL_ERROR "${LIB} must be static, got ${LIB_TYPE}")
+  endif()
+endforeach()
+# The imported targets carry their complete transitive static link dependencies.
+# TargetInfo lives in clangBasic; no backend initialization is needed for parsing.
+set(TARGET_INFO_LIBS)
+foreach(NATIVE_TARGET IN LISTS LLVM_TARGETS_TO_BUILD)
+  if(TARGET LLVM${NATIVE_TARGET}Info)
+    list(APPEND TARGET_INFO_LIBS LLVM${NATIVE_TARGET}Info)
+  endif()
+endforeach()
+target_link_libraries(distill-stub PRIVATE embedded-resources ${CLANG_LIBS}
+  LLVMSupport LLVMOption LLVMFrontendOpenMP LLVMTargetParser ${TARGET_INFO_LIBS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(distill-stub PRIVATE -static-libstdc++ -static-libgcc)
+elseif(WIN32)
+  target_compile_options(distill-stub PRIVATE /utf-8)
+  target_link_libraries(distill-stub PRIVATE psapi)
+endif()

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+.secrets
+
+# Local checks and CI outputs
+.checks/
+__pycache__/
+/build/
+/sdk-work/
+/spike-work/
+/sdk-artifact/
+/isolated/
+/results/
+/out/
+/artifacts/
+/release-assets/
+/audit.json
+/combined-summary.json
