@@ -182,8 +182,8 @@ libraries and snapshot filenames. `std` omits the `-std=` prefix. C++26 currentl
 uses GCC's provisional `202400L` value; a finalized dialect needs an update.
 
 `Profile` keeps the declared target/compiler/dialect, ordered `flags` and macro
-operations, `link`, `inert`, `build`, selected `libraries`, check compilers and
-file/date/source provenance. Obsolete `defines`, `library` and `allowed` keys
+operations, `link`, `inert`, `build`, `snapshotCompiler` (TOML `snapshot_compiler`),
+selected `libraries`, check compilers and file/date/source provenance. Obsolete `defines`, `library` and `allowed` keys
 are rejected. Profile flags use the command classifier; rejected options cannot
 be declared inert and `-std=` belongs in `std`. `-fmodules` and `-fopenmp` are
 modelled options because they affect macros. Explicit `-D` and `-U` operations
@@ -193,7 +193,10 @@ preserve order, empty replacement text and function-like definitions.
 and provenance: compiler builtin, startup header, command operation, special
 builtin, native model, A5, A4 or approximate allow-list. Reproduced mode requires
 a matching named build, affirmative snapshot provenance and a complete embedded
-compiler-version registry. Approximate mode uses only the commented data allow-list
+compiler-version registry. `snapshot_compiler` records the actual alternate
+compiler's exact package or recipe; its matching `snapshot-compiler` header is
+required. A `reproduced: yes` snapshot without a profile `build` is rejected.
+Approximate mode uses only the commented data allow-list
 for snapshot facts; explicit command operations remain known. Unlisted names use
 A5 (non-reserved), A4 (reproduced reserved), or remain unknown. Special builtin
 availability and invocation are distinct: `activeSpecialBuiltin()` follows the
@@ -222,7 +225,11 @@ joins supported native configurations after all options and macro operations.
 Unknown startup headers or variation outside the native model fail closed.
 The profile workflow installs the exact MSYS2 package/dependency set or builds
 AtCoder GCC from its published configure recipe, then uploads review artifacts.
-The old MSYS2 archive is currently unavailable; shipped snapshots stay absent.
+Codeforces has no published package revision: its `snapshot_compiler` selects
+available MSYS2 GCC 14.2.0-3 and the snapshot remains approximate. The installer
+checks the pinned dependency closure against the live listing and each package's
+`.PKGINFO` depend/provides records before installation. Shipped snapshots stay
+absent until the CI artifacts are reviewed.
 
 Generate A1 inventories with Python 3.11+:
 

@@ -32,7 +32,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       PROFILE: ${{ matrix.profile }}
-      GCC_VERSION: ${{ matrix.version }}
+      COMPILER_PROVENANCE: ${{ matrix.compiler }}
       BUILD_PROVENANCE: ${{ matrix.build }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -66,13 +66,13 @@ jobs:
           set -euo pipefail
           export LD_LIBRARY_PATH="$PWD/out/atcoder-gcc/lib64:${LD_LIBRARY_PATH:-}"
           python3 ci/profiles/snapshot.py data/judges/atcoder.toml --compiler "$PWD/out/atcoder-gcc/bin/g++" --reproduced-build "$BUILD_PROVENANCE"
-      - name: Install archived MSYS2 package and matching dependencies
+      - name: Install exact MSYS2 compiler and dependency closure
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           if (!(Test-Path C:\msys64\usr\bin\bash.exe)) { throw 'MSYS2 missing' }
-          & C:\msys64\usr\bin\bash.exe -lc 'cd "$GITHUB_WORKSPACE" && bash ci/profiles/install-mingw.sh "$GCC_VERSION"'
+          & C:\msys64\usr\bin\bash.exe -lc 'cd "$GITHUB_WORKSPACE" && bash ci/profiles/install-mingw.sh "$COMPILER_PROVENANCE"'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Snapshot Codeforces effective command
         if: runner.os == 'Windows'
@@ -80,7 +80,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
-          python ci/profiles/snapshot.py data/judges/codeforces.toml --compiler C:/msys64/mingw64/bin/g++.exe --reproduced-build $env:BUILD_PROVENANCE
+          $provenanceArgs = @()
+          if ($env:BUILD_PROVENANCE) { $provenanceArgs = @('--reproduced-build', $env:BUILD_PROVENANCE) }
+          python ci/profiles/snapshot.py data/judges/codeforces.toml --compiler C:/msys64/mingw64/bin/g++.exe @provenanceArgs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

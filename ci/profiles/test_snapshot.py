@@ -58,6 +58,20 @@ predefined = "fixture-predefined.txt"
             with self.assertRaisesRegex(ValueError, 'provenance'):
                 capture(path, 'g++', 'package=other')
 
+    def test_snapshot_compiler_without_build_records_approximate_provenance(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp, patch('snapshot.shutil.which', return_value='/compiler/g++'), patch('snapshot.run', side_effect=self.run_compiler):
+            path = self.profile(temp)
+            path.write_text(path.read_text().replace('build =', 'snapshot_compiler ='))
+            output = capture(path, 'g++').read_text()
+            self.assertIn('# snapshot-compiler: package=fixture=15.2.0', output)
+            self.assertIn('# build: none', output)
+            self.assertIn('# reproduced: no', output)
+            with self.assertRaisesRegex(ValueError, 'provenance'):
+                capture(path, 'g++', 'package=fixture=15.2.0')
+            path.write_text(path.read_text().replace('{ package = "fixture=15.2.0" }', '{}'))
+            with self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                capture(path, 'g++')
+
     def test_mismatches_clang_and_other_startup_headers_rejected(self):
         for option, value in [('-dumpfullversion', '15.3.0'), ('-dumpmachine', 'aarch64-linux-gnu'),
                               ('-dM', '#define __clang__ 1\n'), ('-dD', '# 1 "/judge/settings.h" 1\n')]:
@@ -174,6 +188,12 @@ predefined = "fixture-predefined.txt"
         self.assertEqual({r['profile'] for r in rows}, {'atcoder', 'codeforces'})
         self.assertEqual(matrix('atcoder')['include'][0]['version'], '15.2.0')
         self.assertEqual(matrix('codeforces')['include'][0]['runner'], 'windows-2025')
+        self.assertEqual(matrix('codeforces')['include'][0]['build'], '')
+        self.assertEqual(matrix('codeforces')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-3')
+        with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '14.2.0'}, 'triple': 'x86_64-w64-mingw32',
+                   'build': {'package': 'msys2:mingw-w64-x86_64-gcc=14.2.0-1'},
+                   'snapshot_compiler': {'package': 'msys2:mingw-w64-x86_64-gcc=14.2.0-3'}}):
+            self.assertEqual(matrix('codeforces')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-1')
         for selection in ['', 'typo', 'atcoder,', 'all,atcoder']:
             with self.assertRaises(ValueError):
                 matrix(selection)

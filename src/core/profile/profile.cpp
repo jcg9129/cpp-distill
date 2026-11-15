@@ -85,7 +85,7 @@ struct Schema {
   Profile parse(const std::filesystem::path& path, const SnapshotReader& reader) const {
     for (const auto& [key, entry] : doc) {
       (void)entry;
-      if (key != "name" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
+      if (key != "name" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "snapshot_compiler" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
     }
     Profile p;
     p.name = string("name");
@@ -114,12 +114,13 @@ struct Schema {
     p.flags = get<TomlStrings>("flags");
     if (doc.contains("link")) p.link = get<TomlStrings>("link");
     if (doc.contains("inert")) p.inert = get<TomlStrings>("inert");
-    if (doc.contains("build")) {
-      const auto& build = get<TomlTable>("build");
-      if (build.size() != 1 || (!build.contains("package") && !build.contains("recipe"))) fail("build", "requires exactly package or recipe");
-      const auto& [kind, value] = *build.begin();
-      if (value.empty() || !clean(value) || (kind == "recipe" && !matches(value, "https?://[^ \\t]+"))) fail("build", "invalid build provenance");
-      p.build = {kind, value};
+    for (const auto* key : {"build", "snapshot_compiler"}) if (doc.contains(key)) {
+      const auto& provenance = get<TomlTable>(key);
+      if (provenance.size() != 1 || (!provenance.contains("package") && !provenance.contains("recipe"))) fail(key, "requires exactly package or recipe");
+      const auto& [kind, value] = *provenance.begin();
+      if (value.empty() || !clean(value) || (kind == "recipe" && !matches(value, "https?://[^ \\t]+")) ||
+          (kind == "package" && !matches(value, "[A-Za-z0-9_.:+-]+=[A-Za-z0-9_.:+~-]+"))) fail(key, "invalid compiler provenance (package requires an exact version)");
+      (std::string_view(key) == "build" ? p.build : p.snapshotCompiler) = {kind, value};
     }
     // Profile options are an argv, not response-file references. A synthetic
     // source lets us share the exact command classifier without filesystem reads.

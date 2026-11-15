@@ -73,10 +73,12 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
 - Extension generation now follows textual include/include_next reachability from
   the standard-header list and all ext/pb_ds headers, including inactive includes.
   Local results: glibc 1461 names, libstdc++ 149. Computed includes are not followed.
-- Codeforces/PBOX evidence identifies MSYS2 GCC 14.2.0-1. The exact gcc and gcc-libs
-  archive URLs currently return 404, so its workflow cannot yet produce an artifact.
-  Historical dependencies are pinned to the matching MSYS2 source tree; PBOX's
-  byte-level dependency manifest is not published by the cited evidence.
+- Codeforces publishes only "GNU G++23 14.2 (64 bit, msys2)"; its MSYS2
+  package revision is unknown. The profile omits `build` and uses available GCC
+  14.2.0-3 as `snapshot_compiler`, producing an approximate snapshot with
+  `reproduced: no`. All 16 locked compiler/dependency archives were downloaded
+  and their `.PKGINFO` depend/provides closure checked against the live listing.
+  CI validates that closure before installing exact files with `pacman -U`.
 - AtCoder CI builds GCC 15.2.0 from the published recipe on ubuntu-24.04, using its
   configure options and a recipe-hashed compiler cache. Its inferred
   x86_64-pc-linux-gnu triple stays UNVERIFIED pending actual workflow output.

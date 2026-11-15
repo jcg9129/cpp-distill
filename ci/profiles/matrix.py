@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import tomllib
+from provenance import identity
 
 
 def matrix(selection='all'):
@@ -17,8 +18,13 @@ def matrix(selection='all'):
         p = profiles[name]
         version = p['compiler']['version']
         windows = 'mingw' in p['triple']
+        build = identity(p, 'build')
+        snapshot_compiler = identity(p, 'snapshot_compiler')
+        compiler = build if build != 'none' else snapshot_compiler
+        if windows and not compiler.startswith('package=msys2:mingw-w64-x86_64-gcc='):
+            raise ValueError(f'{name}: Windows snapshot requires an exact MSYS2 GCC package')
         rows.append(dict(profile=name, version=version, runner='windows-2025' if windows else 'ubuntu-24.04',
-                         build='='.join(next(iter(p['build'].items())))))
+                         build='' if build == 'none' else build, compiler=compiler))
     return {'include': rows}
 
 

@@ -113,8 +113,9 @@ TEST(profile_mode_requires_matching_build_and_complete_registry) {
   auto text = test::read(profileFixture("mingw.toml"));
   auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   for (const auto& other : {replace(text, "build = { package = \"synthetic:fixture=14.2.0-1\" }", ""),
-                           replace(text, "synthetic:fixture=14.2.0-1", "other:build")}) {
-    auto r = synthetic(other); CHECK(r.ok()); if (r.ok()) {
+                           replace(text, "synthetic:fixture=14.2.0-1", "other:build=1")}) {
+    const auto inventory = other.find("build =") == std::string::npos ? replace(snapshot, "# reproduced: yes", "# reproduced: no") : snapshot;
+    auto r = synthetic(other, inventory); CHECK(r.ok()); if (r.ok()) {
       CHECK(!r.value().reproduced);
       CHECK_EQ(r.value().initialState("__has_include").state, MacroState::unknown);
       CHECK_EQ(r.value().initialState("__GNUC__").state, MacroState::known);
@@ -135,6 +136,26 @@ TEST(profile_mode_requires_matching_build_and_complete_registry) {
   CHECK(specialBuiltins({CompilerFamily::gcc, 99, 1, 0}).empty());
   CHECK(!approximateAllowed("__AVX2__")); CHECK(!approximateAllowed("__OPTIMIZE__"));
   for (const auto* n : {"__GNUC__", "_WIN32", "__SIZEOF_INT__", "__INT_MAX__", "__CHAR_UNSIGNED__", "__cplusplus"}) CHECK(approximateAllowed(n));
+}
+TEST(profile_snapshot_compiler_is_approximate_and_cannot_claim_reproduction) {
+  const auto original = test::read(profileFixture("mingw.toml"));
+  const auto text = replace(original, "build = { package = \"synthetic:fixture=14.2.0-1\" }",
+                            "snapshot_compiler = { package = \"msys2:mingw-w64-x86_64-gcc=14.2.0-3\" }");
+  const auto snapshot = replace(test::read(profileFixture("mingw-predefined.txt")),
+      "# build: package=synthetic:fixture=14.2.0-1", "# build: none\n# snapshot-compiler: package=msys2:mingw-w64-x86_64-gcc=14.2.0-3");
+  auto r = synthetic(text, replace(snapshot, "# reproduced: yes", "# reproduced: no"));
+  CHECK(r.ok()); if (!r.ok()) return;
+  CHECK(!r.value().build); CHECK(r.value().snapshotCompiler.has_value()); CHECK(!r.value().reproduced);
+  CHECK_EQ(r.value().snapshotMetadata.snapshotCompiler, "package=msys2:mingw-w64-x86_64-gcc=14.2.0-3");
+  CHECK_EQ(r.value().initialState("__GNUC__").state, MacroState::known);
+  CHECK_EQ(r.value().initialState("__has_include").state, MacroState::unknown);
+  CHECK_EQ(r.value().initialState("__absent_reserved").state, MacroState::unknown);
+  auto claimed = synthetic(text, snapshot); CHECK(!claimed.ok());
+  if (!claimed.ok()) CHECK(claimed.error().message.find("requires build provenance") != std::string::npos);
+  CHECK(!synthetic(replace(original, "build =", "snapshot_compiler =")).ok()); // header must record it
+  CHECK(!synthetic(text, replace(snapshot, "gcc=14.2.0-3", "gcc=14.2.0-2")).ok());
+  for (const auto* value : {"{}", "{package=''}", "{package='gcc'}", "{package='gcc=1 2'}", "{recipe='not-url'}", "{typo='x'}", "{package='gcc=1',recipe='https://x'}", "[]"})
+    badProfile(allowProfile() + "\nsnapshot_compiler = " + value, "snapshot_compiler:");
 }
 TEST(profile_schema_required_unknown_types_and_values) {
   auto text = allowProfile(); auto doc = parseProfileToml(text, "test").value();

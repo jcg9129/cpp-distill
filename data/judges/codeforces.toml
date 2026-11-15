@@ -10,13 +10,12 @@ compiler = { family = "gcc", version = "14.2.0" }
 std = "c++23"
 flags = ["-Wall", "-Wextra", "-Wconversion", "-O2", "-DONLINE_JUDGE"]
 link = ["-static", "-Wl,--stack=268435456", "-lstdc++exp"]
-# Best evidence: judge announcement points to PBOX gcc14-64-msys2;
-# https://pbox.me/packages publishes version 14.2.0-1 and gcc14-64-msys2-14.2.0-1.7z.
-# MSYS2 PKGBUILD f2010a2af323b9fcddb238a62dd19d36eb547aa8 has pkgver=14.2.0, pkgrel=1.
-build = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-1" }
+# The judge publishes only "GNU G++23 14.2 (64 bit, msys2)"; package revision unknown.
+# This available MSYS2 compiler produces an approximate snapshot, not a reproduced build.
+snapshot_compiler = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-3" }
 libraries = ["mingw-w64", "libstdc++"]
 # Snapshot intentionally absent until profiles.yml produces a reviewed artifact.
 predefined = "codeforces-predefined.txt"
 check = ["x86_64-w64-mingw32-g++", "g++"]
 updated = "2026-11-15"
-sources = ["https://codeforces.com/blog/entry/133046?mobile=false", "https://pbox.me/packages", "https://github.com/msys2/MINGW-packages/blob/f2010a2af323b9fcddb238a62dd19d36eb547aa8/mingw-w64-gcc/PKGBUILD"]
+sources = ["https://codeforces.com/blog/entry/133046?mobile=false", "https://repo.msys2.org/mingw/mingw64/"]

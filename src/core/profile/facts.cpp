@@ -133,11 +133,15 @@ Result<bool> parseProfileSnapshot(Profile& p, std::string_view text) {
       insert(name, {MacroState::known, macro, {source}});
       p.predefined.emplace(name, macro);
     }
-    const std::set<std::string> fields{"distill-snapshot", "compiler-path", "compiler-version", "gcc-version", "dumpmachine", "profile-triple", "build", "reproduced", "std", "builtin-registry", "native-model"};
+    std::set<std::string> fields{"distill-snapshot", "compiler-path", "compiler-version", "gcc-version", "dumpmachine", "profile-triple", "build", "reproduced", "std", "builtin-registry", "native-model"};
+    if (p.snapshotCompiler) fields.insert("snapshot-compiler");
     if (header || metadata.size() != fields.size()) fail("missing metadata/end-header");
     for (const auto& field : fields) if (!metadata.contains(field)) fail("missing metadata " + field);
     if (metadata.at("distill-snapshot") != "1" || metadata.at("std") != p.dialect.name || flags != p.flags || metadata.at("profile-triple") != p.triple || !compatibleProfileTriple(p.triple, metadata.at("dumpmachine"))) fail("format/command/triple mismatch");
     if (metadata.at("reproduced") != "yes" && metadata.at("reproduced") != "no") fail("invalid reproduced value");
+    if (p.snapshotCompiler && metadata.at("snapshot-compiler") != p.snapshotCompiler->first + "=" + p.snapshotCompiler->second) fail("snapshot compiler mismatch");
+    if (metadata.at("reproduced") == "yes" && !p.build) fail("reproduced snapshot requires build provenance");
+    if (metadata.at("reproduced") == "yes" && p.snapshotCompiler && p.snapshotCompiler != p.build) fail("snapshot compiler is not the judge build");
     const auto actualVersion = metadata.at("gcc-version");
     if (actualVersion != p.compilerVersion && !(actualVersion.starts_with(p.compilerVersion + ".") && !p.patchSpecified)) fail("GCC version mismatch");
     if (metadata.at("builtin-registry") != (builtins.empty() ? "none" : key(p.compiler))) fail("builtin registry mismatch");
@@ -178,7 +182,7 @@ Result<bool> parseProfileSnapshot(Profile& p, std::string_view text) {
       }
     }
     for (const auto& [name, fact] : p.snapshotFacts) if (fact.provenance.front() == FactOrigin::commandOperation && !finalOperations.contains(name)) fail("command provenance without operation: " + name);
-    p.snapshotMetadata = {metadata.at("compiler-path"), metadata.at("compiler-version"), actualVersion, metadata.at("dumpmachine"), metadata.at("build"), metadata.at("reproduced") == "yes"};
+    p.snapshotMetadata = {metadata.at("compiler-path"), metadata.at("compiler-version"), actualVersion, metadata.at("dumpmachine"), metadata.at("build"), p.snapshotCompiler ? metadata.at("snapshot-compiler") : "", metadata.at("reproduced") == "yes"};
     p.reproduced = p.build && p.snapshotMetadata.reproduced && metadata.at("build") == p.build->first + "=" + p.build->second && !builtins.empty();
     return true;
   } catch (const Error& e) { return e; }

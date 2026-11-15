@@ -5,7 +5,8 @@
 (lowercase letters, digits, hyphens) matches its filename. Required fields are
 `name`, `description`, `compiler = { family = "gcc", version = "major.minor[.patch]" }`,
 `triple`, `std`, `flags`, `libraries`, `check`, `updated` and nonempty HTTP(S)
-`sources`. Optional fields are `link`, `inert`, `build`, `predefined`.
+`sources`. Optional fields are `link`, `inert`, `build`, `snapshot_compiler`,
+`predefined`.
 `defines`, `library` and `allowed` are obsolete and rejected.
 
 `flags` is an ordered argv, including `-D` and `-U` in place. It shares the
@@ -19,7 +20,18 @@ inventory grants no protection. Without a selection, the union of all sets appli
 
 `build` has exactly one key: `package` (exact package and revision) or `recipe`
 (the published source/configure recipe URL). Reproduction relies on amended A4,
-not version/triple similarity. A profile is approximate if it has no build,
+not version/triple similarity. `snapshot_compiler` has the same one-key form
+and names the compiler used for an approximate snapshot when the judge build
+is unknown or differs. Package values require `name=version` (including the
+exact distribution revision and a distribution prefix where applicable); recipe values require an HTTP(S) URL.
+For Codeforces, omit `build` and use:
+
+```toml
+# Judge publishes only "GNU G++23 14.2 (64 bit, msys2)"; package revision unknown.
+snapshot_compiler = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-3" }
+```
+
+A profile is approximate if it has no build,
 its snapshot is not from that build, or the compiler release lacks a complete
 special-builtin registry. Approximate snapshots contribute only the commented
 regex allow-list in `approximate-allowlist.txt`; other reserved facts remain
@@ -38,7 +50,8 @@ A3 checks the effective states, so a final `-U` cancels a prior definition.
 
 UTF-8, LF (CRLF accepted), one record per line. No arbitrary comment/directive
 lines are accepted. The optional SPDX line is exactly the one below. Header
-keys are required exactly once, except `flag`, repeated once per ordered argv
+keys are required exactly once, except `snapshot-compiler`, required only when
+the profile declares `snapshot_compiler`, and `flag`, repeated once per ordered argv
 argument (zero repetitions for empty flags). Header values are nonempty strings;
 `compiler-version` is the complete `--version` output with newlines spelled
 `\n`. `gcc-version` is `-dumpfullversion -dumpversion`, `dumpmachine` the actual
@@ -70,7 +83,21 @@ field (including omitted GNU Linux vendors); both spellings are recorded.
 
 The fragment illustrates record syntax, not a complete valid snapshot. All
 registered names need probes and corresponding facts. `build` is
-`package=<value>`, `recipe=<url>` or `none`. `reproduced` is `yes` or `no`;
+`package=<value>`, `recipe=<url>` or `none`. When present, `snapshot-compiler`
+must exactly match the profile's `snapshot_compiler` identity in the same form.
+An approximate Codeforces snapshot has these header lines:
+
+```text
+# build: none
+# snapshot-compiler: package=msys2:mingw-w64-x86_64-gcc=14.2.0-3
+# reproduced: no
+```
+
+`reproduced` is `yes` or `no`; `yes` without profile `build` is an error, as is
+`yes` with a different `snapshot_compiler`. An existing profile `build` alone
+never affirms reproduction; only the CI job using that package/recipe may pass
+`--reproduced-build`.
+
 `builtin-registry` is the compiler's `gcc-M.m` key or `none` if unsupported.
 `native-model` is `gcc-M.m-x86` when a supported host-dependent option is present,
 otherwise `none`. The loader cross-checks the exact profile std/flags/version,
@@ -117,20 +144,35 @@ other host-dependent targets are rejected rather than sampled on this host.
 
 ## Research and CI
 
-Codeforces publishes its [command and MSYS2/PBOX selection](https://codeforces.com/blog/entry/133046?mobile=false).
-[PBOX's catalog](https://pbox.me/packages) names `gcc14-64-msys2` version
-`14.2.0-1`, archive `gcc14-64-msys2-14.2.0-1.7z`. The matching
-[MSYS2 source tree](https://github.com/msys2/MINGW-packages/tree/f2010a2af323b9fcddb238a62dd19d36eb547aa8)
-has GCC `pkgver=14.2.0`, `pkgrel=1`, and requires `gcc-libs=14.2.0-1`.
-`ci/profiles/mingw-packages.txt` pins that dependency closure's package filenames
-from the same source tree; it is best source evidence, not a byte manifest of
-PBOX's bundle. CI installs the exact set in one `pacman -U` transaction from
-`https://repo.msys2.org/mingw/mingw64/`, with no rolling-package fallback.
-**Open:** on 2026-11-15 HEAD requests for GCC and gcc-libs `14.2.0-1` returned
-404 there. Until those artifacts are available the Windows job fails explicitly.
-No compiler package was downloaded on the shared VM. Review the artifact/build
-identity before checking a snapshot in; neither PBOX evidence nor a version label
-alone confirms every byte of the judge environment.
+Codeforces publishes its [command and compiler label](https://codeforces.com/blog/entry/133046?mobile=false),
+"GNU G++23 14.2 (64 bit, msys2)", but no MSYS2 package revision. PBOX's
+bundle revision and a matching MSYS2 source tree do not establish the judge's
+package identity. The profile therefore omits `build` and is **approximate**.
+Its `snapshot_compiler` is the available GCC `14.2.0-3` MSYS2 package.
+
+`ci/profiles/matrix.py` selects `build` when present, otherwise
+`snapshot_compiler`. The Windows installer derives the exact GCC filename from
+that identity. `ci/profiles/mingw-packages.txt` pins the available 16-package
+runtime dependency closure, not a claimed judge manifest. On 2026-11-15 all
+listed files were downloaded from the [MSYS2 repository](https://repo.msys2.org/mingw/mingw64/)
+and their `.PKGINFO` records inspected. This includes GCC and gcc-libs
+`14.2.0-3`; `14.2.0-1` is unavailable. Some historical dependencies have also
+been removed, so the lock uses available revisions satisfying the package's
+requirements. This is another reason these artifacts cannot establish the
+judge's build.
+
+`ci/profiles/mingw.py` checks every exact filename against the live listing,
+downloads it, verifies `.PKGINFO` name/version, and resolves all transitive
+`depend` records against the locked packages and their `provides` aliases.
+Version constraints include package revisions when specified; version bounds
+use MSYS2's `vercmp`. Missing files, missing or ambiguous dependencies, version
+mismatches and unused lock entries fail clearly before installation. Update the
+lock by inspecting the compiler's `.PKGINFO` and recursively selecting available
+files for its dependencies; never substitute a missing revision silently.
+CI installs the validated closure in one `pacman -U` transaction, with no
+rolling-package fallback, and verifies every installed revision. The Codeforces
+snapshot records `snapshot-compiler` and `reproduced: no`; only an actual `build`
+identity is passed as `--reproduced-build`.
 
 AtCoder's [published install script](https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml)
 now uses GCC **15.2.0**, despite its older URL name. Source URL:

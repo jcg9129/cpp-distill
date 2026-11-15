@@ -230,7 +230,8 @@ compiler = { family = "gcc", version = "14.2.0" }
 std = "c++23"                      # the language the user selects on the judge
 flags = ["-O2", "-DONLINE_JUDGE"]  # compile options in order, -D/-U in place
 link = ["-static", "-Wl,--stack=268435456", "-lstdc++exp"]
-build = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-1" }   # or { recipe = "<url>" }
+# Judge package revision unknown; this compiler produces an approximate snapshot.
+snapshot_compiler = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-3" }
 libraries = ["mingw-w64"]          # selects the A1 extension lists
 predefined = "codeforces-predefined.txt"
 check = ["x86_64-w64-mingw32-g++"] # compilers for the judge's target, tried in order
@@ -257,7 +258,13 @@ an exact distribution package or the judge's published build recipe (source
 release and configure line). The snapshot is produced in CI by that package or
 by a compiler built there from that recipe: a **reproduced build**. A profile
 whose snapshot comes from another compiler of the same version and target is
-**approximate**.
+**approximate**. When the judge build is unknown, omit `build`; the optional
+`snapshot_compiler` names the actual snapshot compiler using the same exact
+`package` or published `recipe` form. It supplies provenance, not reproduction:
+the snapshot records `snapshot-compiler` and `reproduced: no`. A snapshot claiming
+reproduction without `build` is rejected. Codeforces publishes only
+"GNU G++23 14.2 (64 bit, msys2)", with no package revision, so its profile uses
+an available MSYS2 package as `snapshot_compiler` and remains approximate.
 
 **Snapshot** (P2-3): the macro state at the first token of an empty source
 under `-x c++ -std=<std> <flags>` (macro operations included, in order),

@@ -21,7 +21,7 @@ struct MacroFact {
 };
 using MacroFacts = std::map<std::string, MacroFact, std::less<>>;
 struct SnapshotMetadata {
-  std::string compilerPath, versionOutput, gccVersion, dumpmachine, build;
+  std::string compilerPath, versionOutput, gccVersion, dumpmachine, build, snapshotCompiler;
   bool reproduced = false;
 };
 struct Profile {
@@ -31,7 +31,7 @@ struct Profile {
   Dialect dialect;
   std::vector<std::string> flags, link, inert, libraries;
   std::vector<LocalMacro> macroOperations;
-  std::optional<std::pair<std::string, std::string>> build;
+  std::optional<std::pair<std::string, std::string>> build, snapshotCompiler;
   MacroTable judgeMacros;
   MacroTable predefined;
   bool reproduced = false;

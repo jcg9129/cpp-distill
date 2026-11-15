@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import tomllib
 from flags import operations
+from provenance import identity
 
 ROOT = Path(__file__).resolve().parents[2]
 NAME = r'[A-Za-z_][A-Za-z_0-9]*'
@@ -163,12 +164,12 @@ def capture(profile_file, compiler, reproduced_build=None):
     builtins = data('builtins', key)
     model = dict(line.split() for line in data('native', key + '-x86'))
     argv = ['-x', 'c++', '-std=' + profile['std'], *flags]
-    build = profile.get('build', {})
-    if build and (len(build) != 1 or next(iter(build)) not in ('package', 'recipe')):
-        raise ValueError('build requires exactly package or recipe')
-    build_id = '='.join(next(iter(build.items()))) if build else 'none'
-    if reproduced_build is not None and (not build or reproduced_build != build_id):
+    build_id = identity(profile, 'build')
+    snapshot_compiler = identity(profile, 'snapshot_compiler')
+    if reproduced_build is not None and (build_id == 'none' or reproduced_build != build_id):
         raise ValueError('--reproduced-build must equal profile build provenance')
+    if reproduced_build is not None and snapshot_compiler not in ('none', build_id):
+        raise ValueError('snapshot compiler is not the judge build')
     host = any(f in ('-march=native', '-mtune=native', '-mcpu=native') for f in flags)
     if host and (not model or not triple.startswith('x86_64-')):
         raise ValueError('unsupported native model/ABI')
@@ -206,6 +207,8 @@ def capture(profile_file, compiler, reproduced_build=None):
               ('build', build_id), ('reproduced', 'yes' if reproduced_build is not None else 'no'),
               ('std', profile['std']), ('builtin-registry', key if builtins else 'none'),
               ('native-model', key + '-x86' if host else 'none')]
+    if snapshot_compiler != 'none':
+        fields.append(('snapshot-compiler', snapshot_compiler))
     lines = ['# SPDX-License-Identifier: GPL-3.0-or-later', *[f'# {k}: {v}' for k, v in fields],
              *['# flag: ' + f for f in flags], '# end-header']
     for name, (state, definition, origin) in sorted(states.items()):
