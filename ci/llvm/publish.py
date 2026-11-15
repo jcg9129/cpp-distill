@@ -25,8 +25,13 @@ def request(method, url, data=None):
     if data is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(data).encode()
-    with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=headers), timeout=120) as response:
-        return json.load(response) if response.status != 204 else None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=headers), timeout=120) as response:
+            return json.load(response) if response.status != 204 else None
+    except urllib.error.HTTPError as error:
+        # GitHub explains 403/422 refusals in the body; show it before re-raising.
+        print(f"{method} {url} -> HTTP {error.code}: {error.read().decode(errors='replace')[:2000]}")
+        raise
 
 
 tag = f"llvm-{args.version}-{args.rev}"
