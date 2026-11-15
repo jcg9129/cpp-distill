@@ -1,10 +1,12 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# A1 glibc; generator ci/extensions/generate.py v2; date 2026-11-15
-# Scanned: aarch64-linux-gnu-g++-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0; aarch64-linux-gnu; glibc 2.43; 212 reachable headers
 # Roots: data/names/standard-headers.txt and every ext/pb_ds/ header.
-# Transitive textual #include/#include_next, active or inactive; compiler search order.
 # Limitation: computed include operands are not followed.
-# Inactive #define and #undef names included; unions only across v2 reachability scans.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A1 glibc; generator ci/extensions/generate.py v2; merged 2026-11-15
+# Scanned: aarch64-linux-gnu-g++-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0; aarch64-linux-gnu; glibc 2.43; 212 reachable headers
+# Scanned: g++ (GCC) 14.2.0; x86_64-linux-gnu; gcc:14.2.0@sha256:b99b86a28812b1e6453a231a947dc43d76fe192788a12f344a9b568bf9f5d24c; 172 reachable headers
+# Scanned: g++ (GCC) 15.2.0; x86_64-linux-gnu; gcc:15.2.0@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289; 179 reachable headers
+# Scanned: g++ (GCC) 16.2.0; x86_64-linux-gnu; gcc:16.2.0@sha256:5c2f83335c97e233c80d2bc754bd5c46b2d9c32f236a765a4ac40a59f216c064; 175 reachable headers
+# Scanned: g++ (GCC) 8.5.0 20210514 (Red Hat 8.5.0-31); x86_64-redhat-linux; almalinux:8; 151 reachable headers
 ADJ_ESTERROR
 ADJ_FREQUENCY
 ADJ_MAXERROR
@@ -187,6 +189,9 @@ FPE_INTDIV
 FPE_INTOVF
 FPMR_MAGIC
 FPSIMD_MAGIC
+FP_XSTATE_MAGIC1
+FP_XSTATE_MAGIC2
+FP_XSTATE_MAGIC2_SIZE
 F_LOCK
 F_OK
 F_TEST
@@ -374,6 +379,7 @@ M_SQRT2f64x
 M_SQRT2l
 NAME_MAX
 NFDBITS
+NGREG
 NGROUPS_MAX
 NL_ARGMAX
 NL_LANGMAX
@@ -423,6 +429,45 @@ PTHREAD_SCOPE_SYSTEM
 PTHREAD_STACK_MIN
 PTHREAD_THREADS_MAX
 P_tmpdir
+REG_CR2
+REG_CS
+REG_CSGSFS
+REG_DS
+REG_EAX
+REG_EBP
+REG_EBX
+REG_ECX
+REG_EDI
+REG_EDX
+REG_EFL
+REG_EIP
+REG_ERR
+REG_ES
+REG_ESI
+REG_ESP
+REG_FS
+REG_GS
+REG_OLDMASK
+REG_R10
+REG_R11
+REG_R12
+REG_R13
+REG_R14
+REG_R15
+REG_R8
+REG_R9
+REG_RAX
+REG_RBP
+REG_RBX
+REG_RCX
+REG_RDI
+REG_RDX
+REG_RIP
+REG_RSI
+REG_RSP
+REG_SS
+REG_TRAPNO
+REG_UESP
 RENAME_EXCHANGE
 RENAME_NOREPLACE
 RENAME_WHITEOUT
@@ -1263,6 +1308,7 @@ WSTOPSIG
 WTERMSIG
 WUNTRACED
 W_OK
+X86_FXSR_MAGIC
 XATTR_LIST_MAX
 XATTR_NAME_MAX
 XATTR_SIZE_MAX

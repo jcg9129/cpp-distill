@@ -1,10 +1,16 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-# A1 libstdc++; generator ci/extensions/generate.py v2; date 2026-11-15
-# Scanned: aarch64-linux-gnu-g++-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0; aarch64-linux-gnu; glibc 2.43; 662 reachable headers
 # Roots: data/names/standard-headers.txt and every ext/pb_ds/ header.
-# Transitive textual #include/#include_next, active or inactive; compiler search order.
 # Limitation: computed include operands are not followed.
-# Inactive #define and #undef names included; unions only across v2 reachability scans.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A1 libstdc++; generator ci/extensions/generate.py v2; merged 2026-11-15
+# Scanned: aarch64-linux-gnu-g++-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0; aarch64-linux-gnu; glibc 2.43; 662 reachable headers
+# Scanned: g++ (GCC) 14.2.0; x86_64-linux-gnu; gcc:14.2.0@sha256:b99b86a28812b1e6453a231a947dc43d76fe192788a12f344a9b568bf9f5d24c; 672 reachable headers
+# Scanned: g++ (GCC) 15.2.0; x86_64-linux-gnu; gcc:15.2.0@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289; 679 reachable headers
+# Scanned: g++ (GCC) 16.2.0; x86_64-linux-gnu; gcc:16.2.0@sha256:5c2f83335c97e233c80d2bc754bd5c46b2d9c32f236a765a4ac40a59f216c064; 710 reachable headers
+# Scanned: g++ (GCC) 8.5.0 20210514 (Red Hat 8.5.0-31); x86_64-redhat-linux; almalinux:8; 628 reachable headers
+# Scanned: g++.exe (Rev7, Built by MSYS2 project) 16.2.0; x86_64-w64-mingw32; mingw-w64-x86_64-crt 14.0.0.r598.ge3d18511f-1; mingw-w64-x86_64-gcc 16.2.0-7; mingw-w64-x86_64-headers 14.0.0.r598.ge3d18511f-1; 710 reachable headers
+GTHR_ACTIVE_PROXY
+LT_OBJDIR
+NOMINMAX
 PB_DS_0_NODE_METADATA_HPP
 PB_DS_ASSERT_AUX_NULL
 PB_DS_ASSERT_BASE_NODE_CONSISTENT
@@ -153,4 +159,19 @@ PB_DS_TYPES_TRAITS_HPP
 PB_DS_TYPE_UTILS_HPP
 PB_DS_V2F
 PB_DS_V2S
+STDC_HEADERS
 TBB_SUPPRESS_DEPRECATED_MESSAGES
+finite
+finitef
+finitel
+fpclass
+isinff
+isinfl
+isnanf
+isnanl
+max
+min
+qfpclass
+sincos
+sincosf
+sincosl

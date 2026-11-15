@@ -35,13 +35,20 @@ TEST(names_standard_headers_reject_path_escape_components) {
 
 TEST(names_embedded_extensions_and_missing_inventory) {
   NameLists names;
-  CHECK(names.extensionListReady({"glibc"})); CHECK(names.extensionListReady({"libstdc++"}));
-  CHECK(!names.extensionListReady({"mingw-w64"})); CHECK(!names.extensionListReady({"macos-libc"}));
-  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"mingw-w64"}));
-  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"macos-libc"}));
+  for (const char* library : {"glibc", "libstdc++", "mingw-w64", "macos-libc"}) {
+    CHECK(names.extensionListReady({library}));
+    CHECK(!names.extensions.at(library).empty());
+    for (const char* name : {"MOD", "INF", "DEBUG", "LOCAL", "N", "MAXN", "rep", "ll"})
+      CHECK(!names.extensions.at(library).contains(name));
+  }
+  CHECK(names.extensionListReady());
+  CHECK(names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"mingw-w64"}));
+  CHECK(names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"macos-libc"}));
   CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"missing"}));
-  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712"));
+  CHECK(names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712"));
   CHECK(names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"libstdc++"}));
+  for (const char* library : {"glibc", "mingw-w64", "macos-libc"})
+    CHECK(names.extensions.at(library).contains("M_PI"));
   CHECK(!names.protectedUserMacro("M_PI", {"glibc"}));
   CHECK(!names.protectedUserMacro("M_PI", {"glibc", "libstdc++"}));
   CHECK(!names.protectedUserMacro("PB_DS_ASSERT_VALID", {"libstdc++"}));
@@ -61,7 +68,8 @@ TEST(names_embedded_inventory_matches_reviewed_files_exactly) {
   for (const char* library : {"glibc", "libstdc++", "mingw-w64", "macos-libc"}) {
     const auto path = std::filesystem::path(DISTILL_EXTENSION_DATA) / (std::string(library) + ".txt");
     auto parsed = parseExtensionList(test::read(path), pathToUtf8(path));
-    CHECK(parsed.ok()); if (!parsed.ok()) return;
+    if (!parsed.ok()) throw std::runtime_error(parsed.error().message);
+    CHECK(!parsed.value().empty());
     raw.emplace(library, std::move(parsed.value()));
   }
   CHECK_EQ(names.extensions.at("glibc"), raw.at("glibc"));

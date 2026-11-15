@@ -109,6 +109,62 @@ TEST(profile_loads_reproduced_and_approximate_fixtures) {
   CHECK_EQ(linux.value().initialState("LOCAL").state, MacroState::undefined);
   CHECK_EQ(linux.value().initialState("EMPTY").definition->replacement, "");
 }
+TEST(profile_embedded_shipped_codeforces_snapshot) {
+  const auto loaded = lookupProfile("codeforces");
+  if (!loaded.ok()) throw std::runtime_error(loaded.error().message);
+  const auto& p = loaded.value();
+  CHECK_EQ(p.provenance.file, pathFromUtf8("embedded/codeforces.toml"));
+  CHECK(!p.reproduced);
+  for (const auto* name : {"_WIN32", "_WIN64", "__MINGW64__", "__x86_64__", "__STRICT_ANSI__"})
+    CHECK_EQ(p.initialState(name).state, MacroState::known);
+  const auto linux = p.initialState("__linux__");
+  CHECK_EQ(linux.state, MacroState::undefined);
+  CHECK_EQ(linux.provenance, (std::vector{FactOrigin::allowList}));
+  for (const auto& [name, value] : {std::pair{"__SIZEOF_LONG__", "4"}, {"ONLINE_JUDGE", "1"}}) {
+    const auto fact = p.initialState(name);
+    CHECK_EQ(fact.state, MacroState::known);
+    CHECK(fact.definition.has_value());
+    if (fact.definition) CHECK_EQ(fact.definition->replacement, value);
+  }
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").provenance, (std::vector{FactOrigin::commandOperation}));
+  const auto local = p.initialState("LOCAL");
+  CHECK_EQ(local.state, MacroState::undefined);
+  CHECK_EQ(local.provenance, (std::vector{FactOrigin::a5}));
+  CHECK(!approximateAllowed("__SOME_VENDOR_MACRO__"));
+  CHECK(!p.snapshotFacts.contains("__SOME_VENDOR_MACRO__"));
+  CHECK_EQ(p.initialState("__SOME_VENDOR_MACRO__").state, MacroState::unknown);
+  const auto hasInclude = p.initialState("__has_include");
+  CHECK_EQ(hasInclude.state, MacroState::definedUnknown);
+  CHECK(!hasInclude.definition);
+  CHECK(hasInclude.activeSpecialBuiltin());
+}
+TEST(profile_embedded_shipped_atcoder_snapshot) {
+  const auto loaded = lookupProfile("atcoder");
+  if (!loaded.ok()) throw std::runtime_error(loaded.error().message);
+  const auto& p = loaded.value();
+  CHECK_EQ(p.provenance.file, pathFromUtf8("embedded/atcoder.toml"));
+  CHECK(p.reproduced);
+  CHECK_EQ(p.snapshotMetadata.dumpmachine, "x86_64-pc-linux-gnu");
+  for (const auto* name : {"__linux__", "__x86_64__", "_OPENMP", "_REENTRANT", "__OPTIMIZE__", "__cpp_modules"})
+    CHECK_EQ(p.initialState(name).state, MacroState::known);
+  const auto win32 = p.initialState("_WIN32");
+  CHECK_EQ(win32.state, MacroState::undefined);
+  CHECK_EQ(win32.provenance, (std::vector{FactOrigin::a4}));
+  const auto avx2 = p.initialState("__AVX2__");
+  CHECK_EQ(avx2.state, MacroState::unknown);
+  CHECK_EQ(avx2.provenance, (std::vector{FactOrigin::nativeModel}));
+  for (const auto& [name, value] : {std::pair{"ATCODER", "1"}, {"OR_PROTO_DLL", ""}}) {
+    const auto fact = p.initialState(name);
+    CHECK_EQ(fact.state, MacroState::known);
+    CHECK(fact.definition.has_value());
+    if (fact.definition) CHECK_EQ(fact.definition->replacement, value);
+    CHECK_EQ(fact.provenance, (std::vector{FactOrigin::commandOperation}));
+  }
+  const auto local = p.initialState("LOCAL");
+  CHECK_EQ(local.state, MacroState::undefined);
+  CHECK_EQ(local.provenance, (std::vector{FactOrigin::a5}));
+  CHECK_EQ(p.initialState("__STRICT_ANSI__").state, MacroState::undefined);
+}
 TEST(profile_mode_requires_matching_build_and_complete_registry) {
   auto text = test::read(profileFixture("mingw.toml"));
   auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
@@ -117,7 +173,7 @@ TEST(profile_mode_requires_matching_build_and_complete_registry) {
     const auto inventory = other.find("build =") == std::string::npos ? replace(snapshot, "# reproduced: yes", "# reproduced: no") : snapshot;
     auto r = synthetic(other, inventory); CHECK(r.ok()); if (r.ok()) {
       CHECK(!r.value().reproduced);
-      CHECK_EQ(r.value().initialState("__has_include").state, MacroState::unknown);
+      CHECK_EQ(r.value().initialState("__has_include").state, MacroState::definedUnknown);
       CHECK_EQ(r.value().initialState("__GNUC__").state, MacroState::known);
     }
   }
@@ -148,7 +204,7 @@ TEST(profile_snapshot_compiler_is_approximate_and_cannot_claim_reproduction) {
   CHECK(!r.value().build); CHECK(r.value().snapshotCompiler.has_value()); CHECK(!r.value().reproduced);
   CHECK_EQ(r.value().snapshotMetadata.snapshotCompiler, "package=msys2:mingw-w64-x86_64-gcc=14.2.0-3");
   CHECK_EQ(r.value().initialState("__GNUC__").state, MacroState::known);
-  CHECK_EQ(r.value().initialState("__has_include").state, MacroState::unknown);
+  CHECK_EQ(r.value().initialState("__has_include").state, MacroState::definedUnknown);
   CHECK_EQ(r.value().initialState("__absent_reserved").state, MacroState::unknown);
   auto claimed = synthetic(text, snapshot); CHECK(!claimed.ok());
   if (!claimed.ok()) CHECK(claimed.error().message.find("requires build provenance") != std::string::npos);
@@ -238,7 +294,8 @@ TEST(profile_snapshot_format_metadata_provenance_and_validation) {
 TEST(profile_snapshot_missing_never_downgrades_and_a3_reports_collisions) {
   auto text = test::read(profileFixture("mingw.toml"));
   auto r = parseProfile(text, "mingw.toml"); CHECK(!r.ok()); CHECK(r.error().message.find("snapshot missing") != std::string::npos);
-  for (const auto* name : {"codeforces", "atcoder"}) { auto builtin = lookupProfile(name); CHECK(!builtin.ok()); if (!builtin.ok()) CHECK(builtin.error().message.find("snapshot missing") != std::string::npos); }
+  auto builtin = lookupProfile("mingw", {}, {{"mingw.toml", text}});
+  CHECK(!builtin.ok()); if (!builtin.ok()) CHECK(builtin.error().message.find("snapshot missing") != std::string::npos);
   auto p = synthetic(text).value(); CHECK(p.checkA3({"LOCAL", "GUARD"}).ok());
   auto conflict = p.checkA3({"ONLINE_JUDGE", "WIN32"}); CHECK(!conflict.ok());
   CHECK(conflict.error().message.find("ONLINE_JUDGE") != std::string::npos); CHECK(conflict.error().message.find("WIN32") != std::string::npos);

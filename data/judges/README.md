@@ -38,6 +38,8 @@ regex allow-list in `approximate-allowlist.txt`; other reserved facts remain
 unknown. Explicit command operations remain established facts. Absent non-reserved
 names are undefined under A5. Only reproduced profiles have A4's exhaustive
 negative facts. Startup-header facts never acquire compiler-builtin provenance.
+The allow-list includes `__has_include`: a positive special-builtin probe makes
+it defined with an unknown definition; invoking it remains unknown.
 
 `Profile::initialState(name)` returns undefined, known definition (including
 function signature/replacement), defined with unknown definition, or unknown,
@@ -149,6 +151,8 @@ Codeforces publishes its [command and compiler label](https://codeforces.com/blo
 bundle revision and a matching MSYS2 source tree do not establish the judge's
 package identity. The profile therefore omits `build` and is **approximate**.
 Its `snapshot_compiler` is the available GCC `14.2.0-3` MSYS2 package.
+The shipped `codeforces-predefined.txt` comes byte for byte from
+[`profiles.yml` run 43771140647](https://github.com/jcg9129/cpp-distill/actions/runs/43771140647).
 
 `ci/profiles/matrix.py` selects `build` when present, otherwise
 `snapshot_compiler`. The Windows installer derives the exact GCC filename from
@@ -183,16 +187,22 @@ The compiler stanza is reproduced in `ci/profiles/atcoder-recipe.sh`, using
 --disable-libsanitizer --disable-checking --disable-nls --disable-gcov
 --disable-libada --disable-libgm2`. CI uses ubuntu-24.04, `make -j$(nproc)`,
 a 240-minute limit, and a SHA-pinned actions/cache keyed by recipe hashes. A
-hash check rejects upstream recipe drift. The inferred default triple
-`x86_64-pc-linux-gnu` remains **UNVERIFIED** until workflow output confirms it.
+hash check rejects upstream recipe drift. The reproduced build printed
+`x86_64-pc-linux-gnu` for `-dumpmachine` in
+[`profiles.yml` run 43768705680](https://github.com/jcg9129/cpp-distill/actions/runs/43768705680);
+its `atcoder-predefined.txt` is shipped byte for byte. This confirms the
+reproduced compiler's triple; the profile retains its other UNVERIFIED notes.
 The profile keeps the published preprocessing options in order, including modules,
 OpenMP, pthread, optimization and native tuning. AtCoder's `-I<install>/include`
 exposes ACL, Boost, etc. as judge system headers outside the standard-header list.
 
 Both jobs upload snapshots for review; they never commit or publish changes.
-The shipped judge snapshots intentionally remain absent until these CI artifacts
-are reviewed. A named missing snapshot is always an error; it never downgrades
-silently. User profiles may omit `predefined` to use explicit command facts only.
+The two shipped snapshots are validated by embedded-profile tests. The four
+shipped A1 inventories in `data/extensions/` come byte for byte from the merged
+artifacts of [`extensions.yml` run 43768709866](https://github.com/jcg9129/cpp-distill/actions/runs/43768709866);
+their comments record each scan.
+A named missing snapshot is always an error; it never downgrades silently.
+User profiles may omit `predefined` to use explicit command facts only.
 For updates, recheck sources and date, regenerate snapshots and reachable-header
 A1 inventories, and review their diffs together. See design §4.6: validation must
 record its actual argv and omissions, probe that exact configuration (ordinary

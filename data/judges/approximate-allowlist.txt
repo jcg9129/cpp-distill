@@ -10,6 +10,9 @@ __VERSION__
 __cplusplus
 __STRICT_ANSI__
 __cpp_[a-z0-9_]+
+# Header-availability operator: snapshot probe establishes definedness only;
+# its invocation remains unknown (special-builtin provenance).
+__has_include
 # Target OS and architecture, including GCC's non-reserved compatibility aliases.
 _WIN32
 _WIN64
