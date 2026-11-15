@@ -10,6 +10,6 @@ docker run --rm -v "$PWD:/work" -w /work \
   "$image" bash -c '
     set -euo pipefail
     source ci/llvm/environment.sh
-    python3 -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.12.1
+    python3 -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
     "$@"
   ' bash "$@"
