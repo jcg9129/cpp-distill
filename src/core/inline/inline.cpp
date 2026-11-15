@@ -64,9 +64,11 @@ struct Engine {
     }
     for (const auto& line : n.scan.lines) {
       const auto& tokens = line.tokens;
-      for (std::size_t i = 0; i + 2 < tokens.size(); ++i) {
+      for (std::size_t i = 0; i + 1 < tokens.size(); ++i) {
         if ((tokens[i].text != "__has_include" && tokens[i].text != "__has_include_next") ||
-            tokens[i + 1].text != "(" || tokens[i + 2].kind != TokenKind::header) continue;
+            tokens[i + 1].text != "(") continue;
+        if (i + 2 == tokens.size() || tokens[i + 2].kind != TokenKind::header)
+          fail(n, tokens[i].line, "computed or malformed " + tokens[i].text + " operand");
         const auto& operand = tokens[i + 2].text;
         auto hit = take(lookupHeader(search, std::string_view(operand).substr(1, operand.size() - 2), operand.front() == '<', n.info.fileName));
         if (hit.found && !hit.system) fail(n, tokens[i].line, tokens[i].text + " names a user header: " + operand);
@@ -160,7 +162,7 @@ struct Engine {
       const auto& line = n.scan.lines[i];
       if (!line.directive || line.directive->name != "include") continue;
       const auto& t = line.directive->tokens;
-      if (t.size() != 1 || t[0].kind != TokenKind::header || t[0].text.size() <= 2)
+      if (t.empty() || t[0].kind != TokenKind::header || t[0].text.size() <= 2)
         fail(n, line.tokens.front().line, "computed or malformed #include operand");
       Edge edge;
       edge.name = t[0].text.substr(1, t[0].text.size() - 2); edge.angle = t[0].text.front() == '<';
@@ -279,17 +281,15 @@ struct Engine {
         original(n, l.begin, d.begin);
         if (user) { newline(); render(include->second.node); }
         else if (rewrite) {
-          // Keep prefix/suffix comments intact, including comments spanning lines.
-          append("#include <" + include->second.name + ">", SourceLocation{n.info.fileName, physicalAt(n, d.begin)});
+          append("#include <" + include->second.name + ">\n", SourceLocation{n.info.fileName, physicalAt(n, d.begin)});
         }
         else append("\n", SourceLocation{n.info.fileName, physicalAt(n, d.begin)});
+        // Drop the entire edited directive, including comments and extra tokens
+        // ignored by GCC. Resume only after its terminating logical newline.
         marker(n, physicalAt(n, d.end));
-        original(n, d.end, l.end);
       } else if (n.resync[i]) {
-        const auto& d = *l.directive;
-        original(n, l.begin, d.end);
-        marker(n, physicalAt(n, d.end));
-        original(n, d.end, l.end);
+        original(n, l.begin, l.end);
+        marker(n, physicalAt(n, l.end));
       } else original(n, l.begin, l.end);
     }
     if (n.once) { newline(); append("#endif\n"); }

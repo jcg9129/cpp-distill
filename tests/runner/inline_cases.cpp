@@ -212,6 +212,10 @@ int run(int argc, char** argv) {
         check(inlined.error().message.find(expected) != std::string::npos, "unexpected error: " + inlined.error().message);
       } else {
         auto result = require(std::move(inlined)); checkMap(result);
+        if (name == "pb_ds_parent_path") {
+          check(result.systemIncludes.size() == 1, "missing parent-path include metadata");
+          check(!result.systemIncludes[0].standard, "parent-path header classified as standard");
+        }
         if (name == "counter") check(result.flags.counter, "missing counter flag");
         if (name == "system_quote" && gcc) check(result.systemIncludes.at(0).rewritten, "system quote not rewritten");
         if (name == "once_collision") {

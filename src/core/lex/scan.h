@@ -14,6 +14,7 @@ struct Token {
   std::string text; // Spliced spelling (raw contents restored), including delimiters.
   std::size_t begin, end, line; // Original byte offsets [begin,end), physical line.
 };
+// Directive end includes its terminating logical newline (or EOF).
 struct Directive { std::string name; std::vector<Token> tokens; std::size_t begin, end; };
 struct LogicalLine {
   std::size_t begin, end, firstLine, lastLine;
@@ -23,7 +24,7 @@ struct LogicalLine {
 };
 struct ScanResult { std::vector<LogicalLine> lines; std::vector<Token> identifiers; };
 // Lenient ordinary literals end at newline. Raw-token newlines stay inside their
-// logical line; comment newlines terminate lines. Raw contents retain splices.
+// logical line; block-comment newlines do too. Raw contents retain splices.
 // %: at directive position is deliberately unsupported (an error).
 Result<ScanResult> scanDirectives(std::string_view bytes);
 } // namespace distill

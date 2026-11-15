@@ -11,6 +11,18 @@ extern const std::string_view macros[];
 extern const std::size_t macrosCount;
 }
 bool isStandardHeader(std::string_view name) {
+  if (name.starts_with('/')) return false;
+#ifdef _WIN32
+  if (name.find('\\') != name.npos ||
+      (name.size() >= 2 && ((name[0] >= 'A' && name[0] <= 'Z') ||
+                           (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':')) return false;
+#endif
+  for (std::size_t begin = 0; begin < name.size();) {
+    const auto end = name.find('/', begin);
+    if (name.substr(begin, end == name.npos ? name.size() - begin : end - begin) == "..") return false;
+    if (end == name.npos) break;
+    begin = end + 1;
+  }
   return name.starts_with("ext/pb_ds/") || std::binary_search(embedded::headers,
       embedded::headers + embedded::headersCount, name);
 }

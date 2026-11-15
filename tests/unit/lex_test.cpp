@@ -19,7 +19,7 @@ TEST(lex_comments_before_hash_and_across_lines) {
   CHECK(s.ok());
   CHECK_EQ(directives(s.value()), (std::vector<std::string>{"include", "define"}));
   CHECK_EQ(s.value().lines[0].directive->tokens[0].text, "\"a.h\"");
-  CHECK_EQ(s.value().lines[3].directive->tokens[0].line, 4u);
+  CHECK_EQ(s.value().lines[1].directive->tokens[0].line, 4u);
 }
 TEST(lex_splices_everywhere_and_physical_ranges) {
   auto s = scanDirectives("// comment\\\n#include <no>\n/* com\\\nment */ #inc\\\nlude <a.h>\n\"a\\\nb\" ID\n");
@@ -92,4 +92,45 @@ TEST(lex_multiline_raw_macro_keeps_trailing_tokens_and_original_contents) {
   CHECK_EQ(l.directive->tokens[1].text, "R\"(one\\\ntwo\nthree)\"");
   CHECK_EQ(l.directive->tokens[3].text, "SUFFIX");
   CHECK_EQ(l.directive->tokens[3].line, 3u);
+}
+TEST(lex_whitespace_splices_and_raw_restoration) {
+  for (const auto* gap : {" ", "\t", "\f", "\v", " \t\f\v"}) {
+    for (const auto* newline : {"\n", "\r\n"}) {
+      const auto splice = std::string("\\") + gap + newline;
+      const auto source = "// note" + splice + "#include <hidden>\n/* co" + splice +
+          "mment */ #inc" + splice + "lude <real>\n\"a" + splice + "b\"\n";
+      const auto s = scanDirectives(source);
+      CHECK(s.ok()); CHECK_EQ(directives(s.value()), (std::vector<std::string>{"include"}));
+      CHECK_EQ(s.value().lines[1].directive->tokens[0].text, "<real>");
+      CHECK_EQ(s.value().lines.back().tokens[0].text, "\"ab\"");
+      CHECK_EQ(s.value().lines.back().tokens[0].line, 6u);
+      const auto raw = scanDirectives("R\"(a" + splice + "b)\"\n");
+      CHECK(raw.ok());
+      CHECK_EQ(raw.value().lines[0].tokens[0].text, std::string("R\"(a\\ \nb)\""));
+    }
+  }
+  CHECK_EQ(scanDirectives("\\ \t").value().lines[0].tokens[0].text, "\\");
+  const auto raw = scanDirectives("R\"x(body )x\\ \t\n\"\n#include <hidden>\n)x\"\n#include <real>\n");
+  CHECK(raw.ok()); CHECK_EQ(directives(raw.value()), (std::vector<std::string>{"include"}));
+  CHECK_EQ(raw.value().lines.back().directive->tokens[0].text, "<real>");
+}
+TEST(lex_block_comment_logical_lines_and_directive_extent) {
+  const std::string source = "int x; /* c\n */ #include <not-a-directive>\n"
+      "#include /* operand\n */ \"a.h\" /* tail\n */ int ignored;\n"
+      "#define X /* replacement\n */ 1\nnext\n";
+  const auto s = scanDirectives(source);
+  CHECK(s.ok()); CHECK_EQ(s.value().lines.size(), 4u);
+  CHECK(!s.value().lines[0].directive);
+  const auto& include = s.value().lines[1];
+  CHECK_EQ(include.firstLine, 3u); CHECK_EQ(include.lastLine, 5u);
+  CHECK_EQ(include.directive->tokens.size(), 4u);
+  CHECK_EQ(include.directive->tokens[0].kind, TokenKind::header);
+  CHECK_EQ(include.directive->tokens[0].line, 4u);
+  CHECK_EQ(include.directive->tokens[1].text, "int");
+  CHECK_EQ(include.directive->end, source.find("#define"));
+  CHECK_EQ(s.value().lines[2].directive->tokens.size(), 2u);
+  CHECK_EQ(s.value().lines[2].directive->tokens[1].text, "1");
+  CHECK_EQ(s.value().lines[2].directive->tokens[1].line, 7u);
+  CHECK_EQ(s.value().lines[3].tokens[0].line, 8u);
+  CHECK(!scanDirectives("int x; /*\n*/ %:include <x>\n").value().lines[0].directive);
 }

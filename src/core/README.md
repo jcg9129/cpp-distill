@@ -70,12 +70,14 @@ Apple Clang). `spike/` remains an independent project.
 `lex/` scans preprocessing tokens and directives without evaluating conditions.
 Logical lines retain original byte ranges and physical start/end lines; tokens
 retain their original offsets and physical line numbers. Backslash-LF and
-backslash-CRLF splices are removed before tokenization, including in comments
-and ordinary literals. Raw strings span lines and their closing delimiters are
+backslash-CRLF splices, including GCC horizontal-whitespace splices, are removed
+before tokenization, including in comments and ordinary literals. Raw strings span lines and their closing delimiters are
 recognized in the original bytes (phase-2 splices inside raw contents are
-reverted by C++). Newlines inside raw tokens remain within their logical
-line, retaining trailing macro replacement tokens. Ordinary unterminated quotes stop at newline, so skipped
-branches remain scannable. Only a file-initial UTF-8 BOM is ignored. `%:` at
+reverted by C++; GCC restores whitespace splice gaps as one space). Newlines
+inside raw tokens and block comments remain within their logical line,
+retaining trailing macro replacement tokens and ignored directive tokens.
+Ordinary unterminated quotes stop at newline, so skipped branches remain
+scannable. Only a file-initial UTF-8 BOM is ignored. `%:` at
 directive position is rejected with a diagnostic; ordinary digraph tokens are
 scanned. Identifier collection excludes comments, header names and literals.
 
@@ -124,10 +126,11 @@ a long directive with whitespace can legitimately produce a smaller output.
 Unchanged source spans are copied as bytes, including CRLF and missing final
 newlines. Splices add the newline needed to delimit generated directives;
 file-initial BOMs are removed before generated markers. Replacements preserve
-prefix and suffix comments, including multiline comments. Resynchronization
-markers after conditional switches/ends are placed before trailing comments,
-so even multiline comment suffixes cannot swallow them. Every enclosing group
-containing an edit is resynchronized, even when the edit was skipped. The line
+prefix comments and drop the rest of the edited directive's logical line,
+including suffix comments and extra include tokens (which GCC ignores).
+Resynchronization markers after edits and conditional switches/ends follow the
+whole logical line, so multiline comment suffixes cannot swallow them or turn
+ignored tokens into live code. Every enclosing group containing an edit is resynchronized, even when the edit was skipped. The line
 map has one entry per output physical line; generated markers/guards have no
 source location, and original spans retain their source location.
 `source_location` is rejected as an identifier anywhere outside comments and

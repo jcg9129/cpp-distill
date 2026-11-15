@@ -23,3 +23,11 @@ TEST(names_extension_injection_and_library_union) {
   CHECK(!names.protectedUserMacro("MY_GUARD", "fixture"));
   CHECK(names.protectedUserMacro("MY_GUARD", "other"));
 }
+TEST(names_standard_headers_reject_path_escape_components) {
+  for (auto s : {"/vector", "/ext/pb_ds/a.h", "ext/pb_ds/../../x.h", "ext/pb_ds/../x.h",
+                 "ext/pb_ds/..", "ext/pb_ds//../x.h", "../vector"}) CHECK(!isStandardHeader(s));
+  for (auto s : {"ext/pb_ds/detail/x.h", "ext/pb_ds/.../x.h", "ext/pb_ds/..x.h"}) CHECK(isStandardHeader(s));
+#ifdef _WIN32
+  for (auto s : {"C:vector", "c:/ext/pb_ds/a.h", "ext/pb_ds/..\\x.h", "ext/pb_ds/a\\b.h"}) CHECK(!isStandardHeader(s));
+#endif
+}

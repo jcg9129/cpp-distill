@@ -61,7 +61,7 @@ TEST(inline_system_metadata_and_missing_angle) {
   CHECK(!r.value().systemIncludes[1].found); CHECK(!r.value().systemIncludes[1].standard);
 }
 TEST(inline_rejected_inputs_have_file_and_line) {
-  for (const auto* source : {"#include \"missing.h\"", "#include MACRO", "#include <x> junk", "#include_next <x>", "#import <x>", "#line 9", "#pragma GCC system_header", "__INCLUDE_LEVEL__", "__BASE_FILE__", "__builtin_COLUMN", "__builtin_source_location", "source_location", "#if 1", "#endif", "#else", "#define X 1\n#pragma once", "#if 0\n#pragma once\n#endif", "%:include <x>"}) {
+  for (const auto* source : {"#include \"missing.h\"", "#include MACRO", "#include_next <x>", "#import <x>", "#line 9", "#pragma GCC system_header", "__INCLUDE_LEVEL__", "__BASE_FILE__", "__builtin_COLUMN", "__builtin_source_location", "source_location", "#if 1", "#endif", "#else", "#define X 1\n#pragma once", "#if 0\n#pragma once\n#endif", "%:include <x>"}) {
     Fixture f; f.temp.write("main.cpp", source); const auto r = f.run(); CHECK(!r.ok());
     if (!r.ok()) CHECK(r.error().message.starts_with("main.cpp:"));
   }
@@ -177,4 +177,27 @@ TEST(inline_marker_escapes_quote_in_search_directory) {
 #else
   throw test::Skip{"Windows filenames cannot contain quotes"};
 #endif
+}
+TEST(inline_computed_has_include_operands_rejected) {
+  for (const auto* builtin : {"__has_include", "__has_include_next"}) {
+    for (const auto* operand : {"HEADER", "WRAP(HEADER)", "", "123"}) {
+      Fixture f;
+      f.temp.write("main.cpp", "#define HEADER \"a.h\"\n#if " + std::string(builtin) + "(" + operand + ")\n#endif\n");
+      const auto r = f.run(); CHECK(!r.ok());
+      if (!r.ok()) CHECK(r.error().message.find("main.cpp:2: computed or malformed " + std::string(builtin) + " operand") != std::string::npos);
+    }
+  }
+}
+TEST(inline_comment_extent_drops_ignored_tokens_and_maps_following_code) {
+  Fixture f;
+  f.temp.write("main.cpp", "#include \"a.h\" /* tail\n*/ int ignored;\nint live;\n");
+  f.temp.write("a.h", "int header;\n");
+  const auto r = f.run(); CHECK(r.ok());
+  CHECK(r.value().text.find("ignored") == std::string::npos);
+  CHECK(r.value().text.find("#line 3 \"main.cpp\"\nint live;") != std::string::npos);
+  const auto pos = r.value().text.find("int live;");
+  const auto outputLine = std::count(r.value().text.begin(), r.value().text.begin() + pos, '\n');
+  CHECK(r.value().lineMap.at(outputLine).has_value());
+  CHECK_EQ(r.value().lineMap.at(outputLine)->line, 3u);
+  CHECK_EQ(r.value().lineMap.at(outputLine)->file, "main.cpp");
 }
