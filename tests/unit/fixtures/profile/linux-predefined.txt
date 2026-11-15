@@ -1,8 +1,26 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Captured Ubuntu g++ 15.2.0-16ubuntu1, aarch64-linux-gnu, -std=gnu++23; 2026-11-15.
+# distill-snapshot: 1
+# compiler-path: /usr/bin/aarch64-linux-gnu-g++-15
+# compiler-version: aarch64-linux-gnu-g++-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# gcc-version: 15.2.0
+# dumpmachine: aarch64-linux-gnu
+# profile-triple: aarch64-linux-gnu
+# build: none
+# reproduced: no
+# std: gnu++23
+# builtin-registry: gcc-15.2
+# native-model: none
+# flag: -DONLINE_JUDGE
+# flag: -DEMPTY=
+# flag: -DVALUE=42
+# end-header
+# command-operation #define EMPTY
+# command-operation #define ONLINE_JUDGE 1
+# command-operation #define VALUE 42
 #define _GNU_SOURCE 1
 #define _LP64 1
-#define _STDC_PREDEF_H 1
+# state _Pragma defined-unknown special-builtin
+# startup-header stdc-predef.h #define _STDC_PREDEF_H 1
 #define __AARCH64EL__ 1
 #define __AARCH64_CMODEL_SMALL__ 1
 #define __ARM_64BIT_STATE 1
@@ -33,6 +51,7 @@
 #define __ATOMIC_RELAXED 0
 #define __ATOMIC_RELEASE 3
 #define __ATOMIC_SEQ_CST 5
+# state __BASE_FILE__ defined-unknown special-builtin
 #define __BFLT16_DECIMAL_DIG__ 4
 #define __BFLT16_DENORM_MIN__ 9.18354961579912115600575419704879436e-41BF16
 #define __BFLT16_DIG__ 2
@@ -56,6 +75,8 @@
 #define __CHAR8_TYPE__ unsigned char
 #define __CHAR_BIT__ 8
 #define __CHAR_UNSIGNED__ 1
+# state __COUNTER__ defined-unknown special-builtin
+# state __DATE__ defined-unknown special-builtin
 #define __DBL_DECIMAL_DIG__ 17
 #define __DBL_DENORM_MIN__ double(4.94065645841246544176568792868221372e-324L)
 #define __DBL_DIG__ 15
@@ -106,6 +127,8 @@
 #define __DEPRECATED 1
 #define __ELF__ 1
 #define __EXCEPTIONS 1
+# state __FILE_NAME__ defined-unknown special-builtin
+# state __FILE__ defined-unknown special-builtin
 #define __FINITE_MATH_ONLY__ 0
 #define __FLOAT_WORD_ORDER__ __ORDER_LITTLE_ENDIAN__
 #define __FLT128_DECIMAL_DIG__ 36
@@ -267,6 +290,7 @@
 #define __GXX_RTTI 1
 #define __GXX_WEAK__ 1
 #define __HAVE_SPECULATION_SAFE_VALUE 1
+# state __INCLUDE_LEVEL__ defined-unknown special-builtin
 #define __INT16_C(c) c
 #define __INT16_MAX__ 0x7fff
 #define __INT16_TYPE__ short int
@@ -328,6 +352,7 @@
 #define __LDBL_MIN_EXP__ (-16381)
 #define __LDBL_MIN__ 3.36210314311209350626267781732175260e-4932L
 #define __LDBL_NORM_MAX__ 1.18973149535723176508575932662800702e+4932L
+# state __LINE__ defined-unknown special-builtin
 #define __LONG_LONG_MAX__ 0x7fffffffffffffffLL
 #define __LONG_LONG_WIDTH__ 64
 #define __LONG_MAX__ 0x7fffffffffffffffL
@@ -343,7 +368,7 @@
 #define __PTRDIFF_MAX__ 0x7fffffffffffffffL
 #define __PTRDIFF_TYPE__ long int
 #define __PTRDIFF_WIDTH__ 64
-#define __REGISTER_PREFIX__ 
+#define __REGISTER_PREFIX__
 #define __SCHAR_MAX__ 0x7f
 #define __SCHAR_WIDTH__ 8
 #define __SHRT_MAX__ 0x7fff
@@ -380,14 +405,16 @@
 #define __STDC_EMBED_FOUND__ 1
 #define __STDC_EMBED_NOT_FOUND__ 0
 #define __STDC_HOSTED__ 1
-#define __STDC_IEC_559_COMPLEX__ 1
-#define __STDC_IEC_559__ 1
-#define __STDC_IEC_60559_BFP__ 201404L
-#define __STDC_IEC_60559_COMPLEX__ 201404L
-#define __STDC_ISO_10646__ 201706L
+# startup-header stdc-predef.h #define __STDC_IEC_559_COMPLEX__ 1
+# startup-header stdc-predef.h #define __STDC_IEC_559__ 1
+# startup-header stdc-predef.h #define __STDC_IEC_60559_BFP__ 201404L
+# startup-header stdc-predef.h #define __STDC_IEC_60559_COMPLEX__ 201404L
+# startup-header stdc-predef.h #define __STDC_ISO_10646__ 201706L
 #define __STDC_UTF_16__ 1
 #define __STDC_UTF_32__ 1
 #define __STDC__ 1
+# state __TIMESTAMP__ defined-unknown special-builtin
+# state __TIME__ defined-unknown special-builtin
 #define __UINT16_C(c) c
 #define __UINT16_MAX__ 0xffff
 #define __UINT16_TYPE__ short unsigned int
@@ -421,7 +448,7 @@
 #define __UINT_LEAST64_TYPE__ long unsigned int
 #define __UINT_LEAST8_MAX__ 0xff
 #define __UINT_LEAST8_TYPE__ unsigned char
-#define __USER_LABEL_PREFIX__ 
+#define __USER_LABEL_PREFIX__
 #define __VERSION__ "15.2.0"
 #define __WCHAR_MAX__ 0xffffffffU
 #define __WCHAR_MIN__ 0U
@@ -516,6 +543,15 @@
 #define __cpp_variadic_templates 200704L
 #define __cpp_variadic_using 201611L
 #define __gnu_linux__ 1
+# state __has_attribute defined-unknown special-builtin
+# state __has_builtin defined-unknown special-builtin
+# state __has_c_attribute defined-unknown special-builtin
+# state __has_cpp_attribute defined-unknown special-builtin
+# state __has_embed defined-unknown special-builtin
+# state __has_extension defined-unknown special-builtin
+# state __has_feature defined-unknown special-builtin
+# state __has_include defined-unknown special-builtin
+# state __has_include_next defined-unknown special-builtin
 #define __linux 1
 #define __linux__ 1
 #define __pic__ 2
@@ -524,3 +560,23 @@
 #define __unix__ 1
 #define linux 1
 #define unix 1
+# probe _Pragma defined
+# probe __BASE_FILE__ defined
+# probe __COUNTER__ defined
+# probe __DATE__ defined
+# probe __FILE_NAME__ defined
+# probe __FILE__ defined
+# probe __INCLUDE_LEVEL__ defined
+# probe __LINE__ defined
+# probe __STDC__ defined
+# probe __TIMESTAMP__ defined
+# probe __TIME__ defined
+# probe __has_attribute defined
+# probe __has_builtin defined
+# probe __has_c_attribute defined
+# probe __has_cpp_attribute defined
+# probe __has_embed defined
+# probe __has_extension defined
+# probe __has_feature defined
+# probe __has_include defined
+# probe __has_include_next defined

@@ -5,11 +5,6 @@ import json
 from pathlib import Path
 import tomllib
 
-# Docker Hub's published multi-architecture manifest digest, checked 2026-11-15.
-GCC_IMAGES = {
-    '15.2.0': 'gcc:15.2.0@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289',
-}
-
 
 def matrix(selection='all'):
     root = Path(__file__).resolve().parents[2]
@@ -22,10 +17,8 @@ def matrix(selection='all'):
         p = profiles[name]
         version = p['compiler']['version']
         windows = 'mingw' in p['triple']
-        if not windows and version not in GCC_IMAGES:
-            raise ValueError(f'add an exact GCC image pin for {name} {version}')
         rows.append(dict(profile=name, version=version, runner='windows-2025' if windows else 'ubuntu-24.04',
-                         image='' if windows else GCC_IMAGES[version]))
+                         build='='.join(next(iter(p['build'].items())))))
     return {'include': rows}
 
 

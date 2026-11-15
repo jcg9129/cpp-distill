@@ -2,7 +2,7 @@
 #pragma once
 #include "core/result.h"
 #include <map>
-#include <optional>
+#include <vector>
 #include <set>
 #include <string>
 #include <string_view>
@@ -17,8 +17,8 @@ Result<ExtensionNames> parseExtensionList(std::string_view text, std::string_vie
 const ExtensionLists& embeddedExtensionLists();
 struct NameLists {
   ExtensionLists extensions = embeddedExtensionLists();
-  bool extensionListReady(std::optional<std::string_view> library = {}) const;
+  bool extensionListReady(const std::vector<std::string>& libraries = {}) const;
   bool protectedUserMacro(std::string_view name,
-                          std::optional<std::string_view> library = {}) const;
+                          const std::vector<std::string>& libraries = {}) const;
 };
 } // namespace distill

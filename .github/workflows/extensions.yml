@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-name: A1 extension inventories
+name: A1 reachable-header extension inventories
 on:
   workflow_dispatch:
 permissions:
@@ -41,7 +41,7 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
-      - name: Scan Linux headers inside compatibility image
+      - name: Scan reachable Linux headers inside compatibility image
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -58,7 +58,7 @@ jobs:
             fi
             "$py" ci/extensions/scan.py --platform linux --output-dir out/extensions --headers-version "$1"
           ' bash "$SCAN_IMAGE"
-      - name: Scan MSYS2 MinGW-w64 CRT and GCC C++ headers
+      - name: Scan reachable MSYS2 MinGW-w64 and libstdc++ headers
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -71,7 +71,7 @@ jobs:
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           python ci/extensions/scan.py --platform mingw --compiler C:/msys64/mingw64/bin/g++.exe --output-dir out/extensions --headers-version ($versions -join '; ')
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Scan macOS SDK headers
+      - name: Scan reachable macOS SDK headers
         if: runner.os == 'macOS'
         shell: bash
         run: python3 ci/extensions/scan.py --platform macos --output-dir out/extensions --headers-version "$(sw_vers -productVersion); $(uname -m)"

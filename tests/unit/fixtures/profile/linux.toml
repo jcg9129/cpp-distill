@@ -4,8 +4,8 @@ description = "Local Linux fixture, captured with g++ 15.2.0 on AArch64"
 triple = "aarch64-linux-gnu"
 compiler = { family = "gcc", version = "15.2.0" }
 std = "gnu++23"
-defines = ["ONLINE_JUDGE", "EMPTY=", "VALUE=42"]
-library = "libstdc++"
+flags = ["-DONLINE_JUDGE", "-DEMPTY=", "-DVALUE=42"]
+libraries = ["glibc", "libstdc++"]
 predefined = "linux-predefined.txt"
 check = ["g++"]
 updated = "2026-11-15"

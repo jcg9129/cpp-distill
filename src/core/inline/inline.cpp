@@ -240,11 +240,9 @@ struct Engine {
     auto& n = *nodes[id];
     for (const auto& frame : stack) if (nodes[frame.node]->info.identity == n.info.identity) {
       const auto& target = *nodes[frame.node];
-      std::optional<std::string_view> library;
-      if (options.library) library = *options.library;
       if (target.guard.empty() || !frame.guardEpoch || *frame.guardEpoch != unsafeIncludes ||
           undefined.contains(target.guard) || macroStackName || result.flags.pragmaOperator ||
-          !options.names.protectedUserMacro(target.guard, library)) {
+          !options.names.protectedUserMacro(target.guard, options.libraries)) {
         const auto& parent = *nodes[stack.back().node];
         fail(parent, parent.scan.lines[stack.back().position].tokens.front().line, cycle(n));
       }

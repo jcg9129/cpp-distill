@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Select the header roots for one compatibility-matrix toolchain."""
+"""Reachability inventory attributed by directory, using compiler search order."""
 import argparse
 from pathlib import Path
 import shutil
 import subprocess
-from generate import generate, ROOT
+from generate import generate, reachable, ROOT
 
 
 def run(argv):
@@ -12,47 +12,53 @@ def run(argv):
                           capture_output=True, timeout=30)
 
 
-def scan(platform, compiler, output_dir, headers_version):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    # Seed each job from the reviewed data; the final merge unions all job outputs.
-    for library in ('glibc', 'libstdc++', 'mingw-w64', 'macos-libc'):
-        destination = output_dir / (library + '.txt')
-        if not destination.exists():
-            shutil.copyfile(ROOT / 'data/extensions' / destination.name, destination)
-    if platform == 'macos':
-        sdk = Path(run(['xcrun', '--sdk', 'macosx', '--show-sdk-path']).stdout.strip())
-        version = run(['xcrun', '--sdk', 'macosx', '--show-sdk-version']).stdout.strip()
-        generate('macos-libc', [sdk / 'usr/include'], output_dir / 'macos-libc.txt',
-                 [f'macOS SDK {version}; {headers_version}'], ['c++'])
-        return
-    compiler = str(Path(shutil.which(compiler) or compiler).resolve())
-    version = run([compiler, '--version']).stdout.splitlines()[0]
-    triple = run([compiler, '-dumpmachine']).stdout.strip()
-    verbose = subprocess.run(
-        [compiler, '-x', 'c++', '-E', '-v', '-'], input='', text=True, encoding='utf-8',
-        errors='replace', check=True, capture_output=True, timeout=30)
-    directories = []
-    active = False
-    for line in verbose.stderr.splitlines():
-        if line.startswith('#include <...>'):
+def search_paths(stderr):
+    paths, active = [], False
+    for line in stderr.splitlines():
+        if line.startswith(('#include "..."', '#include <...>')):
             active = True
         elif line.startswith('End of search list.'):
             active = False
-        elif active and '/c++/' in line.replace('\\', '/'):
-            path = Path(line.strip())
-            if path.is_dir():
-                directories.append(path)
-    if not directories:
-        raise ValueError('GCC C++ include directories not found')
+        elif active:
+            p = Path(line.strip().removesuffix(' (framework directory)'))
+            if p.is_dir() and p.resolve() not in paths:
+                paths.append(p.resolve())
+    if not paths:
+        raise ValueError('compiler include search directories not found')
+    return paths
+
+
+def attribute(file, platform, search):
+    spelling = file.as_posix()
+    if '/include/c++/' in spelling or '/c++/v1/' in spelling:
+        return 'libstdc++' if platform != 'macos' else None
+    # Compiler intrinsic headers participate in traversal but are not a library.
+    if '/lib/gcc/' in spelling or '/lib/clang/' in spelling:
+        return None
+    if platform == 'macos':
+        return 'macos-libc' if '.sdk/' in spelling.lower() else None
+    if any(file.is_relative_to(p) for p in search):
+        return 'mingw-w64' if platform == 'mingw' else 'glibc'
+    return None
+
+
+def scan(platform, compiler, output_dir, headers_version):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    compiler = str(Path(shutil.which(compiler) or compiler).resolve())
+    version = run([compiler, '--version']).stdout.splitlines()[0]
+    triple = run([compiler, '-dumpmachine']).stdout.strip()
+    verbose = subprocess.run([compiler, '-x', 'c++', '-E', '-v', '-'], input='', text=True,
+                             encoding='utf-8', errors='replace', check=True, capture_output=True, timeout=30)
+    search = search_paths(verbose.stderr)
+    reached = reachable(search)
+    libraries = {'linux': ('glibc', 'libstdc++'), 'mingw': ('mingw-w64', 'libstdc++'), 'macos': ('macos-libc',)}[platform]
     provenance = [f'{version}; {triple}; {headers_version}']
-    if platform == 'linux':
-        libc = run(['getconf', 'GNU_LIBC_VERSION']).stdout.strip()
-        generate('glibc', [Path('/usr/include')], output_dir / 'glibc.txt', provenance + [libc], ['c++'])
-        generate('libstdc++', directories, output_dir / 'libstdc++.txt', provenance)
-    else:
-        crt = Path(compiler).parent.parent / 'include'
-        generate('mingw-w64', [crt, *directories], output_dir / 'mingw-w64.txt',
-                 provenance + ['MinGW-w64 CRT and this GCC toolchain libstdc++ headers'])
+    for library in libraries:
+        files = {p for p in reached if attribute(p, platform, search) == library}
+        if not files:
+            raise ValueError('no reachable headers attributed to ' + library)
+        count = generate(library, files, output_dir / (library + '.txt'), provenance)
+        print(f'{library}: {len(files)} headers, {count} names')
 
 
 if __name__ == '__main__':

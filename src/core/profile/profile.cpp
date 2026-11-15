@@ -42,24 +42,13 @@ struct Schema {
     if (s.empty() || !clean(s)) fail(key, "expected a non-empty string without control characters");
     return s;
   }
-  MacroTable definitions(const TomlStrings& strings, std::string_view key) const {
-    std::string text;
-    for (const auto& definition : strings) {
-      const auto eq = definition.find('=');
-      if (!matches(definition.substr(0, eq), "[A-Za-z_][A-Za-z_0-9]*") || !clean(definition))
-        fail(key, "expected NAME or NAME=value: " + definition);
-      text += "#define " + definition.substr(0, eq) + " " + (eq == definition.npos ? "1" : definition.substr(eq + 1)) + "\n";
-    }
-    auto macros = parseMacros(text);
-    if (!macros.ok()) fail(key, macros.error().message);
-    return std::move(macros.value());
-  }
   void consistency(const Profile& p) const {
-    const auto key = p.exhaustive ? "predefined" : "allowed";
+    const auto key = "predefined";
     auto expected = [&](std::string_view name, long value, bool required) {
+      for (const auto& op : p.macroOperations) if (op.value.substr(0, op.value.find_first_of("(=")) == name) return;
       const auto found = p.predefined.find(name);
       if (found == p.predefined.end()) {
-        if (required && p.exhaustive) fail(key, "snapshot missing required macro " + std::string(name));
+        if (required && p.snapshot && !p.snapshotFacts.contains(name)) fail(key, "snapshot missing required macro " + std::string(name));
         return;
       }
       auto replacement = std::string_view(found->second.replacement);
@@ -96,7 +85,7 @@ struct Schema {
   Profile parse(const std::filesystem::path& path, const SnapshotReader& reader) const {
     for (const auto& [key, entry] : doc) {
       (void)entry;
-      if (key != "name" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "defines" && key != "library" && key != "predefined" && key != "allowed" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
+      if (key != "name" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
     }
     Profile p;
     p.name = string("name");
@@ -122,9 +111,53 @@ struct Schema {
     const std::map<std::string, long> dialects{{"98", 199711}, {"03", 199711}, {"11", 201103}, {"14", 201402}, {"17", 201703}, {"20", 202002}, {"23", 202302}, {"26", 202400}};
     if (!dialects.contains(code)) fail("std", "unsupported C++ dialect");
     p.dialect = {std, std.starts_with("gnu"), dialects.at(code)};
-    p.defines = get<TomlStrings>("defines"); p.judgeMacros = definitions(p.defines, "defines");
-    p.library = string("library");
-    if (p.library != "glibc" && p.library != "libstdc++" && p.library != "mingw-w64" && p.library != "macos-libc") fail("library", "unknown extension-list library");
+    p.flags = get<TomlStrings>("flags");
+    if (doc.contains("link")) p.link = get<TomlStrings>("link");
+    if (doc.contains("inert")) p.inert = get<TomlStrings>("inert");
+    if (doc.contains("build")) {
+      const auto& build = get<TomlTable>("build");
+      if (build.size() != 1 || (!build.contains("package") && !build.contains("recipe"))) fail("build", "requires exactly package or recipe");
+      const auto& [kind, value] = *build.begin();
+      if (value.empty() || !clean(value) || (kind == "recipe" && !matches(value, "https?://[^ \\t]+"))) fail("build", "invalid build provenance");
+      p.build = {kind, value};
+    }
+    // Profile options are an argv, not response-file references. A synthetic
+    // source lets us share the exact command classifier without filesystem reads.
+    for (const auto& flag : p.flags) if (flag.empty() || !clean(flag) || flag.starts_with('@')) fail("flags", "invalid option/response file");
+    std::vector<std::string> argv{"g++"};
+    argv.insert(argv.end(), p.flags.begin(), p.flags.end()); argv.push_back("profile.cpp");
+    auto command = parseCompileCommand(argv, path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path());
+    if (!command.ok()) fail("flags", command.error().message);
+    for (const auto& arg : command.value().args) {
+      if (arg.option == "-std=") fail("flags", "-std= belongs in std");
+      if (arg.classification == Class::input) continue;
+      if (arg.classification == Class::controlled || arg.classification == Class::libraries || arg.option == "-I" || arg.option == "-iquote" || arg.option == "-isystem") fail("flags", "option belongs outside profile compile flags: " + arg.option);
+      if (arg.classification == Class::unmodelled && std::find(p.inert.begin(), p.inert.end(), arg.spelling.front()) == p.inert.end()) fail("flags", "unmodelled option: " + arg.option);
+    }
+    std::set<std::string> distinctInert;
+    for (const auto& option : p.inert) {
+      if (!distinctInert.insert(option).second) fail("inert", "duplicate option: " + option);
+      const auto found = std::find_if(command.value().args.begin(), command.value().args.end(), [&](const auto& arg) { return arg.spelling.front() == option && arg.classification == Class::unmodelled; });
+      if (found == command.value().args.end()) fail("inert", "must name an unmodelled option present in flags: " + option);
+    }
+    p.macroOperations = command.value().localMacros();
+    for (const auto& op : p.macroOperations) {
+      if (op.option == "-U") {
+        if (!matches(op.value, "[A-Za-z_][A-Za-z_0-9]*")) fail("flags", "invalid -U name");
+        p.judgeMacros.erase(op.value);
+      } else {
+        const auto eq = op.value.find('=');
+        const auto spelling = op.value.substr(0, eq);
+        auto macro = parseMacros("#define " + spelling + " " + (eq == op.value.npos ? "1" : op.value.substr(eq + 1)) + "\n");
+        if (!macro.ok() || macro.value().size() != 1) fail("flags", "invalid -D definition");
+        p.judgeMacros.insert_or_assign(macro.value().begin()->first, macro.value().begin()->second);
+      }
+    }
+    for (const auto& option : p.link) if (option.empty() || !clean(option) || !(option == "-static" || option == "-static-libstdc++" || option == "-static-libgcc" || option == "-s" || option.starts_with("-Wl,") || option.starts_with("-l") || option.starts_with("-L"))) fail("link", "expected linker-only option");
+    p.libraries = get<TomlStrings>("libraries");
+    if (p.libraries.empty()) fail("libraries", "select at least one extension list");
+    std::set<std::string> selected;
+    for (const auto& library : p.libraries) if ((library != "glibc" && library != "libstdc++" && library != "mingw-w64" && library != "macos-libc") || !selected.insert(library).second) fail("libraries", "unknown or duplicate extension-list library");
     p.check = get<TomlStrings>("check");
     for (const auto& compilerName : p.check) if (compilerName.empty() || !clean(compilerName)) fail("check", "empty or invalid compiler name");
     p.provenance = {path, string("updated"), get<TomlStrings>("sources")};
@@ -135,9 +168,7 @@ struct Schema {
     if (p.provenance.sources.empty()) fail("sources", "must not be empty");
     for (const auto& url : p.provenance.sources)
       if (!matches(url, "https?://([A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:.]+\\])(:[0-9]{1,5})?([/?#][^ \\t\\r\\n]*)?") || !clean(url)) fail("sources", "expected an http(s) URL");
-    p.exhaustive = doc.contains("predefined");
-    if (p.exhaustive) {
-      if (doc.contains("allowed")) fail("allowed", "allowed is only valid without a snapshot");
+    if (doc.contains("predefined")) {
       p.snapshot = string("predefined");
       if (*p.snapshot == "." || *p.snapshot == ".." || p.snapshot->find_first_of("/\\:") != p.snapshot->npos) fail("predefined", "must be a file name relative to the profile");
       const auto snapshotPath = path.parent_path() / pathFromUtf8(*p.snapshot);
@@ -146,23 +177,9 @@ struct Schema {
       if (!contents.ok()) fail("predefined", "snapshot missing or unreadable: " + pathToUtf8(snapshotPath) + " (" + contents.error().message + ")");
       auto encoding = validateProfileUtf8(contents.value(), pathToUtf8(snapshotPath));
       if (!encoding.ok()) fail("predefined", encoding.error().message);
-      // Remove only full-line metadata comments, preserving
-      // line numbers for parseMacros diagnostics. Macro replacements stay exact.
-      std::string macroText;
-      std::istringstream lines(contents.value()); std::string line;
-      while (std::getline(lines, line)) {
-        const auto first = line.find_first_not_of(" \t\r");
-        if (first != line.npos && (line.compare(first, 2, "//") == 0 || (line[first] == '#' && !line.starts_with("#define")))) {
-          // Only our documented '# ' metadata lines are comments; directives
-          // such as #undef must still be rejected by parseMacros.
-          if (line[first] != '#' || line.compare(first, 2, "# ") == 0) line.clear();
-        }
-        macroText += line + "\n";
-      }
-      auto macros = parseMacros(macroText);
-      if (!macros.ok()) fail("predefined", pathToUtf8(snapshotPath) + ": " + macros.error().message);
-      p.predefined = std::move(macros.value());
-    } else if (doc.contains("allowed")) p.predefined = definitions(get<TomlStrings>("allowed"), "allowed");
+      auto parsed = parseProfileSnapshot(p, contents.value());
+      if (!parsed.ok()) fail("predefined", pathToUtf8(snapshotPath) + ": " + parsed.error().message);
+    }
     consistency(p);
     return p;
   }
@@ -186,7 +203,7 @@ Result<Profile> loadProfile(const std::filesystem::path& file) {
 }
 Result<bool> Profile::checkA3(const std::set<std::string, std::less<>>& userDefines) const {
   std::string collisions;
-  for (const auto& name : userDefines) if (predefined.contains(name) || judgeMacros.contains(name)) {
+  for (const auto& name : userDefines) if (const auto fact = initialState(name); fact.state == MacroState::known || fact.state == MacroState::definedUnknown) {
     if (!collisions.empty()) collisions += ", ";
     collisions += name;
   }

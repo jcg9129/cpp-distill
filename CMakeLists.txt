@@ -25,6 +25,7 @@ add_library(distill_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/embedded_profiles.cpp"
   src/core/profile/toml.cpp
   src/core/profile/profile.cpp
+  src/core/profile/facts.cpp
   src/core/lex/scan.cpp
   src/core/names/names.cpp
   src/core/inline/search.cpp

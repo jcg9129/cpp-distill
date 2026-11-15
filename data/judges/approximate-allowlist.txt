@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Full-match ECMAScript regexes. Approximate GCC profiles may use ONLY these
+# snapshot facts (positive and negative). Explicit command operations are separate.
+# Compiler identity and dialect; no optimization, ISA, library or build defaults.
+__GNUC__
+__GNUC_MINOR__
+__GNUC_PATCHLEVEL__
+__GNUG__
+__VERSION__
+__cplusplus
+__STRICT_ANSI__
+__cpp_[a-z0-9_]+
+# Target OS and architecture, including GCC's non-reserved compatibility aliases.
+_WIN32
+_WIN64
+__WIN32__
+__WIN64__
+__MINGW32__
+__MINGW64__
+__linux__
+__gnu_linux__
+__linux
+linux
+__unix__
+__unix
+unix
+__APPLE__
+__MACH__
+__x86_64__
+__x86_64
+__amd64__
+__amd64
+__i386__
+__i386
+i386
+__aarch64__
+__arm__
+__LP64__
+_LP64
+__ILP32__
+_ILP32
+# Type sizes, integer limits/types/widths, floating representation limits.
+__SIZEOF_(SHORT|INT|LONG|LONG_LONG|INT128|POINTER|FLOAT|DOUBLE|LONG_DOUBLE|WCHAR_T|WINT_T|SIZE_T|PTRDIFF_T|FLOAT80|FLOAT128)__
+__(SCHAR|SHRT|INT|LONG|LONG_LONG|WCHAR|WINT|SIZE|PTRDIFF|SIG_ATOMIC|INTMAX|UINTMAX|INTPTR|UINTPTR|U?INT(?:_LEAST|_FAST)?[0-9]+)_(MAX|MIN|WIDTH|TYPE)__
+__(FLT|DBL|LDBL|FLT[0-9]+X?)_(MAX|MIN|DENORM_MIN|DIG|EPSILON|HAS_DENORM|HAS_INFINITY|HAS_QUIET_NAN|MANT_DIG|MAX_10_EXP|MAX_EXP|DECIMAL_DIG|MIN_10_EXP|MIN_EXP|IS_IEC_60559)__
+__CHAR_BIT__
+__DECIMAL_DIG__
+__FLT_RADIX__
+# Signedness and byte ordering; not floating evaluation/optimization settings.
+__CHAR_UNSIGNED__
+__WCHAR_UNSIGNED__
+__BYTE_ORDER__
+__FLOAT_WORD_ORDER__
+__ORDER_(BIG_ENDIAN|LITTLE_ENDIAN|PDP_ENDIAN)__

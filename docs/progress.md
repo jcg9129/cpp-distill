@@ -57,18 +57,29 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
   recorded in `data/judges/`. Exact target spellings and Codeforces patch level
   need confirmation against judge evidence.
 - Local A1 lists cover Ubuntu glibc headers and g++ 15 libstdc++; Windows/macOS
-  placeholders disable protection conservatively. Linux C++ protection composes
-  the glibc and libstdc++ inventories. Default no-profile recursion is conservative
+  placeholders disable protection conservatively. Linux C++ profiles select
+  both the glibc and libstdc++ inventories explicitly. Default no-profile recursion is conservative
   until every library inventory is available; tests use complete synthetic sets.
 - Remaining D2 work: resolver state/closure/evaluation and adversarial cases;
   validation configurations including preprocess checks; the usable `--no-prune`
   CLI. D2c supplies components, without wiring CLI judge selection prematurely.
-- Design gap to resolve before relying on A4: the brief's snapshot recipe passes
-  only `-std`, but AtCoder uses `-march=native`, `-O2`, `-pthread`, `-fopenmp`, etc.
-  GCC version/triple alone do not reproduce those predefined macros or prove
-  identical compiler build defaults. See `data/judges/README.md`.
-- A second design gap: GCC's `-dM` output excludes special builtins such as
-  `__LINE__`, `__FILE__`, `__COUNTER__`, `__has_include` and `__has_builtin`;
-  local `defined(...)` checks confirm they exist. The resolver must model these
-  separately before interpreting snapshot absence as undefined (and extend A3
-  checking to them if reserved user definitions are supported).
+- FIX1 implements the approved v7 amendment: ordered compile flags, separate link
+  options and build provenance; strict per-name snapshots; four-state facts with
+  reproduced/approximate modes and a commented approximate allow-list; embedded
+  GCC 14.2/15.2 special-builtin and x86 native-dependency inventories.
+- Snapshot tooling uses the full effective command, line markers for startup
+  provenance (stdc-predef.h only), special-builtin probes and native CPU sweeps
+  with outside-model failures. `libraries` explicitly selects independent sets.
+- Extension generation now follows textual include/include_next reachability from
+  the standard-header list and all ext/pb_ds headers, including inactive includes.
+  Local results: glibc 1461 names, libstdc++ 149. Computed includes are not followed.
+- Codeforces/PBOX evidence identifies MSYS2 GCC 14.2.0-1. The exact gcc and gcc-libs
+  archive URLs currently return 404, so its workflow cannot yet produce an artifact.
+  Historical dependencies are pinned to the matching MSYS2 source tree; PBOX's
+  byte-level dependency manifest is not published by the cited evidence.
+- AtCoder CI builds GCC 15.2.0 from the published recipe on ubuntu-24.04, using its
+  configure options and a recipe-hashed compiler cache. Its inferred
+  x86_64-pc-linux-gnu triple stays UNVERIFIED pending actual workflow output.
+- No judge snapshots or remote workflow runs were manufactured locally. Resolver
+  and validation orchestration (§4.5–4.6) remain subsequent D2 implementation;
+  target verification will require exact probes and no unresolved native host.

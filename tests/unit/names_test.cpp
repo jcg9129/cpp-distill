@@ -21,8 +21,8 @@ TEST(names_extension_injection_and_library_union) {
   CHECK(!names.protectedUserMacro("INT_MAX")); CHECK(!names.protectedUserMacro("__guard"));
   names.extensions["fixture"].insert("MY_GUARD");
   CHECK(!names.protectedUserMacro("MY_GUARD"));
-  CHECK(!names.protectedUserMacro("MY_GUARD", "fixture"));
-  CHECK(names.protectedUserMacro("MY_GUARD", "other"));
+  CHECK(!names.protectedUserMacro("MY_GUARD", {"fixture"}));
+  CHECK(names.protectedUserMacro("MY_GUARD", {"other"}));
 }
 TEST(names_standard_headers_reject_path_escape_components) {
   for (auto s : {"/vector", "/ext/pb_ds/a.h", "ext/pb_ds/../../x.h", "ext/pb_ds/../x.h",
@@ -35,16 +35,16 @@ TEST(names_standard_headers_reject_path_escape_components) {
 
 TEST(names_embedded_extensions_and_missing_inventory) {
   NameLists names;
-  CHECK(names.extensionListReady("glibc")); CHECK(names.extensionListReady("libstdc++"));
-  CHECK(!names.extensionListReady("mingw-w64")); CHECK(!names.extensionListReady("macos-libc"));
-  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", "mingw-w64"));
-  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", "macos-libc"));
-  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", "missing"));
+  CHECK(names.extensionListReady({"glibc"})); CHECK(names.extensionListReady({"libstdc++"}));
+  CHECK(!names.extensionListReady({"mingw-w64"})); CHECK(!names.extensionListReady({"macos-libc"}));
+  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"mingw-w64"}));
+  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"macos-libc"}));
+  CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"missing"}));
   CHECK(!names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712"));
-  CHECK(names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", "libstdc++"));
-  CHECK(!names.protectedUserMacro("M_PI", "glibc"));
-  CHECK(!names.protectedUserMacro("M_PI", "libstdc++"));
-  CHECK(!names.protectedUserMacro("PB_DS_ASSERT_VALID", "libstdc++"));
+  CHECK(names.protectedUserMacro("DISTILL_UNLIKELY_GUARD_712", {"libstdc++"}));
+  CHECK(!names.protectedUserMacro("M_PI", {"glibc"}));
+  CHECK(!names.protectedUserMacro("M_PI", {"glibc", "libstdc++"}));
+  CHECK(!names.protectedUserMacro("PB_DS_ASSERT_VALID", {"libstdc++"}));
 }
 TEST(names_extension_parser_errors_and_empty) {
   CHECK(parseExtensionList("# metadata\n", "list").value().empty());
@@ -65,6 +65,15 @@ TEST(names_embedded_inventory_matches_reviewed_files_exactly) {
     raw.emplace(library, std::move(parsed.value()));
   }
   CHECK_EQ(names.extensions.at("glibc"), raw.at("glibc"));
-  raw.at("libstdc++").insert(raw.at("glibc").begin(), raw.at("glibc").end());
   for (const char* library : {"libstdc++", "mingw-w64", "macos-libc"}) CHECK_EQ(names.extensions.at(library), raw.at(library));
+}
+
+TEST(names_multiple_selected_libraries_intersection_and_empty_fail_closed) {
+  NameLists names; names.extensions = {{"a", {"M_PI"}}, {"b", {"EXT"}}, {"pending", {}}};
+  CHECK(!names.protectedUserMacro("M_PI", {"a", "b"}));
+  CHECK(!names.protectedUserMacro("EXT", {"a", "b"}));
+  CHECK(names.protectedUserMacro("MY_GUARD", {"a", "b"}));
+  CHECK(!names.protectedUserMacro("MY_GUARD", {"a", "pending"}));
+  CHECK(!names.protectedUserMacro("MY_GUARD", {"a", "absent"}));
+  CHECK(!names.protectedUserMacro("MY_GUARD"));
 }

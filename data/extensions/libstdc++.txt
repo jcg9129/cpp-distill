@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# A1 libstdc++; generator ci/extensions/generate.py v1; date 2026-11-15
-# Scanned: Ubuntu g++ 15.2.0-16ubuntu1; libstdc++ 15; aarch64-linux-gnu; headers: /usr/include/c++/15, /usr/include/aarch64-linux-gnu/c++/15; excluded directories: none; 2026-11-15
-# Union across scans; inactive #define and #undef names included.
-C_LIB_NAMESPACE
-GTHR_ACTIVE_PROXY
+# A1 libstdc++; generator ci/extensions/generate.py v2; date 2026-11-15
+# Scanned: aarch64-linux-gnu-g++-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0; aarch64-linux-gnu; glibc 2.43; 662 reachable headers
+# Roots: data/names/standard-headers.txt and every ext/pb_ds/ header.
+# Transitive textual #include/#include_next, active or inactive; compiler search order.
+# Limitation: computed include operands are not followed.
+# Inactive #define and #undef names included; unions only across v2 reachability scans.
 PB_DS_0_NODE_METADATA_HPP
 PB_DS_ASSERT_AUX_NULL
 PB_DS_ASSERT_BASE_NODE_CONSISTENT
@@ -152,7 +153,4 @@ PB_DS_TYPES_TRAITS_HPP
 PB_DS_TYPE_UTILS_HPP
 PB_DS_V2F
 PB_DS_V2S
-STD_COMPAT
 TBB_SUPPRESS_DEPRECATED_MESSAGES
-max
-min

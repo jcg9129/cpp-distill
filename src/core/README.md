@@ -90,10 +90,10 @@ Macro names deliberately overapproximate, including C functions which C permits
 to be macros, optional IEC 60559/Annex K names, and historical macros. Numeric
 integer-width families also recognize implementation-provided widths beyond
 8/16/32/64. `NameLists` embeds generated extension sets keyed by library; callers can
-replace them for synthetic fixtures. Without a selected library the union applies.
+replace them for synthetic fixtures. Without selected libraries the union applies.
 An empty or absent selected list means protection is unavailable; the union is
-also unavailable if any participating list is empty. Linux `libstdc++` protection
-includes the glibc inventory; a missing part disables that combined inventory. Reserved identifiers contain `__` or start `_A`–`_Z`.
+also unavailable if any participating list is empty. Linux profiles explicitly select both `glibc` and `libstdc++`;
+a missing part disables protection. Reserved identifiers contain `__` or start `_A`–`_Z`.
 
 `inline/` exposes `buildIncludeSearch`, `lookupHeader` and `inlineSources`.
 Search directories retain command spelling and are deduplicated by filesystem
@@ -181,60 +181,67 @@ macro spellings, compiler versions, supported numeric dialects (98/03 through 26
 libraries and snapshot filenames. `std` omits the `-std=` prefix. C++26 currently
 uses GCC's provisional `202400L` value; a finalized dialect needs an update.
 
-`Profile` keeps the declared target, GCC identity (and whether patch was supplied),
-dialect, judge definitions as both strings and a macro table, compiler-default
-macro table, inventory completeness, library, check compilers and file/date/source
-provenance. `allowed` supplies partial `NAME` or `NAME=value` facts only without
-`predefined`; absent facts remain unknown. Snapshot loading calls D2a `parseMacros`
-after removing metadata comments, preserving function-like definitions and
-replacement bytes. It cross-checks GCC identity, `__cplusplus`, strict/GNU mode
-and recognized architecture/OS macros against the declared target. This checks
-consistency; it cannot prove an arbitrary hand-written inventory exhaustive.
-Unrecognized target architectures have no invented architecture checks.
-`Profile::checkA3` reports every collision between user definitions and the
-snapshot/allow-list/judge definitions; callers must disable resolution on error.
+`Profile` keeps the declared target/compiler/dialect, ordered `flags` and macro
+operations, `link`, `inert`, `build`, selected `libraries`, check compilers and
+file/date/source provenance. Obsolete `defines`, `library` and `allowed` keys
+are rejected. Profile flags use the command classifier; rejected options cannot
+be declared inert and `-std=` belongs in `std`. `-fmodules` and `-fopenmp` are
+modelled options because they affect macros. Explicit `-D` and `-U` operations
+preserve order, empty replacement text and function-like definitions.
+
+`initialState(name)` returns a four-state `MacroFact` with optional definition
+and provenance: compiler builtin, startup header, command operation, special
+builtin, native model, A5, A4 or approximate allow-list. Reproduced mode requires
+a matching named build, affirmative snapshot provenance and a complete embedded
+compiler-version registry. Approximate mode uses only the commented data allow-list
+for snapshot facts; explicit command operations remain known. Unlisted names use
+A5 (non-reserved), A4 (reproduced reserved), or remain unknown. Special builtin
+availability and invocation are distinct: `activeSpecialBuiltin()` follows the
+current binding; a command definition is ordinary, and a final `-U` is undefined.
+`checkA3` checks effective definedness and reports all known conflicts. The raw
+`predefined` table includes every known snapshot definition; callers must consult
+the fact provenance when applying A2(a), rather than treating startup-header
+definitions as compiler builtins.
 
 `loadProfile` reads a file and its sibling snapshot. `lookupProfile` treats a
-separator (either slash) or `.toml` suffix as a path; otherwise it tries the
-injected user directory before `embeddedProfileFiles()`. `ProfileLookup` supplies
-the environment and optional explicit directory; nothing reads the real home
-implicitly. POSIX uses an absolute XDG_CONFIG_HOME, else HOME/.config; Windows uses
-APPDATA. Invalid overrides never fall through to embedded data. CMake embeds all
-judge TOML/snapshot files and extension lists at configure time, tracks edits,
-and reconfigures on adding/removing snapshots. Shipped profiles currently fail
-clearly with `snapshot missing`; the Linux unit fixture is a real local capture,
-while the MinGW fixture is explicitly synthetic.
+separator or `.toml` suffix as a path; otherwise the injected user directory
+precedes embedded data. The real home/environment is never inspected implicitly.
+An invalid override or missing named snapshot is an error. CMake embeds profiles,
+snapshots, the approximate allow-list, special registries and native models;
+adding/removing data triggers reconfiguration. The Linux fixture is a real local
+GCC 15.2 capture with approximate provenance. The reproduced MinGW fixture is
+explicitly synthetic and tests format/fact semantics, not a real judge inventory.
 
-Regenerate profiles with `ci/profiles/snapshot.py`, or dispatch `profiles.yml`;
-see `data/judges/README.md` for research, review and update requirements. That
-workflow uses pinned official GCC images for Linux and refuses a different GCC
-version when an old MinGW package is unavailable. Snapshot collection deliberately
-uses only the profile dialect, as required by D2c. AtCoder's additional
-macro-changing flags and exact judge build/CPU still need modelling before a
-snapshot can meet the full A4 contract. Also, GCC `-dM` omits special builtins
-such as `__LINE__`, `__FILE__` and `__has_include` even though `defined(...)`
-reports them defined. The `exhaustive` flag currently identifies a complete
-`-dM` capture as specified by D2c; the future resolver must model these special
-builtins separately, rather than infer their absence from this table.
+Snapshot format and research are specified completely in
+[`data/judges/README.md`](../../data/judges/README.md). The loader validates the
+versioned header, effective argv, target/compiler/dialect, per-name facts,
+startup/header provenance, complete special probes and native-model coverage.
+`ci/profiles/snapshot.py` captures the full profile command, uses separate line
+markers to detect startup headers, probes every registered special name, and
+joins supported native configurations after all options and macro operations.
+Unknown startup headers or variation outside the native model fail closed.
+The profile workflow installs the exact MSYS2 package/dependency set or builds
+AtCoder GCC from its published configure recipe, then uploads review artifacts.
+The old MSYS2 archive is currently unavailable; shipped snapshots stay absent.
 
-Generate A1 inventories with Python 3.11+ (no third-party modules):
+Generate A1 inventories with Python 3.11+:
 
 ```sh
-python3 ci/extensions/generate.py --library glibc --include /usr/include --exclude-dir c++ --headers-version 'glibc <version>'
-python3 ci/extensions/generate.py --library libstdc++ --include <gcc-c++-include> --include <target-c++-include> --headers-version 'GCC <version>'
-python3 -m unittest discover -s ci/extensions -p 'test_*.py'
-python3 -m unittest discover -s ci/profiles -p 'test_*.py'
+python3 ci/extensions/scan.py --platform linux --compiler g++ --output-dir out/extensions --headers-version 'glibc/GCC versions'
+timeout 120 python3 -m unittest discover -s ci/extensions -p 'test_*.py'
+timeout 120 python3 -m unittest discover -s ci/profiles -p 'test_*.py'
 ```
 
-The generator scans all files recursively, joins backslash continuations before
-dropping comments, includes inactive `#define` and `#undef` names, excludes reserved
-and standard macro names (including numeric width families), and unions with the
-existing list. Scans retain their version/header/date provenance. The broad local
-glibc scan intentionally includes installed non-C++ third-party/kernel headers;
-this overapproximation only prevents resolutions. `parseExtensionList` validates
-identifier spelling, sort order, uniqueness and exclusion rules. Empty inventories
-are valid but never grant protection. `mingw-w64` and `macos-libc` are currently
-header-only placeholders. Dispatch `extensions.yml` for GCC profile versions plus
-newest GCC, AlmaLinux 8, MSYS2 CRT+libstdc++, and both macOS SDK architectures; its
-final artifact merges all versions with checked-in data for review, without
-publishing or committing anything. Update the matrix pins when profiles change.
+The generator starts from all available standard-header-list entries and every
+header under `ext/pb_ds/`, follows textual include/include_next operands in both
+active and inactive regions using the compiler's `-E -v` search order, and scans
+only reached files. Computed includes are not followed, a limitation recorded in
+every generated list. Files are attributed separately to glibc, libstdc++,
+MinGW-w64 or macOS SDK directories; compiler intrinsic headers are traversed but
+not attributed to a library. Version-2 scans replace broad inventories; workflow
+merging unions only reachable-header inventories across compatibility versions.
+Reserved and standard names (including numeric width families) are excluded.
+The local GCC 15.2/glibc 2.42 lists have 149/1461 names; Windows/macOS sets remain
+empty placeholders until CI. `NameLists` and `InlineOptions` take a list of
+libraries: protection requires absence from every selected set and fails closed
+if any selected set is empty/missing. With no selection all libraries apply.

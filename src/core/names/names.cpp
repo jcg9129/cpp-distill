@@ -84,24 +84,17 @@ const ExtensionLists& embeddedExtensionLists() {
       if (!parsed.ok()) throw std::runtime_error(parsed.error().message); // Invalid build-time data.
       result.emplace(library, std::move(parsed.value()));
     }
-    // A Linux C++ toolchain includes the C library's headers too. Never claim
-    // protection from only the smaller C++ inventory.
-    if (result.at("glibc").empty() || result.at("libstdc++").empty()) result.at("libstdc++").clear();
-    else result.at("libstdc++").insert(result.at("glibc").begin(), result.at("glibc").end());
     return result;
   }();
   return lists;
 }
-bool NameLists::extensionListReady(std::optional<std::string_view> library) const {
-  if (library) {
-    const auto found = extensions.find(*library);
-    return found != extensions.end() && !found->second.empty();
-  }
-  return !extensions.empty() && std::all_of(extensions.begin(), extensions.end(), [](const auto& entry) { return !entry.second.empty(); });
+bool NameLists::extensionListReady(const std::vector<std::string>& libraries) const {
+  if (libraries.empty()) return !extensions.empty() && std::all_of(extensions.begin(), extensions.end(), [](const auto& entry) { return !entry.second.empty(); });
+  return std::all_of(libraries.begin(), libraries.end(), [&](const auto& name) { const auto it = extensions.find(name); return it != extensions.end() && !it->second.empty(); });
 }
-bool NameLists::protectedUserMacro(std::string_view name, std::optional<std::string_view> library) const {
-  if (isReserved(name) || isStandardMacroName(name) || !extensionListReady(library)) return false;
-  if (library) return !extensions.find(*library)->second.contains(name);
-  return std::none_of(extensions.begin(), extensions.end(), [&](const auto& entry) { return entry.second.contains(name); });
+bool NameLists::protectedUserMacro(std::string_view name, const std::vector<std::string>& libraries) const {
+  if (isReserved(name) || isStandardMacroName(name) || !extensionListReady(libraries)) return false;
+  if (libraries.empty()) return std::none_of(extensions.begin(), extensions.end(), [&](const auto& entry) { return entry.second.contains(name); });
+  return std::none_of(libraries.begin(), libraries.end(), [&](const auto& library) { return extensions.at(library).contains(name); });
 }
 } // namespace distill

@@ -10,22 +10,47 @@ struct ProfileProvenance {
   std::string updated;
   std::vector<std::string> sources;
 };
+enum class MacroState { undefined, known, definedUnknown, unknown };
+enum class FactOrigin { compilerBuiltin, startupHeader, commandOperation, specialBuiltin,
+                        nativeModel, a5, a4, allowList };
+struct MacroFact {
+  MacroState state = MacroState::unknown;
+  std::optional<Macro> definition;
+  std::vector<FactOrigin> provenance;
+  bool activeSpecialBuiltin() const;
+};
+using MacroFacts = std::map<std::string, MacroFact, std::less<>>;
+struct SnapshotMetadata {
+  std::string compilerPath, versionOutput, gccVersion, dumpmachine, build;
+  bool reproduced = false;
+};
 struct Profile {
   std::string name, description, triple, compilerVersion;
   CompilerIdentity compiler;
   bool patchSpecified = false;
   Dialect dialect;
-  std::vector<std::string> defines;
+  std::vector<std::string> flags, link, inert, libraries;
+  std::vector<LocalMacro> macroOperations;
+  std::optional<std::pair<std::string, std::string>> build;
   MacroTable judgeMacros;
   MacroTable predefined;
-  bool exhaustive = false;
+  bool reproduced = false;
+  SnapshotMetadata snapshotMetadata;
+  MacroFacts snapshotFacts;
+  MacroFact initialState(std::string_view name) const;
   std::optional<std::string> snapshot;
-  std::string library;
+
   std::vector<std::string> check;
   ProfileProvenance provenance;
   // An error names every collision with A3; callers must disable resolution.
   Result<bool> checkA3(const std::set<std::string, std::less<>>& userDefines) const;
 };
+// Registry/model data are embedded, never read from the profile directory.
+std::set<std::string, std::less<>> specialBuiltins(const CompilerIdentity& compiler);
+std::map<std::string, std::string, std::less<>> nativeDependencies(const CompilerIdentity& compiler);
+bool approximateAllowed(std::string_view name);
+bool compatibleProfileTriple(std::string_view expected, std::string_view actual);
+Result<bool> parseProfileSnapshot(Profile& profile, std::string_view text);
 using SnapshotReader = std::function<Result<std::string>(const std::filesystem::path&)>;
 Result<Profile> parseProfile(std::string_view text, const std::filesystem::path& file,
                              SnapshotReader reader = {});

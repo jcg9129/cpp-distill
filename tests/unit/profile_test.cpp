@@ -15,7 +15,9 @@ std::string replace(std::string text, std::string_view before, std::string_view 
   return text;
 }
 std::string allowProfile() {
-  return replace(test::read(profileFixture("mingw.toml")), "predefined = \"mingw-predefined.txt\"", "allowed = [\"__GNUC__=14\", \"_WIN64=1\", \"FACT=42\"]");
+  auto text = test::read(profileFixture("mingw.toml"));
+  text = replace(text, "predefined = \"mingw-predefined.txt\"", "");
+  return text;
 }
 Result<Profile> synthetic(std::string text, std::string snapshot = test::read(profileFixture("mingw-predefined.txt"))) {
   return parseProfile(text, "mingw.toml", [snapshot](const auto&) -> Result<std::string> { return snapshot; });
@@ -84,90 +86,141 @@ TEST(profile_toml_utf8_controls_and_error_line_numbers) {
   CHECK(!r.ok()); CHECK(r.error().message.starts_with("file:5:"));
   const auto u = parseProfileToml("# ok\n#\xff", "file"); CHECK(u.error().message.starts_with("file:2:"));
 }
-TEST(profile_loads_local_linux_snapshot_and_provenance) {
-  auto r = loadProfile(profileFixture("linux.toml")); CHECK(r.ok()); if (!r.ok()) return;
-  const auto& p = r.value();
-  CHECK(p.exhaustive); CHECK_EQ(p.triple, "aarch64-linux-gnu");
-  CHECK_EQ(p.compiler.family, CompilerFamily::gcc); CHECK_EQ(p.compiler.major, 15); CHECK_EQ(p.compiler.minor, 2); CHECK_EQ(p.compiler.patch, 0); CHECK(p.patchSpecified);
-  CHECK_EQ(p.dialect.name, "gnu++23"); CHECK(p.dialect.gnu); CHECK_EQ(p.dialect.cplusplus, 202302);
-  CHECK(p.predefined.size() > 400); CHECK(p.predefined.contains("__aarch64__"));
-  CHECK_EQ(p.judgeMacros.at("ONLINE_JUDGE").replacement, "1"); CHECK_EQ(p.judgeMacros.at("EMPTY").replacement, ""); CHECK_EQ(p.judgeMacros.at("VALUE").replacement, "42");
-  CHECK(!p.predefined.contains("ONLINE_JUDGE"));
-  CHECK_EQ(p.library, "libstdc++"); CHECK_EQ(p.check, (std::vector<std::string>{"g++"}));
-  CHECK_EQ(p.provenance.file, profileFixture("linux.toml")); CHECK_EQ(p.provenance.updated, "2026-11-15"); CHECK_EQ(p.provenance.sources.size(), 1u);
-}
-TEST(profile_loads_synthetic_mingw_and_allow_list_only) {
+TEST(profile_loads_reproduced_and_approximate_fixtures) {
   auto r = loadProfile(profileFixture("mingw.toml")); CHECK(r.ok()); if (!r.ok()) return;
-  CHECK(r.value().exhaustive); CHECK(!r.value().patchSpecified); CHECK(!r.value().dialect.gnu);
-  CHECK(r.value().predefined.at("FUNCTION").functionLike); CHECK(r.value().predefined.at("FUNCTION").variadic);
-  auto a = synthetic(allowProfile()); CHECK(a.ok()); CHECK(!a.value().exhaustive); CHECK(!a.value().snapshot); CHECK_EQ(a.value().predefined.size(), 3u);
-  auto empty = synthetic(replace(allowProfile(), "allowed = [\"__GNUC__=14\", \"_WIN64=1\", \"FACT=42\"]", ""));
-  CHECK(empty.ok()); CHECK(!empty.value().exhaustive); CHECK(empty.value().predefined.empty());
+  const auto& p = r.value();
+  CHECK(p.reproduced); CHECK_EQ(p.triple, "x86_64-w64-mingw32");
+  CHECK_EQ(p.compiler.major, 14); CHECK_EQ(p.compiler.minor, 2); CHECK(!p.patchSpecified);
+  CHECK_EQ(p.dialect.name, "c++23"); CHECK(!p.dialect.gnu);
+  CHECK(p.predefined.at("FUNCTION").functionLike); CHECK(p.predefined.at("FUNCTION").variadic);
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").definition->replacement, "1");
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").provenance.front(), FactOrigin::commandOperation);
+  CHECK_EQ(p.initialState("__absent_reserved").state, MacroState::undefined);
+  CHECK_EQ(p.initialState("__absent_reserved").provenance.front(), FactOrigin::a4);
+  CHECK_EQ(p.initialState("LOCAL").provenance.front(), FactOrigin::a5);
+  CHECK_EQ(p.libraries, (std::vector<std::string>{"mingw-w64", "libstdc++"}));
+  auto linux = loadProfile(profileFixture("linux.toml")); CHECK(linux.ok()); if (!linux.ok()) return;
+  CHECK(!linux.value().reproduced); CHECK(linux.value().predefined.size() > 400);
+  CHECK_EQ(linux.value().initialState("__aarch64__").state, MacroState::known);
+  CHECK_EQ(linux.value().initialState("__aarch64__").provenance.back(), FactOrigin::allowList);
+  CHECK_EQ(linux.value().initialState("__OPTIMIZE__").state, MacroState::unknown);
+  CHECK_EQ(linux.value().initialState("__CHAR_UNSIGNED__").state, MacroState::known);
+  CHECK_EQ(linux.value().initialState("__absent_reserved").state, MacroState::unknown);
+  CHECK_EQ(linux.value().initialState("LOCAL").state, MacroState::undefined);
+  CHECK_EQ(linux.value().initialState("EMPTY").definition->replacement, "");
 }
-TEST(profile_schema_required_keys_unknown_keys_and_wrong_types) {
+TEST(profile_mode_requires_matching_build_and_complete_registry) {
+  auto text = test::read(profileFixture("mingw.toml"));
+  auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  for (const auto& other : {replace(text, "build = { package = \"synthetic:fixture=14.2.0-1\" }", ""),
+                           replace(text, "synthetic:fixture=14.2.0-1", "other:build")}) {
+    auto r = synthetic(other); CHECK(r.ok()); if (r.ok()) {
+      CHECK(!r.value().reproduced);
+      CHECK_EQ(r.value().initialState("__has_include").state, MacroState::unknown);
+      CHECK_EQ(r.value().initialState("__GNUC__").state, MacroState::known);
+    }
+  }
+  auto r = synthetic(text, replace(snapshot, "# reproduced: yes", "# reproduced: no"));
+  CHECK(r.ok()); if (r.ok()) CHECK(!r.value().reproduced);
+  auto unsupportedText = replace(text, "version = \"14.2\"", "version = \"14.9\"");
+  auto unsupportedSnapshot = replace(snapshot, "# gcc-version: 14.2.0", "# gcc-version: 14.9.0");
+  unsupportedSnapshot = replace(unsupportedSnapshot, "# builtin-registry: gcc-14.2", "# builtin-registry: none");
+  unsupportedSnapshot = replace(unsupportedSnapshot, "#define __GNUC_MINOR__ 2", "#define __GNUC_MINOR__ 9");
+  for (const auto& name : specialBuiltins({CompilerFamily::gcc, 14, 2, 0})) {
+    unsupportedSnapshot = replace(unsupportedSnapshot, "# state " + name + " defined-unknown special-builtin", "");
+    unsupportedSnapshot = replace(unsupportedSnapshot, "# probe " + name + " defined", "");
+  }
+  auto unsupported = synthetic(unsupportedText, unsupportedSnapshot); CHECK(unsupported.ok());
+  if (unsupported.ok()) { CHECK(!unsupported.value().reproduced); CHECK_EQ(unsupported.value().initialState("__new_builtin").state, MacroState::unknown); }
+  CHECK(specialBuiltins({CompilerFamily::gcc, 99, 1, 0}).empty());
+  CHECK(!approximateAllowed("__AVX2__")); CHECK(!approximateAllowed("__OPTIMIZE__"));
+  for (const auto* n : {"__GNUC__", "_WIN32", "__SIZEOF_INT__", "__INT_MAX__", "__CHAR_UNSIGNED__", "__cplusplus"}) CHECK(approximateAllowed(n));
+}
+TEST(profile_schema_required_unknown_types_and_values) {
   auto text = allowProfile(); auto doc = parseProfileToml(text, "test").value();
   for (const auto& [key, entry] : doc) {
-    if (key == "allowed") continue;
+    if (key == "build") continue;
     auto begin = text.find(key + " ="); auto end = text.find('\n', begin);
     auto missing = text; missing.erase(begin, end - begin); badProfile(missing, "required");
     auto wrong = text; wrong.replace(begin + key.size() + 3, end - (begin + key.size() + 3), "true"); badProfile(wrong, "wrong type");
     (void)entry;
   }
-  badProfile(text + "\nunknown=1\n", "unknown key");
-  badProfile(text + "\n'compiler.family'='gcc'\n", "unknown key");
-  badProfile(replace(text, "allowed = [\"__GNUC__=14\", \"_WIN64=1\", \"FACT=42\"]", "allowed = 'FACT'"), "wrong type");
-  badProfile(replace(text, "allowed = [\"__GNUC__=14\", \"_WIN64=1\", \"FACT=42\"]", "predefined = false"), "wrong type");
+  for (const auto* extra : {"defines=[]", "library='glibc'", "allowed=[]", "typo=true"}) badProfile(text + "\n" + extra, "unknown key");
+  for (auto [before, after, error] : {std::tuple{"name = \"mingw\"", "name = \"Bad_Name\"", "name:"},
+       {"triple = \"x86_64-w64-mingw32\"", "triple = \"bad\"", "triple:"},
+       {"family = \"gcc\"", "family = \"clang\"", "only gcc"},
+       {"version = \"14.2\"", "version = \"14\"", "major.minor"},
+       {"version = \"14.2\"", "version = \"999999999999999.2\"", "version"},
+       {"std = \"c++23\"", "std = \"gnu++2b\"", "c++NN"},
+       {"std = \"c++23\"", "std = \"c++99\"", "unsupported"},
+       {"libraries = [\"mingw-w64\", \"libstdc++\"]", "libraries = ['bad']", "libraries:"}}) badProfile(replace(text, before, after), error);
+  for (const auto* value : {"{}", "{package='x',recipe='https://x'}", "{typo='x'}", "{recipe='not-url'}"})
+    badProfile(replace(text, "{ package = \"synthetic:fixture=14.2.0-1\" }", value), "build:");
+  for (const auto* date : {"2026-02-29", "2026-04-31", "2026-13-01", "0000-01-01", "today"}) badProfile(replace(text, "2026-11-15", date), "updated:");
+  for (const auto* source : {"[]", "['']", "['file:///x']", "['https://bad host/']"}) badProfile(replace(text, "[\"https://gcc.gnu.org/gcc-14/\"]", source), "sources:");
 }
-TEST(profile_schema_validates_names_version_triple_std_defines_and_library) {
-  const auto text = allowProfile();
-  for (auto [before, after, error] : {std::tuple{"name = \"mingw\"", "name = \"Bad_Name\"", "name:"}, {"name = \"mingw\"", "name = \"other\"", "name:"}, {"triple = \"x86_64-w64-mingw32\"", "triple = \"bad\"", "triple:"}, {"family = \"gcc\"", "family = \"clang\"", "only gcc"}, {"version = \"14.2\"", "version = \"14\"", "major.minor"}, {"version = \"14.2\"", "version = \"14.2.0.1\"", "major.minor"}, {"version = \"14.2\"", "version = \"999999999999999.2\"", "version"}, {"version = \"14.2\"", "version = \"0.2\"", "version"}, {"family = \"gcc\", version = \"14.2\"", "family = \"gcc\"", "requires only"}, {"family = \"gcc\", version = \"14.2\"", "family = \"gcc\", version = \"14.2\", typo = \"x\"", "requires only"}, {"std = \"c++23\"", "std = \"-std=c++23\"", "c++NN"}, {"std = \"c++23\"", "std = \"gnu++2b\"", "c++NN"}, {"std = \"c++23\"", "std = \"c++99\"", "unsupported"}, {"defines = [\"ONLINE_JUDGE\"]", "defines = [\"2BAD\"]", "NAME"}, {"defines = [\"ONLINE_JUDGE\"]", "defines = [\"BAD(x)=1\"]", "NAME"}, {"defines = [\"ONLINE_JUDGE\"]", "defines = [\"X\", \"X=2\"]", "malformed macro"}, {"library = \"mingw-w64\"", "library = \"unknown\"", "library:"}, {"check = [\"x86_64-w64-mingw32-g++\"]", "check = ['']", "compiler name"}}) badProfile(replace(text, before, after), error);
-  auto line = synthetic(text + "\ntypo = 'bad'\n"); CHECK(!line.ok());
-  CHECK(line.error().message.find(": unknown key") != std::string::npos);
-}
-TEST(profile_schema_validates_dates_sources_and_snapshot_filename) {
-  const auto text = allowProfile();
-  for (const auto* date : {"2026-02-29", "2026-04-31", "2026-13-01", "2026-00-01", "2026-01-00", "0000-01-01", "2026-1-1", "today"}) badProfile(replace(text, "2026-11-15", date), "updated:");
-  CHECK(synthetic(replace(text, "2026-11-15", "2024-02-29")).ok());
-  for (const auto* sources : {"[]", "['']", "['not-url']", "['file:///test']", "['https://']", "['https://?']", "['https://#']", "['https://bad host/']"}) badProfile(replace(text, "[\"https://gcc.gnu.org/gcc-14/\"]", sources), "sources:");
-  auto snapshotText = test::read(profileFixture("mingw.toml"));
-  for (const auto* file : {"../escape.txt", "/absolute.txt", "C:drive.txt", "sub\\\\file.txt", ".", ".."}) badProfile(replace(snapshotText, "mingw-predefined.txt", file), "relative to the profile");
-  badProfile(snapshotText + "\nallowed = []\n", "only valid without");
-}
-TEST(profile_snapshot_missing_is_clear_and_never_downgrades) {
-  const auto text = test::read(profileFixture("mingw.toml"));
-  auto r = parseProfile(text, "mingw.toml"); CHECK(!r.ok()); CHECK(r.error().message.find("snapshot missing") != std::string::npos);
-  auto other = parseProfile(text, "mingw.toml", [](const auto&) -> Result<std::string> { return Error{"fixture read failed"}; });
-  CHECK(!other.ok()); CHECK(other.error().message.find("snapshot missing") != std::string::npos);
-  for (const auto* name : {"codeforces", "atcoder"}) {
-    auto builtin = lookupProfile(name); CHECK(!builtin.ok());
-    if (!builtin.ok()) CHECK(builtin.error().message.find("snapshot missing") != std::string::npos);
+TEST(profile_flags_use_command_classifier_and_inert_cannot_bypass_rejection) {
+  const auto base = allowProfile();
+  for (const auto* flag : {"-std=gnu++23", "-includeevil", "-imacros", "-Wp,-DNAME", "-Xpreprocessor", "-Wl,x", "-Wa,x", "-Bpath", "--sysroot=x", "-specs=x", "-fplugin=x", "-c", "@response", "-oout", "-Iinc", "-lfoo"}) {
+    auto text = replace(base, "flags = [\"-DONLINE_JUDGE\"]", "flags = [\"" + std::string(flag) + "\"]");
+    CHECK(!synthetic(text + "\ninert = [\"" + std::string(flag) + "\"]").ok());
   }
+  auto flags = replace(base, "flags = [\"-DONLINE_JUDGE\"]", "flags = ['-O2','-Wall','-fmodules','-fopenmp','-pthread','-march=native','-fconstexpr-depth=1024']");
+  CHECK(!synthetic(flags).ok()); CHECK(synthetic(flags + "\ninert=['-fconstexpr-depth=1024']").ok());
+  CHECK(!synthetic(base + "\ninert=['-O2']").ok());
 }
-TEST(profile_snapshot_validates_identity_platform_arch_dialect_and_syntax) {
-  const auto text = test::read(profileFixture("mingw.toml"));
-  const auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
-  for (auto [before, after] : {std::pair{"#define __GNUC__ 14", "#define __GNUC__ 15"}, {"#define __GNUC_MINOR__ 2", "#define __GNUC_MINOR__ 3"}, {"#define __cplusplus 202302L", "#define __cplusplus 202002L"}, {"#define __x86_64__ 1", ""}, {"#define _WIN32 1", ""}, {"#define _WIN64 1", ""}, {"#define __STRICT_ANSI__ 1", ""}, {"#define __GNUC__ 14", "#define __GNUC__(x) 14"}, {"#define __GNUC__ 14", "#define __GNUC__ 14junk"}, {"#define __GNUC__ 14", "#define __GNUC__ 99999999999999999999999999"}, {"#define __GNUC_MINOR__ 2", "#define __GNUC_MINOR__ 2\n#define __GNUC_MINOR__ 2"}}) {
-    auto r = synthetic(text, replace(snapshot, before, after)); CHECK(!r.ok());
-  }
-  for (const auto* extra : {"#define __clang__ 1", "#define __linux__ 1", "#define __aarch64__ 1", "#define __i386__ 1", "#undef BAD", "garbage", "#define BAD \xff"}) CHECK(!synthetic(text, snapshot + extra + "\n").ok());
-  auto patch = replace(text, "version = \"14.2\"", "version = \"14.2.1\""); CHECK(!synthetic(patch).ok());
-  auto gnu = replace(text, "std = \"c++23\"", "std = \"gnu++23\""); CHECK(!synthetic(gnu).ok());
-  CHECK(synthetic(gnu, replace(snapshot, "#define __STRICT_ANSI__ 1", "")).ok());
-  auto linux = test::read(profileFixture("linux.toml"));
-  auto linuxSnapshot = test::read(profileFixture("linux-predefined.txt"));
-  CHECK(!parseProfile(linux, "linux.toml", [&](const auto&) -> Result<std::string> { return replace(linuxSnapshot, "#define __linux__ 1", ""); }).ok());
+TEST(profile_ordered_macro_operations_and_exact_replacements) {
+  auto text = replace(allowProfile(), "flags = [\"-DONLINE_JUDGE\"]", "flags = ['-DX=1','-UX','-U','Y','-D','Y=0','-DEMPTY=','-DONE','-DF(x)=x+1']");
+  auto r = synthetic(text); CHECK(r.ok()); if (!r.ok()) return;
+  const auto& p = r.value(); CHECK_EQ(p.macroOperations.size(), 7u);
+  CHECK_EQ(p.initialState("X").state, MacroState::undefined);
+  CHECK_EQ(p.initialState("Y").definition->replacement, "0");
+  CHECK_EQ(p.initialState("EMPTY").definition->replacement, "");
+  CHECK_EQ(p.initialState("ONE").definition->replacement, "1");
+  CHECK(p.initialState("F").definition->functionLike);
+  CHECK(p.checkA3({"X"}).ok()); CHECK(!p.checkA3({"Y", "EMPTY"}).ok());
+  for (const auto* f : {"-D2BAD", "-Ubad(x)", "-D"}) CHECK(!synthetic(replace(allowProfile(), "-DONLINE_JUDGE", f)).ok());
 }
-TEST(profile_allow_list_consistency_and_a3) {
-  auto text = allowProfile();
-  badProfile(replace(text, "__GNUC__=14", "__GNUC__=13"), "disagrees");
-  badProfile(replace(text, "_WIN64=1", "__linux__=1"), "disagrees");
+TEST(profile_special_builtin_state_follows_probe_and_command_operations) {
+  auto text = test::read(profileFixture("mingw.toml")); auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   auto p = synthetic(text).value();
-  CHECK(p.checkA3({"GUARD", "LOCAL"}).ok());
-  auto r = p.checkA3({"ONLINE_JUDGE", "FACT", "__GNUC__"}); CHECK(!r.ok());
-  CHECK(r.error().message.find("A3 conflict") != std::string::npos);
-  for (const auto* name : {"ONLINE_JUDGE", "FACT", "__GNUC__"}) CHECK(r.error().message.find(name) != std::string::npos);
-  auto exhaustive = loadProfile(profileFixture("mingw.toml")).value();
-  CHECK(!exhaustive.checkA3({"WIN32"}).ok()); CHECK(exhaustive.checkA3({"FACT"}).ok());
+  CHECK(p.initialState("__has_include").activeSpecialBuiltin());
+  CHECK_EQ(p.initialState("__FILE_NAME__").state, MacroState::definedUnknown);
+  auto no = replace(snapshot, "# state __has_include defined-unknown special-builtin", "# state __has_include undefined command-operation");
+  no = replace(no, "# probe __has_include defined", "# probe __has_include undefined");
+  no = replace(no, "# command-operation #define ONLINE_JUDGE 1", "");
+  no = replace(no, "# flag: -DONLINE_JUDGE", "# flag: -U__has_include");
+  auto u = synthetic(replace(text, "-DONLINE_JUDGE", "-U__has_include"), no);
+  CHECK(u.ok()); if (u.ok()) CHECK_EQ(u.value().initialState("__has_include").state, MacroState::undefined);
+  auto yes = replace(snapshot, "# state __has_include defined-unknown special-builtin", "# command-operation #define __has_include(x) 0");
+  yes = replace(yes, "# command-operation #define ONLINE_JUDGE 1", "");
+  yes = replace(yes, "# flag: -DONLINE_JUDGE", "# flag: -D__has_include(x)=0");
+  auto d = synthetic(replace(text, "-DONLINE_JUDGE", "-D__has_include(x)=0"), yes);
+  CHECK(d.ok()); if (d.ok()) { CHECK(!d.value().initialState("__has_include").activeSpecialBuiltin()); CHECK_EQ(d.value().initialState("__has_include").definition->replacement, "0"); }
+}
+TEST(profile_snapshot_format_metadata_provenance_and_validation) {
+  const auto text = test::read(profileFixture("mingw.toml")), snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  for (auto [before, after] : {std::pair{"# distill-snapshot: 1", "# distill-snapshot: 2"},
+       {"# reproduced: yes", "# reproduced: maybe"}, {"# gcc-version: 14.2.0", "# gcc-version: 15.2.0"},
+       {"# builtin-registry: gcc-14.2", "# builtin-registry: none"}, {"# native-model: none", "# native-model: gcc-14.2-x86"},
+       {"# flag: -DONLINE_JUDGE", "# flag: -UOTHER"}, {"# end-header", ""},
+       {"# probe __has_include defined", ""}, {"# probe __has_include defined", "# probe __has_include undefined"},
+       {"#define __GNUC__ 14", "#define __GNUC__ 15"}}) CHECK(!synthetic(text, replace(snapshot, before, after)).ok());
+  for (const auto* extra : {"#undef BAD", "# typo whatever", "garbage", "#define __GNUC__ 14", "# state ABC unknown strange", "# state __mystery unknown native-model", "# probe __new_builtin defined"}) CHECK(!synthetic(text, snapshot + extra + "\n").ok());
+  auto startup = synthetic(text, snapshot + "# startup-header stdc-predef.h #define __STARTUP_TEST 1\n");
+  CHECK(startup.ok()); if (startup.ok()) CHECK_EQ(startup.value().initialState("__STARTUP_TEST").provenance.front(), FactOrigin::startupHeader);
+  CHECK(compatibleProfileTriple("x86_64-pc-linux-gnu", "x86_64-linux-gnu"));
+  CHECK(compatibleProfileTriple("x86_64-w64-mingw32", "x86_64-pc-mingw32"));
+  CHECK(!compatibleProfileTriple("x86_64-linux-gnu", "aarch64-linux-gnu"));
+  CHECK(!compatibleProfileTriple("x86_64-linux-gnu", "x86_64-linux-musl"));
+}
+TEST(profile_snapshot_missing_never_downgrades_and_a3_reports_collisions) {
+  auto text = test::read(profileFixture("mingw.toml"));
+  auto r = parseProfile(text, "mingw.toml"); CHECK(!r.ok()); CHECK(r.error().message.find("snapshot missing") != std::string::npos);
+  for (const auto* name : {"codeforces", "atcoder"}) { auto builtin = lookupProfile(name); CHECK(!builtin.ok()); if (!builtin.ok()) CHECK(builtin.error().message.find("snapshot missing") != std::string::npos); }
+  auto p = synthetic(text).value(); CHECK(p.checkA3({"LOCAL", "GUARD"}).ok());
+  auto conflict = p.checkA3({"ONLINE_JUDGE", "WIN32"}); CHECK(!conflict.ok());
+  CHECK(conflict.error().message.find("ONLINE_JUDGE") != std::string::npos); CHECK(conflict.error().message.find("WIN32") != std::string::npos);
 }
 TEST(profile_lookup_user_directory_environment_embedded_and_path_forms) {
   test::TempDirectory temp;
@@ -182,7 +235,7 @@ TEST(profile_lookup_user_directory_environment_embedded_and_path_forms) {
   CHECK(!lookupProfile("absent", lookup, files).ok()); CHECK(!lookupProfile("BAD", lookup, files).ok());
   CHECK(!lookupProfile("mingw.toml", lookup, files).ok()); // Path form does not search by name.
   auto snapshotFiles = ProfileFiles{{"mingw.toml", test::read(profileFixture("mingw.toml"))}, {"mingw-predefined.txt", test::read(profileFixture("mingw-predefined.txt"))}};
-  auto embedded = lookupProfile("mingw", {}, snapshotFiles); CHECK(embedded.ok()); CHECK(embedded.value().exhaustive);
+  auto embedded = lookupProfile("mingw", {}, snapshotFiles); CHECK(embedded.ok()); CHECK(embedded.value().reproduced);
 }
 TEST(profile_lookup_environment_is_injected_for_posix_and_windows) {
   ProfileLookup lookup; lookup.windows = false;
@@ -219,10 +272,34 @@ TEST(profile_file_errors_and_relative_snapshot_lookup) {
   CHECK(loadProfile(temp.path / "mingw.toml").ok());
   temp.write("mingw-predefined.txt", "# metadata\nnot a macro\n");
   auto malformed = loadProfile(temp.path / "mingw.toml"); CHECK(!malformed.ok());
-  if (!malformed.ok()) CHECK(malformed.error().message.find("line 2") != std::string::npos);
+  if (!malformed.ok()) CHECK(malformed.error().message.find("snapshot line 1") != std::string::npos);
 }
 TEST(profile_toml_schema_accepts_escaped_description_and_quoted_schema_keys) {
   auto text = replace(allowProfile(), "description = \"Synthetic MinGW fixture\"", "'description' = \"Line 1\\nLine 2\\t\\u03B1\"");
   auto result = synthetic(text); CHECK(result.ok());
   if (result.ok()) CHECK_EQ(result.value().description, "Line 1\nLine 2\tα");
+}
+
+TEST(profile_native_model_states_and_missing_records) {
+  auto text = replace(test::read(profileFixture("mingw.toml")), "flags = [\"-DONLINE_JUDGE\"]", "flags = [\"-DONLINE_JUDGE\", \"-mtune=native\"]");
+  auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  snapshot = replace(snapshot, "# flag: -DONLINE_JUDGE", "# flag: -DONLINE_JUDGE\n# flag: -mtune=native");
+  snapshot = replace(snapshot, "# native-model: none", "# native-model: gcc-14.2-x86");
+  for (const auto& [name, scope] : nativeDependencies({CompilerFamily::gcc, 14, 2, 0})) if (scope == "tune") snapshot += "# state " + name + " undefined native-model\n";
+  snapshot = replace(snapshot, "# state __GCC_DESTRUCTIVE_SIZE undefined native-model", "# state __GCC_DESTRUCTIVE_SIZE defined-unknown native-model");
+  auto r = synthetic(text, snapshot); CHECK(r.ok()); if (!r.ok()) return;
+  CHECK_EQ(r.value().initialState("__GCC_DESTRUCTIVE_SIZE").state, MacroState::definedUnknown);
+  CHECK_EQ(r.value().initialState("__GCC_DESTRUCTIVE_SIZE").provenance.front(), FactOrigin::nativeModel);
+  CHECK_EQ(r.value().initialState("__x86_64__").state, MacroState::known);
+  CHECK(!synthetic(text, replace(snapshot, "# state __GCC_CONSTRUCTIVE_SIZE undefined native-model", "")).ok());
+  CHECK(!synthetic(text, snapshot + "# state __NOT_IN_MODEL unknown native-model\n").ok());
+}
+TEST(profile_command_snapshot_must_agree_and_only_link_flags_are_accepted) {
+  auto text = test::read(profileFixture("mingw.toml")), snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  CHECK(!synthetic(text, replace(snapshot, "# command-operation #define ONLINE_JUDGE 1", "# command-operation #define ONLINE_JUDGE 2")).ok());
+  CHECK(!synthetic(text, replace(snapshot, "# command-operation #define ONLINE_JUDGE 1", "#define ONLINE_JUDGE 1")).ok());
+  CHECK(!synthetic(text, snapshot + "# command-operation #define UNDECLARED 1\n").ok());
+  CHECK(synthetic(text + "\nlink=['-static','-Wl,--stack=268435456','-lstdc++exp']").ok());
+  CHECK(!synthetic(text + "\nlink=['-DBAD=1']").ok());
+  CHECK(!synthetic(text + "\nlink=['-O2']").ok());
 }

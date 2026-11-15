@@ -14,10 +14,14 @@ def merge(artifacts, output):
         names, provenance = set(), set()
         for path in paths:
             extra, comments = read_list(path)
+            if extra and not any('generate.py v2;' in c for c in comments):
+                raise ValueError(f'{path}: only v2 reachable-header inventories may be merged')
             names.update(extra)
             provenance.update(c for c in comments if c.startswith('# Scanned:'))
         names = {n for n in names if not reserved(n) and not standard(n, standard_names)}
-        header = ['# SPDX-License-Identifier: GPL-3.0-or-later',
+        header = ['# Roots: data/names/standard-headers.txt and every ext/pb_ds/ header.',
+                  '# Limitation: computed include operands are not followed.',
+                  '# SPDX-License-Identifier: GPL-3.0-or-later',
                   f'# A1 {library}; generator ci/extensions/generate.py v{VERSION}; merged {date.today().isoformat()}',
                   *sorted(provenance)]
         if not names:

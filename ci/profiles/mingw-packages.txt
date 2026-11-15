@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Exact package set at MINGW-packages f2010a2af323b9fcddb238a62dd19d36eb547aa8.
+# https://github.com/msys2/MINGW-packages/tree/f2010a2af323b9fcddb238a62dd19d36eb547aa8
+# gcc's PKGBUILD requires gcc-libs=14.2.0-1; remaining runtime/build dependencies
+# are pinned to that source tree's versions, including their transitive closure.
+# Source-tree versions are best evidence, not a byte manifest of PBOX's bundle.
+mingw-w64-x86_64-gcc-14.2.0-1-any.pkg.tar.zst
+mingw-w64-x86_64-gcc-libs-14.2.0-1-any.pkg.tar.zst
+mingw-w64-x86_64-binutils-2.42-2-any.pkg.tar.zst
+mingw-w64-x86_64-crt-git-12.0.0.r81.g90abf784a-1-any.pkg.tar.zst
+mingw-w64-x86_64-headers-git-12.0.0.r81.g90abf784a-1-any.pkg.tar.zst
+mingw-w64-x86_64-isl-0.26-1-any.pkg.tar.zst
+mingw-w64-x86_64-gmp-6.3.0-2-any.pkg.tar.zst
+mingw-w64-x86_64-mpfr-4.2.1-2-any.pkg.tar.zst
+mingw-w64-x86_64-mpc-1.3.1-2-any.pkg.tar.zst
+mingw-w64-x86_64-windows-default-manifest-6.4-4-any.pkg.tar.zst
+mingw-w64-x86_64-winpthreads-git-12.0.0.r81.g90abf784a-1-any.pkg.tar.zst
+mingw-w64-x86_64-libwinpthread-git-12.0.0.r81.g90abf784a-1-any.pkg.tar.zst
+mingw-w64-x86_64-zlib-1.3.1-1-any.pkg.tar.zst
+mingw-w64-x86_64-zstd-1.5.6-2-any.pkg.tar.zst
+mingw-w64-x86_64-gettext-runtime-0.22.5-2-any.pkg.tar.zst
+mingw-w64-x86_64-libiconv-1.17-4-any.pkg.tar.zst
