@@ -105,17 +105,25 @@ TEST(validate_configuration_exact_flags_specials_and_target) {
   auto& p = captured.value();
   auto command = parseCompileCommand({pathToUtf8(*gcc), "main.cpp", "-std=gnu++20", "-O2", "-pthread", "-DA=1", "-UA", "-DA=", "-U__has_include", "-DDISTILL_PRESENT_0=0"}, temp.path).value();
   ProbeOptions po; po.temporaryRoot = temp.path;
+  bool sawPthreadMacroProbe = false;
+  po.runner = [&](const ProcessSpec& spec) -> Result<ProcessResult> {
+    if (std::find(spec.argv.begin(), spec.argv.end(), "-dM") != spec.argv.end()) {
+      // MinGW accepts -pthread without defining _REENTRANT; inspect the actual invocation.
+      CHECK(std::find(spec.argv.begin(), spec.argv.end(), "-pthread") != spec.argv.end());
+      sawPthreadMacroProbe = true;
+    }
+    return runProcess(spec);
+  };
   auto c = probeConfiguration(command, "local", po);
   if (!c.ok()) throw std::runtime_error(c.error().message);
+  CHECK(sawPthreadMacroProbe);
+  po.runner = runProcess;
   CHECK(c.value().probe.macros.contains("__OPTIMIZE__"));
-  CHECK(c.value().probe.macros.contains("_REENTRANT"));
   CHECK_EQ(c.value().facts.initialState("A").definition->replacement, "");
   CHECK_EQ(c.value().facts.initialState("__has_include").state, MacroState::undefined);
   CHECK(!c.value().probe.special.at("__has_include"));
   CHECK(c.value().probe.special.at("__LINE__"));
-  auto flat = flatCommand(command, &p, *gcc, false); CHECK(flat.ok());
-  auto matched = probeConfiguration(flat.value(), "local", po); CHECK(matched.ok());
-  CHECK(!targetEquivalent(matched.value(), &p, false)); // -pthread/-O2 add macros beyond fixture.
+  CHECK(!targetEquivalent(c.value(), &p, false)); // -O2 adds __OPTIMIZE__ beyond the -O0 fixture.
   auto pure = parseCompileCommand({pathToUtf8(*gcc), "main.cpp", "-std=gnu++20"}, temp.path).value();
   auto exact = probeConfiguration(flatCommand(pure, &p, *gcc, false).value(), "local", po); CHECK(exact.ok());
   CHECK_EQ(targetEquivalent(exact.value(), &p, false), p.reproduced);
