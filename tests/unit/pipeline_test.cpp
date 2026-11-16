@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
 #include "core/pipeline/pipeline.h"
+#include "core/validate/preprocess.h"
 #include "evaluate.h"
 #include "profile.h"
 #include <algorithm>
@@ -163,6 +164,40 @@ TEST(pipeline_pruned_core_strip_keep_through_resolution) {
   auto r = f.run(); CHECK_EQ(r.artifact,"pruned"); CHECK(f.strippedKeepObserved);
   CHECK(r.bytes.find("int preserve") != r.bytes.npos); CHECK(r.bytes.find("distill: keep") == r.bytes.npos);
   CHECK(r.bytes.find("int unused") == r.bytes.npos);
+}
+TEST(pipeline_written_artifacts_only_name_original_sources) {
+  for (bool strip : {false,true}) {
+    // Root/header once guards, repeated and recursive includes, rewritten system
+    // includes, conditional resyncs and stripped multiline comments all produce
+    // generated lines. Exercise the actual files passed to the compiler.
+    Fixture f("#pragma once\n#include <cstdio>\n#if 1\n#include \"lib/ds.h\"\n#endif\n"
+              "#include \"lib/ds.h\"\nint main(){Fenwick f(10); return f.n != 10;}\n");
+    std::filesystem::create_directory(f.temp.path / "lib");
+    f.temp.write("lib/ds.h", "#pragma once\n#include \"ds.h\"\n#include \"vector\"\n"
+                 "/* header\ncomment */ struct Fenwick {int n; explicit Fenwick(int v):n(v){}};\n"
+                 "struct DSU {};\nint unused(){return 9;}\n");
+    f.options.stripComments = strip;
+    auto result = f.run();
+    CHECK_EQ(result.exitCode,0); CHECK_EQ(result.artifact,"pruned");
+    CHECK_EQ(result.bytes,f.built.at("pruned"));
+    CHECK(result.bytes.find("int unused") == result.bytes.npos);
+    for (const auto* artifact : {"raw","flat","pruned"}) {
+      const auto& bytes = f.built.at(artifact);
+      auto scan = take(scanDirectives(bytes));
+      std::size_t markers = 0;
+      for (const auto& l : scan.lines) if (l.directive && l.directive->name == "line") {
+        auto text = std::string_view(bytes).substr(l.begin,l.end-l.begin);
+        if (text.ends_with('\n')) text.remove_suffix(1);
+        SourceLocation at;
+        CHECK(take(parseLineMarker(text,at))); ++markers;
+        CHECK(at.file == "main.cpp" || at.file == "lib/ds.h");
+      }
+      CHECK(markers > 0);
+      CHECK(bytes.find("#define DISTILL_ONCE_") != bytes.npos);
+      if (std::string_view(artifact) == "raw") CHECK(bytes.find("#ifndef DISTILL_ONCE_") != bytes.npos);
+      else CHECK(bytes.find("#ifndef DISTILL_ONCE_") == bytes.npos);
+    }
+  }
 }
 TEST(pipeline_pruned_core_keep_and_unknown_name) {
   for (const auto& name : {"unused","missing"}) {

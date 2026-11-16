@@ -861,6 +861,15 @@ newlines remain untouched. Physical offset mappings cover retained family
 ranges, keep offsets/annotations, macro expansions and directive/marker ranges;
 removed occurrences disappear and ranges may split around new markers.
 
+Generated once guards keep null D2 provenance. The inliner establishes the
+guarded original filename before their opening directives, including for the
+root file, and restores source coordinates afterward. The resolver recovers
+their presumed coordinates from lexer-recognized generated markers, ignoring
+marker-shaped raw-string contents. Neither resolution nor rendering invents
+raw/flat/pruned filenames for generated lines. Raw contains full once guards;
+flat drops resolved guard conditions but retains their defines to suppress
+later inclusions. Pruned preserves these harmless defines as directives.
+
 The rendering invariant re-lexes actual output independently of that mapping.
 It compares every surviving token's spelling/kind and logical file/line, and
 source-directive start/end boundaries and order. Directive tokens share their

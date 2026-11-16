@@ -197,6 +197,24 @@ TEST(resolve_fake_a3_approximate_snapshot_and_generated_unknown) {
   auto unknown = resolveConditions(input, c, e);
   CHECK(unknown.ok()); CHECK(unknown.value().unknownInUserCode);
 }
+TEST(resolve_generated_lines_use_original_presumed_coordinates) {
+  Fake e;
+  auto c = parseCompileCommand({"g++", "entry.cpp"}, std::filesystem::current_path()).value();
+  auto input = raw("#if 1\n#define GENERATED\n#endif\n");
+  for (auto& line : input.lineMap) line.reset();
+  auto resolved = resolveConditions(input,c,e);
+  CHECK(resolved.ok());
+  CHECK_EQ(resolved.value().text,"#line 2 \"entry.cpp\"\n#define GENERATED\n#line 4 \"entry.cpp\"\n");
+
+  // Only actual generated directives reset coordinates. The marker-looking
+  // line inside this literal must not change the later generated define.
+  input = raw("#line 20 \"lib/ds.h\"\nauto s=R\"(\n#line 99 \"raw.cpp\"\n)\";\n"
+              "#if 1\n#define GENERATED\n#endif\n");
+  for (auto& line : input.lineMap) line.reset();
+  resolved = resolveConditions(input,c,e);
+  CHECK(resolved.ok());
+  CHECK(resolved.value().text.find("#line 24 \"lib/ds.h\"\n#define GENERATED") != std::string::npos);
+}
 TEST(resolve_fake_spliced_function_and_multiline_macro) {
   Fake e; ResolveOptions o; o.requirements.integers = IntegerModel{};
   auto r = resolve("#define F\\\n(x) (x)\n#if F(1)\nx\n#endif\n", e, o);

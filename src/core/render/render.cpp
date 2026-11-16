@@ -36,7 +36,9 @@ struct Input {
       if (!contains(d,{c.begin,c.end})) throw Error{"deletion splits comment at byte " + std::to_string(c.begin)};
     // Interpret only lexer-recognized markers; a marker-shaped raw-string line
     // is ordinary source. D2 provenance overrides the presumed coordinates.
-    SourceLocation at{"flat.cpp",1};
+    // An unset presumed location must never invent an internal artifact name.
+    // Inliner output establishes the original file before generated guards.
+    SourceLocation at{"",1};
     std::size_t physical = 1;
     for (std::size_t begin = 0; begin < m.text.size(); ++physical) {
       auto end = m.text.find('\n',begin); if (end == m.text.npos) end = m.text.size();
@@ -315,7 +317,7 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
     auto& p = out.provenance;
     p.text.clear(); p.lineMap.clear(); p.generatedMarkers.clear(); p.sourceDirectives.clear();
     p.keepOffsets.clear(); p.annotations.clear(); p.expansions.clear();
-    SourceLocation current{"flat.cpp",1};
+    SourceLocation current{"",1};
     auto append = [&](std::string_view bytes, std::optional<SourceLocation> at) {
       if (bytes.size() > 128 * 1024 * 1024 - p.text.size()) throw Error{"rendered output size limit exceeded"};
       for (char c : bytes) {
@@ -352,6 +354,7 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
           std::all_of(comments.begin(),comments.end(),[&](auto c) { return in.deleted({c.begin,c.end}); })) continue;
       const auto at = in.locations.at(l.firstLine-1);
       if (forceMarker || current != at) {
+        if (at.file.empty()) throw Error{"missing source location for rendered line " + std::to_string(l.firstLine)};
         if (!p.text.empty() && p.text.back() != '\n') throw Error{"no safe marker boundary at source line " + std::to_string(l.firstLine)};
         const auto begin = p.text.size(); append(markerText(at),{});
         p.generatedMarkers.push_back({begin,p.text.size()}); current = at;

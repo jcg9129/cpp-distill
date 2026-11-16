@@ -48,6 +48,37 @@ class ReleaseTests(unittest.TestCase):
         text = (release.ROOT / "LLVM-LICENSE.txt").read_text()
         self.assertIn("LLVM Exceptions to the Apache 2.0 License", text)
 
+    def test_byte_exact_files_disable_checkout_conversion(self):
+        manifest = json.loads((release.ROOT / "ci/release/licenses.json").read_text(encoding="utf-8"))
+        # The policy inputs are hashed by cmake/EmbedNames.cmake as well.
+        names = sorted(set(manifest) | set(release.DOCUMENTS) |
+                       {"data/names/adl.txt", "data/names/extension-coverage.txt"})
+        result = subprocess.check_output(["git", "check-attr", "-z", "text", "eol", "--", *names],
+                                         cwd=release.ROOT, timeout=30).decode().split("\0")
+        attributes = {(result[i], result[i + 1]): result[i + 2] for i in range(0, len(result) - 1, 3)}
+        for name in names:
+            with self.subTest(file=name):
+                self.assertTrue(attributes[name, "text"] == "unset" or attributes[name, "eol"] == "lf",
+                                f"{name}: .gitattributes must preserve committed bytes")
+
+    def test_crlf_converted_notice_fails_binary_checksum_with_checkout_hint(self):
+        with self.temp() as directory:
+            root = Path(directory)
+            (root / "ci/release").mkdir(parents=True)
+            manifest = release.ROOT / "ci/release/licenses.json"
+            shutil.copy2(manifest, root / "ci/release/licenses.json")
+            for name in json.loads(manifest.read_text(encoding="utf-8")):
+                shutil.copy2(release.ROOT / name, root / name)
+            release.verify_licenses(root)
+            for name in json.loads(manifest.read_text(encoding="utf-8")):
+                path = root / name
+                original = path.read_bytes()
+                self.assertNotIn(b"\r\n", original)
+                path.write_bytes(original.replace(b"\n", b"\r\n"))
+                with self.subTest(file=name), self.assertRaisesRegex(ValueError, name + ".*checkout line endings"):
+                    release.verify_licenses(root)
+                path.write_bytes(original)
+
     def sdk(self):
         measurements = dict(status="success", platform="linux-x86_64", llvm_version="23.1.5", sdk_rev=1,
                             source_archive={"sha256": "c" * 64},
@@ -106,6 +137,8 @@ class ReleaseTests(unittest.TestCase):
         (root / "isolated" / ("distill_prune_worker" + suffix)).write_bytes(b"do not ship")
         for name in release.DOCUMENTS:
             shutil.copy2(release.ROOT / name, root / name)
+        (root / "ci/release").mkdir(parents=True)
+        shutil.copy2(release.ROOT / "ci/release/licenses.json", root / "ci/release/licenses.json")
         value = dict(self.identity, platform=sdk_platform, sdk={"source_sha256": "c" * 64})
         (root / "results/release.json").write_text(json.dumps(value))
         (root / "results/BUILDINFO.txt").write_text("compiler and flags provenance\n")
@@ -124,15 +157,20 @@ class ReleaseTests(unittest.TestCase):
                 if archive.suffix == ".zip":
                     with zipfile.ZipFile(archive) as stream:
                         members = stream.namelist()
+                        documents = {Path(p).name: stream.read(p) for p in members if Path(p).name in release.DOCUMENTS}
                 else:
                     with tarfile.open(archive) as stream:
                         members = [p.name for p in stream if p.isfile()]
+                        documents = {Path(p).name: stream.extractfile(p).read() for p in members if Path(p).name in release.DOCUMENTS}
                         binary = next(p for p in stream.getmembers() if p.name.endswith("/distill"))
                         if os.name != "nt":
                             self.assertTrue(binary.mode & 0o111)
                 expected = set(release.DOCUMENTS) | {"BUILDINFO.txt", "distill.exe" if sdk_platform.startswith("windows-") else "distill"}
                 self.assertEqual({Path(p).name for p in members}, expected)
                 self.assertEqual(len(members), len(expected))
+                for name, data in documents.items():
+                    self.assertEqual(data, (release.ROOT / name).read_bytes(), name)
+                    self.assertNotIn(b"\r\n", data, name)
 
     def test_wrong_binary_version_cannot_be_packaged(self):
         with self.temp() as directory:
@@ -141,6 +179,18 @@ class ReleaseTests(unittest.TestCase):
             with patch.object(release.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "distill wrong\n", "")):
                 with self.assertRaises(ValueError):
                     release.package("linux-x86_64", root)
+            self.assertFalse((root / "release-assets").exists())
+
+    def test_package_checks_the_packaged_notice_bytes(self):
+        with self.temp() as directory:
+            root = Path(directory)
+            self.fixture(root, "windows-x86_64")
+            notice = root / "LLVM-LICENSE.txt"
+            notice.write_bytes(notice.read_bytes().replace(b"\n", b"\r\n"))
+            with patch.object(release.subprocess, "run") as run:
+                with self.assertRaisesRegex(ValueError, "checksum mismatch: LLVM-LICENSE.txt.*checkout line endings"):
+                    release.package("windows-x86_64", root)
+                run.assert_not_called()
             self.assertFalse((root / "release-assets").exists())
 
     def bundle(self, root):
