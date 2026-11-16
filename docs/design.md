@@ -770,6 +770,44 @@ and `data` common), association, and whole-family aggregation, unique bytes
 and transitive causes apart (D3-1-7). Retaining most of a library is an
 acceptable first result; rules are weakened only with a soundness argument.
 
+Clarifications from D3a (implementation, reviewed):
+
+- **Dependent member and qualified lookup** (`x.f()`, `x.template f<T>()`,
+  `M::op`, `T::value`, `typename Tr::type`) need no extra rule and don't
+  disable pruning: members go only with their whole record (out-of-line
+  members and member specializations included), and the record or enum that
+  carries the lookup is reached through the type carriers (template arguments
+  spelled in kept text, AST edges of seen instantiations, return and alias
+  chains, kept bases). A selection between user types by a system trait
+  (`std::conditional_t<sizeof(long) == 4, A, B>`) names every candidate in
+  kept text. Template arguments can't name a namespace.
+- **Pragmas:** source pragmas stay and pin a family they cross; only the
+  audited ones allow pruning: `GCC optimize`, `GCC target`,
+  `GCC push_options`/`pop_options`/`reset_options`, `GCC diagnostic`,
+  `clang diagnostic`, `pack`, `message`, `warning`, bare `once`. They change
+  code generation, diagnostics or layout, never which declarations lookup
+  needs. Any other pragma, and any `_Pragma`-generated one, disables pruning.
+- **Supported forms are versioned:** the pruning-policy version documents the
+  supported attributes, AST forms and semantic options; an unsupported one
+  disables the whole analysis (e.g. symbol-bearing attributes, `asm`,
+  `va_arg`, GNU statement expressions, computed goto, coroutines).
+- **Paste provenance** may be over-approximated by the whole enclosing macro
+  invocation; uncertainty disables pruning.
+- **Inertness:** the whitelist is an upper bound; the implementation
+  recognizes a positive syntactic subset (no constant evaluator) and reports
+  the rest as not inert.
+- **Ownership:** a shared syntactic unit has one physical owner and several
+  unioned retention obligations; bytes are counted once.
+- **Keep requests** bind to physical declaration occurrences; a request that
+  can't be bound disables pruning, never drops the request.
+- **Attribution:** family-owned and structural bytes are reported apart; the
+  primary cause is a deterministic policy attribution, not a minimal proof.
+- **Registry:** an unverified row is kept conservatively with its
+  verification status; it never justifies removing a same-named user hook.
+- **Parse:** the extractor uses Clang's cc1 directly; it sets the driver's
+  parsing defaults explicitly (`-fgnuc-version=4.2.1`, exceptions, math
+  errno, deprecated macros) and registers builtins before parsing.
+
 ### 4.8 Rendering
 
 - Edit ranges are byte ranges in the immutable `flat.cpp` buffer, covering
