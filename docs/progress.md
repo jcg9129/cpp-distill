@@ -29,7 +29,8 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
 | D3 pruning | D3a–D3d implemented: analysis, rendering, adversarial/checker cases, corpus measurement harness and first-measurement fixes; complete except user corpus measurement, pending SDK CI verification |
 | D4a runtime CLI and caide port | implemented: repeated `--verify-run`, individual assertions/reviews for all 81 caide cases; real CLI/extraction execution requires SDK CI |
-| D4 remainder–D5 | compatibility matrix, remaining checker/release work; see design §7 |
+| D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
+| D4 remainder–D5 | remaining checker/release work; see design §7 |
 
 ## D1 findings (2026-11-15)
 
@@ -288,3 +289,31 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
   proposed design wording are in root `D4A-SUMMARY.md`. No LLVM is linked here;
   approved design v8 is unchanged. D4's compatibility matrix and further checker
   work remain outside D4a.
+
+
+## D4b compatibility matrix (2026-11-16)
+
+`.github/workflows/matrix.yml` adds independent `matrix (<platform>)` jobs for
+all five `llvm-23.1.5-1` SDK platforms. It follows the D1 build toolchains,
+statically linked runtimes and resource embedding already in CMake; it changes
+no required job or ruleset. PR path filters, weekly runs and manual dispatch
+exercise moved CLI binaries after deletion of SDK/build/downloads. macOS arm64
+runs on macos-14 to cover the actual deployment minimum. Linux x86_64 reuses
+the AlmaLinux 8 entry point with its system GCC.
+
+`ci/matrix/` checks real CLI help, no-prune/default pruning, a typical library,
+profile command facts, comment stripping, sample comparison, Unicode paths,
+Apple default-g++ refusal and bits/stdc++.h parsing under all six C++17/20/23
+spellings. Every installed Homebrew GCC and Linux toolset/system/official GCC
+14.2/15.2 contributes table rows. Parse/worker errors cannot pass as a flat
+fallback. Both moved executables are gated by the D1 dependency audits.
+
+The Linux x86_64 cross checks assert a compatible Codeforces check compiler and
+skipped target execution, including the baseline. Ubuntu MinGW's missing
+libstdc++exp is tested as an exact shipped-profile failure before a clearly
+labelled build-only adapter omits that one library. No reproduced-toolchain or
+judge-equivalence claim is made. Per-platform TSV/Markdown/JSON tables and all
+logs/reports are uploaded and summarized even on failures. See
+[`src/core/README.md`](../src/core/README.md#d4b-compatibility-matrix) for dispatch,
+coverage, adapter limits and acceptance rules. Local validation is LLVM-free;
+SDK linkage and every platform observation remain for the first CI run.
