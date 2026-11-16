@@ -1,13 +1,16 @@
 # cpp-distill design
 
-Status: **approved v7**, 2026-11-15 (user): v6 plus the §4.3 amendment (judge
-command, build provenance, special builtins, host-dependent options, A5),
-challenged by Codex in two rounds (`docs/reviews/2026-11-15-codex-profiles-r1.md`,
-`-r2.md`, cited as *P1-n*, *P2-n*). Opus drafted v1; Codex
-challenged v1–v5 (`docs/reviews/2026-11-15-codex-design-r1.md` … `-r5.md`,
-cited as *R1-n* … *R5-n*). Round 5 found no blocker for D2; v6 closes its two
-D3 holes (§4.7: predefined macros used as values, template-selected aliases).
-Before D3 starts, Codex gets a short round on the v6 pruning rules.
+Status: **approved v8**, 2026-11-16 (user): v7 plus the D3 pruning amendment
+(A6, §4.7, §4.8, §4.9, §6, §7), after Codex's two rounds on the pruning rules
+against v7 and D2 (`docs/reviews/2026-11-16-codex-pruning-r1.md`, `-r2.md`,
+cited as *D3-1-n*, *D3-2-n*). v7 (2026-11-15) was v6 plus the §4.3 amendment
+(judge command, build provenance, special builtins, host-dependent options,
+A5), challenged by Codex in two rounds
+(`docs/reviews/2026-11-15-codex-profiles-r1.md`, `-r2.md`, cited as *P1-n*,
+*P2-n*). Opus drafted v1; Codex challenged v1–v5
+(`docs/reviews/2026-11-15-codex-design-r1.md` … `-r5.md`, cited as *R1-n* …
+*R5-n*). Round 5 found no blocker for D2; v6 closed its two D3 holes (§4.7:
+predefined macros used as values, template-selected aliases).
 
 `distill` turns a C++ solution that `#include`s a personal library into one
 self-contained `.cpp`, removes code it can show unused, and checks the result
@@ -101,6 +104,31 @@ these, and only these; the report lists each one an output depended on, and
   environment is the judge's.
 - **A5** (user, 2026-11-15) The judge's compiler and command add no
   non-reserved macro beyond the profile's macro operations.
+- **A6** (user, 2026-11-16) The judge's standard library headers call a
+  user-declared function, function template or hidden friend (unqualified,
+  through argument-dependent lookup, or through a customization point object)
+  only under a name in `distill`'s ADL list, or as an operator function. The
+  list is the names the C++ standard specifies as found by argument-dependent
+  lookup from library code or as customization points (`swap`, `iter_swap`,
+  `iter_move`, `begin`, `end`, `cbegin`, `cend`, `rbegin`, `rend`, `crbegin`,
+  `crend`, `size`, `ssize`, `data`, `cdata`, `empty`, `get`, …), kept in
+  `data/names/adl.txt` (D3-1-2). The registry is versioned per supported
+  dialect and records for each name its lookup mechanism and normative clause
+  (D3-2-2). It covers library and language-generated lookup, including
+  unevaluated probes and constraints: at least swapping and iterator
+  customization (`swap`, `iter_move`, `iter_swap`), range access and range-for
+  (`begin`, `end`, `rbegin`, `rend`, `size`), structured bindings (`get`),
+  error-code conversion (`make_error_code`, `make_error_condition`),
+  comparison customization (`strong_order`, `weak_order`, `partial_order`),
+  chrono parsing (`from_stream`) and the valarray mathematical functions
+  (`abs`, `acos`, … `tanh`). It distinguishes public CPO names from the names
+  they look up; names kept only because a CPO of that name exists are harmless
+  over-retention. Member customization, callbacks (a function passed as a
+  value) and permitted template specializations (`hash`, `formatter`,
+  `tuple_size`, `tuple_element`, iterator traits, range variable templates)
+  are not in the registry; separate rules cover them (§4.7). A6 covers the
+  standard headers only, not GNU extension headers (§4.7 preconditions); an
+  unsupported dialect disables pruning.
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -211,6 +239,7 @@ order minus GCC's own compiler-internal include directory (Clang's embedded
 resource headers replace it, placed so `include_next` from libstdc++ reaches
 them), the probed triple and dialect, the modelled flags. Clang keeps its own
 predefined macros. A parse error in a system header disables pruning.
+Which compiler is probed for the parse: §4.7 "Parse configuration".
 
 A **cross compiler** for the judge's target (e.g. `x86_64-w64-mingw32-g++` for
 Codeforces, `brew install mingw-w64`) can give verification `target` for builds (§4.6);
@@ -478,7 +507,7 @@ the user's `-I`/`-iquote` paths, so a missed inline is a build error.
 | baseline | local (compile command as given) | builds; runs samples |
 | `raw` | local | preprocess check against the original; builds; runs equal the baseline |
 | `flat` | the first configuration that satisfies the resolution: a `check` compiler from the profile, else the local compiler with the profile's macro operations replacing local `-D`/`-U` | preprocess check `raw` vs `flat` in that configuration; builds; runs equal the original built in the same configuration |
-| `pruned` | same as `flat` | builds; static name invariant (§4.7); runs equal `flat`'s |
+| `pruned` | same as `flat` | builds; static name invariant (§4.7); rendering invariant (§4.8); runs equal `flat`'s |
 
 The **preprocess check** compares the two files' `-E` output in that
 configuration *with* line markers: the sequence of tokens together with each
@@ -554,69 +583,135 @@ Clarifications from D2e (implementation, reviewed):
 
 ### 4.7 Pruning
 
-Runs on `flat.cpp` with the Clang parse of §4.2, **only if no unknown
-conditional remains in user code** (R4-H, R4-I, R4-J) **and no predefined
-macro is used as a value** (R5-1): if any identifier token in user code
-outside `#if`/`#elif` conditions (including `#define` bodies) names a macro
-that Clang's parse environment or the judge configuration predefines (both
-sets known: Clang's from the parse, the judge's from the snapshot or the
-facts), and the two disagree on its definition, or either set is incomplete
-for it, pruning is disabled. Under these two conditions the user code Clang
-analyses expands to the same tokens as the code the judge compiles, up to
-system-header macros, which A2 (b) covers; there is no unparsed user text
-whose dependencies would have to be guessed. Without a
-profile, any compiler, platform or judge conditional (`#ifdef __GNUC__`,
-`#ifndef ONLINE_JUDGE`) therefore leaves the result at `flat`; with a profile
-snapshot such conditions resolve. Also disabled by an include of a system
-header outside the standard-header list and by non-standard libraries
-(§1.2).
+**Input:** the checked `flat` bytes and their D2 provenance: the line map,
+which `#line` markers are generated, the directive inventory, the resolution
+record and its disabling reasons, and the `// distill: keep` annotations
+with the declarations they precede, extracted before any comment stripping
+(D3-2-5). `unknownInUserCode` is authoritative (generated
+`#pragma once` guards count as user code); a Clang parse that happens to
+take one branch never clears it.
+
+**Preconditions.** Pruning runs **only if no unknown conditional remains in
+user code** (R4-H, R4-I, R4-J) **and no predefined macro is used as a value**
+(R5-1, D3-1-3): if any macro expansion whose expansion location is in user
+code outside `#if`/`#elif` conditions expands a macro that Clang's parse
+environment or the judge configuration predefines, and the two definitions in
+effect at that point disagree, or either is not known, pruning is disabled.
+Expansions are recorded with Clang's preprocessor callbacks, so names
+synthesized by `##` and found on rescanning (`CAT(__GNUC, __)`) count like
+spelled ones; the judge's definition in effect is the resolver's state at
+that point (so a user `#undef __clang__` is followed), from the snapshot or
+the facts.
+
+**Token pasting** (D3-2-1). A2 (b) doesn't make expanded user tokens equal:
+a user macro can paste a system macro's value (`JOIN(pick, BUFSIZ)` gives
+`pick8192` with glibc and `pick512` with MinGW). So a `##` in a user macro
+expansion reached in the parse disables pruning if any of its operand tokens,
+after argument expansion, comes from the expansion of a system-header macro
+or of a predefined macro. Operands made only of tokens spelled in user code
+and expanded from user macros are the same on the judge (no unknown
+conditional remains in user code, and A2 protects user macros).
+
+Without a profile, any compiler, platform or judge conditional
+(`#ifdef __GNUC__`, `#ifndef ONLINE_JUDGE`) therefore leaves the result at
+`flat`; with a profile snapshot such conditions resolve. Also disabled by an
+include of a system header outside the standard-header list, by an include
+of a GNU extension header (`ext/…`, `bits/extc++.h`) whose lookup surface
+hasn't been audited (D3-2-3: `<ext/rope>` calls `copy_n` unqualified); D3
+audits `ext/pb_ds/` and lists it as covered or not, by
+non-standard libraries (§1.2), and by a parse error, an unsupported
+construct or a limit anywhere: an error-recovery AST is never analysed.
+
+**What the preconditions give** (D3-1-4, D3-2-1). With them, the pasting
+rule and A2 (b), the user code Clang analyses expands to the same identifiers
+as the code the judge compiles; the values that system macros supply (such
+as `BUFSIZ`) may differ. This is a statement about preprocessing only. It does not make the
+library's declarations, layouts, overload resolution or template selection in
+Clang's parse the judge's (the parse may use another target, §4.2, and other
+headers). So the keep rules never treat a missing AST edge *from system code
+into user code* as evidence that a user declaration is unused: such calls
+are covered by A6 and the never-removed ADL names, and user specializations
+of system templates by rule 3 and the roots. AST edges from system code are
+positive evidence only.
+
+**Parse configuration** (D3-1-1). Clang parses in a configuration derived
+from the selected `flat` checking configuration (§4.6): its probed triple,
+search lists (as §4.2) and dialect, its effective macro operations (the
+profile's replacing local `-D`/`-U`, in order, after Clang's predefinitions),
+and its semantic options translated to Clang's. Options without a Clang
+translation are listed in the report; one that isn't on the
+semantics-inert list disables pruning. The report names the parse
+configuration separately from the checking configuration. A `target` level
+describes the checking configuration; it is not a claim that Clang's
+semantics are the judge's.
 
 **Data model:** *entities* (Clang declarations, user and system),
 *retention families* (indivisible sets of user entities), *edit ranges*
-(disjoint token ranges in `flat.cpp`, one or more per family). Overlapping
-retention obligations are merged with union-find over families; source ranges
-are never merged.
+(disjoint byte ranges in the immutable `flat.cpp` buffer, one or more per
+family). Overlapping retention obligations are merged with union-find over
+families; source ranges are never merged. Original and presumed (`#line`)
+locations are for provenance and the report only, never for editing
+(several physical copies can share an original location).
 
-**Families:**
+**Families and ownership** (D3-1-6). Every user token belongs to exactly one
+family or to a structural shell; an unrecognized declaration is pinned with
+its dependencies.
 
 - a top-level declaration group (`int a, b;`, `struct S {…} s;`);
-- a record with every member and its out-of-line member definitions;
+- a record with all its lexical contents: members, friends (including hidden
+  friend definitions), nested declarations, and its out-of-line member
+  definitions; a non-inert static data member definition is a root (rule 1)
+  and so keeps its record;
 - an overload set: all non-member functions and function templates with the
   same name in the same namespace, with their redeclarations;
 - a template family: primary, partial and explicit specializations,
   deduction guides; a user specialization of a system template (`std::hash`)
   is its own family;
 - an enum; a typedef or alias declaration; a namespace alias; a
-  using-declaration or using-directive; a variable with its redeclarations.
+  using-declaration or using-directive; a concept; a variable with its
+  redeclarations (a structured binding declaration is one variable family);
+- roots by kind: a namespace-scope `static_assert`, an explicit instantiation
+  declaration or definition.
 
-**Conditional blocks:** after resolution only conditionals in system
-headers remain, so user code has none (pruning precondition). Directives in
-user code that remain (`#define`, `#undef`, `#pragma`, system `#include`) are
-never removed; a family whose range crosses one is pinned.
+Local declarations belong to their enclosing family. Namespaces and linkage
+specifications (`extern "C" { … }`) are *shells*: they don't root their
+contents; an emptied shell goes only if its name no longer appears.
 
-Never removed in the first version: macro definitions, record members,
-declarations produced by a macro invocation, namespaces (an empty
-`namespace N {}` goes only if `N` no longer appears), **every user
+**Directives.** After resolution only conditionals in system headers remain,
+so user code has none (pruning precondition). Source directives in user code
+that remain (`#define`, `#undef`, `#pragma`, system `#include`) are never
+removed; a family whose range crosses one is pinned (a function containing a
+`#define` stays whole). Generated `#line` markers (D2 provenance, not their
+spelling) are rendering metadata, not directives: they don't pin, and §4.8
+recomputes them (D3-1-8).
+
+Never removed in the first version: macro definitions, the members of a kept
+record (a record goes only as a whole), declarations produced by a macro
+invocation (the whole invocation and everything it declares is pinned), **every user
 non-member operator family** (R3-4), every namespace-scope
 `using`-directive and `using`-declaration (lookup depends on them without
 naming them, R4-I), every `extern "C"` function or variable definition
 (the C library and other external code can call or reference them by name,
-R4-K), and every function template named
-`begin`, `end`, `cbegin`, `cend`, `rbegin`, `rend`, `size`, `data`, `empty`,
-`swap` or `get` with a parameter of template-parameter type.
+R4-K), every user specialization of a system template whose template
+arguments name no user type, and **every user function, function template or
+hidden friend whose name is in the ADL list** (A6, D3-1-2), whatever its
+parameters.
 
 **Indexed names** (for the name rule): the names a family declares at
-namespace scope: record, enum, typedef/alias, function, variable, template
-and namespace-alias names, and unscoped enumerators. Member names, template
-parameter names and local names are not indexed.
+namespace scope: record, enum, typedef/alias, function, variable, template,
+concept and namespace-alias names, and unscoped enumerators. Member names,
+template parameter names and local names are not indexed.
 
 **Keep rules**, to a fixpoint:
 
 1. **Roots:** `main`; `// distill: keep`; `--keep`; anything referenced from
    `asm` or by `alias`, `section`, `used`, `constructor`, `destructor`, `weak`,
-   `visibility` attributes; replacement `operator new`/`delete`; pinned and
-   never-removed families; **every variable not on the inert whitelist**
-   (R3-3). The whitelist is positive: a namespace-scope variable of scalar
+   `visibility` attributes (an `asm` or attribute form `distill` can't
+   interpret disables pruning); replacement `operator new`/`delete`; pinned and
+   never-removed families; the root kinds above; **every variable with static
+   or thread storage duration** (namespace scope, static data member, or function-local
+   `static`/`thread_local`, the last through its enclosing function) **not on the
+   inert whitelist** (R3-3). The whitelist is positive: a variable of scalar
    type (arithmetic, enum, pointer) or array of scalars, whose initializer is
    absent (zero-initialization) or a constant expression built only from
    literals, enumerators, other whitelisted `const`/`constexpr` variables,
@@ -632,53 +727,99 @@ parameter names and local names are not indexed.
    dependent or member types anywhere in the chain (R5-2) — or `std::size_t`,
    `std::ptrdiff_t` or an `<cstdint>` type.
    Everything else, including every class-type variable whatever its
-   constructor and `constinit` or `constexpr` status, is a root.
+   constructor and `constinit` or `constexpr` status, is a root. A
+   function-local variable without static storage is never a root by itself.
 2. **Name rule:** a family is kept if one of its indexed names appears as an
    identifier token in the kept text outside the family itself (kept
    families, macro definitions, unparsed branches, all never-removed text).
    Literal suffixes count as the name of their `operator""`. Comments and
-   string literals don't count.
+   string literals don't count. The rule reads source tokens; names that
+   only pasting produces are found by rule 4 in the parse, and pasting that
+   involves predefined macros is excluded by the preconditions.
 3. **Association rule:** a non-member function or specialization family is
    kept if its signature or template arguments name a kept user record or
    enum.
-4. **AST edges:** every declaration referenced from the AST of a kept family,
-   with implicit code and template instantiations traversed, and through
-   system entities (the instantiated bodies of system templates are traversed
-   for references back to user entities). Instantiations map to their primary.
+4. **AST edges:** every declaration referenced from the AST of a kept
+   family. Covered constructs are enumerated and tested (D3-1-5):
+   expressions, types, base classes, default arguments and default template
+   arguments, constraints and requires-expressions, implicit special members,
+   constructors, destructors and conversions called implicitly, template
+   patterns and their known instantiations (instantiations map to their
+   primary; user specializations keep their own identity), and the instantiated
+   bodies of system templates traversed for references back to user
+   entities. Callbacks follow from these edges (a function passed as a
+   value is referenced where it is passed).
+5. **Dependent names** (D3-2-4): for every unqualified dependent call name
+   in a kept user template pattern (including names produced by user-only
+   pasting, from the AST), every user non-member family with that name
+   anywhere in the translation unit is kept, hidden friends and later
+   declarations included, without filtering by Clang's viability or the
+   instantiations it saw. A construct the traversal doesn't support
+   pins its family; if its dependencies can't be bounded, pruning is disabled.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. It catches range and editing
-bugs without a compiler; it is not an equivalence proof.
+bugs without a compiler; it is not an equivalence proof, and it can't see
+pasted names.
 
 **Measure before refining:** the report gives kept bytes per rule; D3 runs on
-the user's library before any rule is made finer.
+the user's library before any rule is made finer, measuring separately the
+retention caused by operator roots, using-declarations, class-type globals,
+the ADL names, name collisions (`using namespace std` makes `size`, `get`
+and `data` common), association, and whole-family aggregation, unique bytes
+and transitive causes apart (D3-1-7). Retaining most of a library is an
+acceptable first result; rules are weakened only with a soundness argument.
 
 ### 4.8 Rendering
 
-- Edit ranges are token ranges in `flat.cpp`. A range that begins or ends
-  inside a macro expansion, or touches a retained token or directive, pins
-  the family.
-- The output is rendered in one pass from the immutable `flat.cpp` text plus
-  the deletions; a line is removed only if a deletion covers all its tokens; a
-  comment is removed only if it lies inside a deleted range.
-- `#line` markers (when §4.4 requires them) are recomputed at render time.
-- `--strip-comments` replaces each comment by one space, or by its newlines
-  for multi-line comments.
-- All checks run on the exact bytes that are written.
+- Edit ranges are byte ranges in the immutable `flat.cpp` buffer, covering
+  complete syntactic declarations with their template prefixes, attributes,
+  declarators and terminators (D3-1-9). A range that begins or ends inside a
+  macro invocation, shares one with retained text, or touches a retained token
+  or source directive, pins every family it touches.
+- The output is rendered in one pass from `flat.cpp` plus the deletions.
+  Deletions may leave other tokens on a line; a line is removed only if a
+  deletion covers all its tokens; a comment is removed only if it lies
+  inside a deleted range.
+- `#line` markers (§4.4) are recomputed from the D2 provenance after deletion
+  and inserted only at line starts outside directives, comments and raw
+  strings.
+- **Rendering invariant** (D3-1-11): the output is lexed again; every
+  surviving token must have its intended logical file and line, and the
+  retained source directives must keep their token sequence and order.
+  Failure rejects the candidate.
+- `--strip-comments` (D3-1-10) is part of rendering every artifact (`raw`,
+  `flat`, `pruned`) and keeps token spellings, directive boundaries and
+  logical lines: a comment outside a directive becomes one space, or its
+  newlines for a multi-line comment; a comment inside a directive's logical
+  line (including one spanning lines) becomes one space, and the following
+  line is resynchronised with a marker. Where that isn't possible the comment
+  stays.
+- All checks run on the exact bytes that are written (D3-1-12): every
+  transformation, comment stripping and markers included, finishes before an
+  artifact is checked; a fallback is written only in its own checked form.
+  `-o` writes a temporary file and renames it after the checks; stdout gets
+  nothing before the checks finish.
 
 ### 4.9 Report
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A5) the output relied on. Then one
+date, option classes, the assumptions (A1–A6) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports
 reachability, `#endif` whether its block was resolved or kept; generated
 `#pragma once` guards have no original location but count as user code), one line per family with fate and reason (`root: not inert
 (class type)`, `name "lcm" at main.cpp:12`, `associated with Mint`,
-`never removed: operator`, `referenced by …`, `pinned: …`, `unreachable`),
-kept bytes per rule, locations in the original files.
+`never removed: operator`, `never removed: ADL name (A6)`, `referenced by …`,
+`pinned: …`, `removed: outside the retention closure`), kept bytes per rule
+(primary cause and transitive bytes apart), locations in the original files.
+The header also names the parse configuration, every pruning-disable
+reason, the pruning-policy version, the ADL registry version and the dialect
+and extension coverage used (D3-2-7); A6 is listed whenever a family was
+removed; a failed candidate's analysis is reported but certifies nothing
+about the artifact written.
 
 D2e: the report keeps the resolution's own provenance separate from the
 facts each configuration's rerun observed (matching decisions need not use
@@ -769,6 +910,22 @@ C++20, CMake ≥ 3.24, exactly one pinned LLVM version, no compatibility layer.
   `requires`, a system macro calling a user function, a weak library hook;
   R5: `JOIN(pick, __GNUC__)` in a `requires`, `Select<__GNUC__>::type`
   global, a standard-header fixture macro calling a user function.
+- **D3 pruning cases** (D3-1-13), each asserting retention or refusal, not
+  only a passing build: the LP64/LLP64 `iter_swap` ADL case, a pasted
+  predefined name (`CAT(__GNUC, __)`), a multi-line comment inside a
+  `#define` under `--strip-comments`, a generated `#line` inside a removable
+  function, a `#define` inside a removable-looking function, function-local
+  vs static-storage variables, concepts, hidden friends, explicit
+  instantiations, specializations of system templates, `__LINE__` after a
+  deletion on a shared line, and forced bad removals that build and match
+  samples (documented checker limits); `JOIN(pick, BUFSIZ)`; a dependent
+  call found by ADL on a later declaration; structured-binding `get`,
+  comparison, error-code, `from_stream` and valarray hooks; specialization
+  customization (`hash`, `formatter`, `tuple_size`, variable templates); a GNU
+  extension header (refused or covered); `--strip-comments` with
+  `// distill: keep`. Cross-target cases assert retention or refusal
+  directly. Fixtures that violate an assumption
+  are labelled as such.
 - **Resolution cases:** `#if` tables with no profile and with each profile;
   the preprocess check (§4.6) runs on all of them.
 - **Equivalence:** every case built and run per §4.6; a baseline that doesn't
@@ -788,8 +945,8 @@ C++20, CMake ≥ 3.24, exactly one pinned LLVM version, no compatibility layer.
 | D0 | This design: Codex round 4, user approval |
 | D1 | Distribution spike (approved, running): official-archive audit; LLVM builds on all five runners with measurements; relocated stub parsing `<bits/stdc++.h>` with embedded resource headers against real GCC; dependency audit |
 | D2 | Command model, probe, process containment and limits, profiles (researched), extension lists, text inliner, resolver, validation configurations with the preprocess check, test runner, adversarial preprocessing cases; `--no-prune` usable |
-| D3 | Pruning: data model, keep rules, rendering, static invariant, report; corpus measurement of kept bytes per rule |
-| D4 | `--verify-run`, checker tests, caide case port, compatibility matrix |
+| D3 | Pruning: data model, keep rules, ADL registry, rendering, static and rendering invariants, report; the D3 pruning cases and checker-limit tests of §6, with execution comparisons in the test runner (D3-2-6); corpus measurement of kept bytes per rule |
+| D4 | `--verify-run` in the CLI, the remaining checker tests, caide case port, compatibility matrix |
 | D5 | Fixes from the corpus; release workflow, README, licenses, first tagged release |
 | later | Repair loop; macro pruning; record member pruning; finer name matching; removing more operator families once a rule is proven |
 

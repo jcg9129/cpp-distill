@@ -27,7 +27,7 @@ Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
-| D3 pruning | after D2; needs a short Codex round on the v6 pruning rules first |
+| D3 pruning | design v8 approved 2026-11-16 (A6, §4.7–4.9) after Codex rounds D3-1, D3-2; implementation next |
 | D4–D5 | see design §7 |
 
 ## D1 findings (2026-11-15)
