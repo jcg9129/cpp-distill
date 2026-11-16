@@ -204,7 +204,12 @@ Result<Profile> loadProfile(const std::filesystem::path& file) {
 }
 Result<bool> Profile::checkA3(const std::set<std::string, std::less<>>& userDefines) const {
   std::string collisions;
-  for (const auto& name : userDefines) if (const auto fact = initialState(name); fact.state == MacroState::known || fact.state == MacroState::definedUnknown) {
+  for (const auto& name : userDefines) {
+    // A3 is a conflict check against the supplied snapshot, even when an
+    // approximate profile would withhold that definition from resolution facts.
+    const auto saved = snapshotFacts.find(name);
+    const auto fact = saved == snapshotFacts.end() ? initialState(name) : saved->second;
+    if (fact.state != MacroState::known && fact.state != MacroState::definedUnknown) continue;
     if (!collisions.empty()) collisions += ", ";
     collisions += name;
   }

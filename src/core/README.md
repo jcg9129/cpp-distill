@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D2c)
+# Core library (D2a–D2d)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -253,3 +253,131 @@ The shipped merged CI lists contain 1505 glibc, 167 libstdc++, 409 MinGW-w64
 and 600 macOS libc names. `NameLists` and `InlineOptions` take a list of libraries:
 protection requires absence from every selected set and fails closed
 if any selected set is empty/missing. With no selection all libraries apply.
+
+`resolve/` implements D2d without LLVM. Call `resolveConditions(raw, command,
+evaluator, options)` with the `InlineResult` from `inlineSources`; the result
+contains flat text, its physical-line map, disabling reasons, per-directive
+records, `unknownInUserCode` and counts keyed by decision/reason. Raw locations
+are one-based; original locations are optional for generated once guards.
+Generated guards still count as user code for the pruning precondition. Records
+include `#else` and `#endif`: an else records alternative reachability; an endif
+is true for a resolved block, unknown for a retained block, or dead when enclosing
+code was dead. Conditions after a selected alternative are dead, and elif after
+an unknown condition is unknown. Counts include these structural directives.
+
+Macro state uses `MacroFact` and the probe's `Macro` definition type. Source,
+A3, header, pragma, join and no-profile provenance supplement profile provenance.
+Source definitions retain the full preprocessing-token replacement list, with
+whitespace normalized only in the isolated evaluation copy; original definitions
+in flat text retain their exact bytes. Parameters (including named and standard
+variadics) are bound names. Closure analysis deliberately overapproximates unused
+arguments and function-like macro bodies. Macro-generated `defined` is unknown
+because its expansion has implementation-dependent/undefined behavior. A paste
+in a reached replacement list blocks resolution, but a definition used solely as
+a `defined` operand does not inspect its replacement. Unknown alternatives start
+from the entry state; joins compare bindings, combine provenance for equal
+bindings, and include the implicit empty alternative of a block without else.
+Standard includes preserve positive compiler/special/native predefinitions under
+A2(a), including source changes to those bindings; startup-header facts have no
+such protection. A missing feature model conservatively invalidates all reserved
+names at GCC option pragmas. A3 also checks withheld approximate-snapshot bindings.
+
+`EvaluationRequirements` records dialect and target integer layout separately
+from external macro facts. Missing fields in options inherit from a profile;
+without a profile only command dialect is available. Command-overridden
+representation macros cannot establish physical integer widths or signedness. The conservative arithmetic
+rule allows a missing integer model only when **every token in the condition and
+its expanded closure** is an identifier, `0`, `1`, `!`, `&&`, `||` or parentheses
+(after interpreting `defined`). All other expressions require the complete
+integer model. Literal syntax, digit separators, alternative operators, C++
+Boolean keywords and variadics also require a known dialect. This can retain
+conditions whose arithmetic happens to be portable. Evaluator errors retain the
+condition. A condition's record stores only the arithmetic/dialect requirements
+it needed, and the external macro facts reached, with a flag distinguishing
+definition use from definedness alone. Mixed joins retain external provenance;
+purely derived source bindings are not external facts. `sameDecisions(a,b)` is directional: every true/false decision
+in `a` must agree in `b`, or be dead in `b` because that configuration proves it
+unreachable; unknown/dead entries in `a` impose no value requirement. Both runs
+must have identical directive inventories and neither may be disabled.
+
+Rendering copies retained logical lines byte-for-byte. It emits resynchronizing
+`#line` markers after deletions, including at EOF and every enclosing alternative
+boundary/end that contains an edit. This matters because a marker inside a
+skipped alternative has no effect. The line map retains original entries for
+copied physical lines and null entries for generated markers. Unknown groups keep
+all their original directives; nested groups can still resolve independently.
+Disabled resolution returns byte-identical raw text and map. Resolver limits
+cover nesting, closure tokens and output size. Clang evaluation is an in-process
+component; a future CLI must run the Clang phase in the bounded worker described
+by design §3. CTest bounds the whole test binary at 120 seconds in this milestone.
+
+`ConditionEvaluator` has two implementations. Production `distill_clang`
+(`src/clang/evaluate.cpp`) is a separate optional static library; `distill_core`
+never links LLVM. It invokes cc1's `Preprocessor` with `-undef`,
+`UsePredefines=false`, no header search, and an empty in-memory VFS without a
+real-filesystem overlay. The only source is a memory buffer. No driver, resource
+headers or filesystem inputs are needed for isolated `#if` evaluation. Intrinsic
+and standard bindings that `-undef` can leave active are explicitly undefined
+before adding exactly the closure definitions/placeholders. Clang also enumerates
+and undefines every intrinsic binding in the actual preprocessor instance. The fixed target
+layouts have 8-bit char, 32-bit int and 64-bit long long/intmax: x86_64 Linux
+(LP64, signed 32-bit wchar), AArch64 Linux (LP64, unsigned 32-bit wchar), i386 Linux
+(ILP32, signed 32-bit wchar), and x86_64 Windows GNU (LLP64, unsigned 16-bit wchar).
+Char signedness is passed explicitly. Other layouts fail closed. These are
+preprocessor TargetInfo layouts, so they do not require target code generators.
+
+`tests/support/GccEvaluator` uses the D2a bounded process runner and local
+`g++ -undef -E -P -nostdinc -nostdinc++`, with the same intrinsic isolation and
+result tokens. It probes and checks its local integer layout, permits explicit
+char signedness/short-wchar changes, and rejects other target layouts. Its
+unique source files live under an injected test directory and are removed on
+success/failure. It is never linked into the product. `DISTILL_TEST_GXX` selects
+the GCC binary. `DISTILL_TEST_EVALUATOR=gcc|clang|differential` selects the test
+oracle; differential requires agreement on both success/error and Boolean value
+for every synthetic input, including those produced by fake-logic tests.
+
+Run resolver cases and units without an SDK:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j2
+timeout 120 build/tests/unit/distill_unit_tests --filter resolve_
+timeout 120 build/tests/runner/distill_resolve_cases
+```
+
+`tests/cases/resolve/<name>/` has `cmd.txt` with the inliner runner's quoting,
+sources, `expect.txt` (`file:line true|false|unknown[:reason]|dead` for each
+if/elif in traversal order), and optionally `expect-disabled.txt` with a reason
+substring. SPDX/comment lines beginning `#` are ignored in metadata. `profile.txt`
+selects a shipped profile or `local`. `local` captures macros and special probes
+from the actual GCC under a fixed gnu++20 fixture command (`-O0 -fsigned-char
+-DDISTILL_FIXTURE_JUDGE=1`), records startup-header provenance separately, and
+writes the snapshot only in its temporary test directory. `profile.toml` (name
+`profile`, with an optional sibling snapshot) is also supported; its resolutions
+must be satisfied by facts freshly captured under its effective local command.
+Without a profile, local fixture facts check the decisions. Builds replace local
+`-D`/`-U` with profile operations, and compare raw/flat preprocessing tokens with
+every file/line plus stdout and exit/signal. Shipped profiles run decisions only;
+the Linux `_WIN32` regression requires a Linux GCC. `expect-mismatch.txt` marks
+one deliberate A2(a) violation: both token/location and runtime comparisons must
+reject flat. `--filter substring` selects cases. Copies and compiler outputs stay
+under the runner cwd and are removed by RAII.
+
+CI's unchanged `unit (...)` checks build every non-LLVM target. The additional
+`resolver (linux, clang)` job authenticates the SDK release check with the job's
+`GITHUB_TOKEN`, acquires `llvm-23.1.5-1` linux-x86_64, and builds/runs in the same
+manylinux_2_28 environment as the SDK/spike (avoiding reliance on Ubuntu's
+libstdc++ ABI). The SDK configure switch is:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DDISTILL_LLVM_DIR="$PWD/spike-work/sdk/lib/cmake/llvm"
+cmake --build build -j2
+ctest --test-dir build --output-on-failure --timeout 120 -j1
+```
+
+CMake derives sibling Clang's config directory and enforces LLVM 23.1.5. With
+the SDK, CTest adds Clang and differential runs for both resolver suites. Linking
+these targets needs CI-runner memory; on the small development VM only compile
+the Clang-dependent TUs with `-fsyntax-only -fno-rtti -Isrc -isystem <sdk>/include`,
+one at a time, and remove SDK/build directories after verification.

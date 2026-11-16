@@ -12,7 +12,7 @@ struct ProfileProvenance {
 };
 enum class MacroState { undefined, known, definedUnknown, unknown };
 enum class FactOrigin { compilerBuiltin, startupHeader, commandOperation, specialBuiltin,
-                        nativeModel, a5, a4, allowList };
+                        nativeModel, a5, a4, allowList, a3, source, systemHeader, pragma, join, noProfile };
 struct MacroFact {
   MacroState state = MacroState::unknown;
   std::optional<Macro> definition;
