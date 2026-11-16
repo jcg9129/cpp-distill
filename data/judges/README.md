@@ -2,12 +2,54 @@
 # Judge profiles
 
 `<name>.toml` uses the strict flat TOML subset in `src/core/README.md`. `name`
-(lowercase letters, digits, hyphens) matches its filename. Required fields are
+uses `[a-z0-9-]`, has shape `<judge>-gcc<major>-<cppNN|gnuppNN>[-<variant>]`,
+and matches its filename. Judge and variant segments are nonempty lowercase
+letters/digits separated by hyphens; the major is positive. `c++23` becomes
+`cpp23`, and `gnu++23` becomes `gnupp23`. A variant suffix distinguishes options
+that would otherwise collide. Full names pin a compiler option and never change
+meaning. The shipped names are `codeforces-gcc14-cpp23` and
+`atcoder-gcc15-gnupp23`, with optional `alias = "codeforces"` and
+`alias = "atcoder"`, respectively. Aliases use nonempty `[a-z0-9-]+` strings and
+track the newest GCC option; future alias moves belong in release notes. Required fields are
 `name`, `description`, `compiler = { family = "gcc", version = "major.minor[.patch]" }`,
 `triple`, `std`, `flags`, `libraries`, `check`, `updated` and nonempty HTTP(S)
 `sources`. Optional fields are `link`, `inert`, `build`, `snapshot_compiler`,
-`predefined`.
+`predefined`, `alias`.
 `defines`, `library` and `allowed` are obsolete and rejected.
+
+Selectors without a separator or `.toml` suffix resolve a full name or alias
+across bundled and user profiles. The user directory follows `XDG_CONFIG_HOME`
+(absolute paths only), `HOME/.config` or Windows `APPDATA`, under `distill/judges`.
+All user TOML files are validated in sorted filename order. Invalid files and
+colliding user identifiers are errors, including for `--judge list`. Two user
+aliases cannot coincide, nor can a user's name equal another user's alias.
+A user name (the TOML filename stem) or alias overrides the identical bundled
+identifier and emits a warning on every catalog-based run. Shadowing is per
+identifier: overriding an alias leaves the bundled full name available unless
+that identifier is also overridden. The list includes each bundled and user
+profile, including shadowed entries, distinguished by origin. Explicit TOML
+paths load directly, without consulting the catalog.
+
+Every profile selection prints `judge: <selector> -> <resolved name>` to stderr.
+The report includes that line plus `judge selector`, `judge resolved name`,
+`judge origin` (`bundled` or `user` with absolute TOML path), and `judge digest`.
+The digest is lowercase SHA-256 of this byte sequence, in order:
+
+1. The ASCII bytes `distill-profile-v1` followed by LF.
+2. A frame containing the original TOML bytes.
+3. If `predefined` is present, a frame containing its UTF-8 filename, then a
+   frame containing the original snapshot bytes.
+
+A frame is the ASCII decimal byte length (no leading zeroes), a colon, then
+exactly those bytes; no separator or terminator follows a frame. Preserve BOM,
+comments, whitespace and line endings. Hash the same bytes that were parsed,
+without rereading files. The TOML's location and selector are excluded, so
+moving a profile or selecting its alias preserves the digest. `predefined` is
+the schema's explicit data-file reference. Embedded compiler registries, native
+models, allow-lists and extension inventories belong to the distill version,
+not this profile content digest. No snapshot is regenerated to obtain a digest.
+The renamed shipped snapshots have no profile-name header; their contents are
+unchanged from the CI artifacts cited below.
 
 `flags` is an ordered argv, including `-D` and `-U` in place. It shares the
 §4.1 command classifier and rejected options; response files, forced includes,
@@ -122,9 +164,9 @@ No host-dependent option means no native records or join.
 Generate with Python 3.11+:
 
 ```sh
-python3 ci/profiles/snapshot.py data/judges/atcoder.toml --compiler /path/to/g++
+python3 ci/profiles/snapshot.py data/judges/atcoder-gcc15-gnupp23.toml --compiler /path/to/g++
 # In the CI job that actually built the recipe, additionally affirm its identity:
-python3 ci/profiles/snapshot.py data/judges/atcoder.toml --compiler /workspace/gcc/bin/g++ \
+python3 ci/profiles/snapshot.py data/judges/atcoder-gcc15-gnupp23.toml --compiler /workspace/gcc/bin/g++ \
   --reproduced-build 'recipe=https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml'
 ```
 
@@ -151,7 +193,7 @@ Codeforces publishes its [command and compiler label](https://codeforces.com/blo
 bundle revision and a matching MSYS2 source tree do not establish the judge's
 package identity. The profile therefore omits `build` and is **approximate**.
 Its `snapshot_compiler` is the available GCC `14.2.0-3` MSYS2 package.
-The shipped `codeforces-predefined.txt` comes byte for byte from
+The shipped `codeforces-gcc14-cpp23-predefined.txt` comes byte for byte from
 [`profiles.yml` run 43771140647](https://github.com/jcg9129/cpp-distill/actions/runs/43771140647).
 
 `ci/profiles/matrix.py` selects `build` when present, otherwise
@@ -190,7 +232,7 @@ a 240-minute limit, and a SHA-pinned actions/cache keyed by recipe hashes. A
 hash check rejects upstream recipe drift. The reproduced build printed
 `x86_64-pc-linux-gnu` for `-dumpmachine` in
 [`profiles.yml` run 43768705680](https://github.com/jcg9129/cpp-distill/actions/runs/43768705680);
-its `atcoder-predefined.txt` is shipped byte for byte. This confirms the
+its `atcoder-gcc15-gnupp23-predefined.txt` is shipped byte for byte. This confirms the
 reproduced compiler's triple; the profile retains its other UNVERIFIED notes.
 The profile keeps the published preprocessing options in order, including modules,
 OpenMP, pthread, optimization and native tuning. AtCoder's `-I<install>/include`

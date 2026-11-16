@@ -9,6 +9,7 @@ struct ProfileProvenance {
   std::filesystem::path file;
   std::string updated;
   std::vector<std::string> sources;
+  std::string selector, origin = "user", contentDigest;
 };
 enum class MacroState { undefined, known, definedUnknown, unknown };
 enum class FactOrigin { compilerBuiltin, startupHeader, commandOperation, specialBuiltin,
@@ -26,6 +27,8 @@ struct SnapshotMetadata {
 };
 struct Profile {
   std::string name, description, triple, compilerVersion;
+  std::optional<std::string> alias;
+  std::vector<std::string> warnings;
   CompilerIdentity compiler;
   bool patchSpecified = false;
   Dialect dialect;
@@ -69,6 +72,14 @@ struct ProfileLookup {
 #endif
 };
 std::optional<std::filesystem::path> profileUserDirectory(const ProfileLookup& lookup);
+struct ProfileCatalog {
+  std::vector<Profile> profiles;
+  std::vector<std::string> warnings;
+};
+Result<ProfileCatalog> listProfiles(const ProfileLookup& lookup = {},
+                                   const ProfileFiles& embedded = embeddedProfileFiles());
+std::string renderProfileList(const ProfileCatalog& catalog);
+std::string profileSelectionLine(const Profile& profile);
 Result<Profile> lookupProfile(std::string_view nameOrFile, const ProfileLookup& lookup = {},
                               const ProfileFiles& embedded = embeddedProfileFiles());
 } // namespace distill

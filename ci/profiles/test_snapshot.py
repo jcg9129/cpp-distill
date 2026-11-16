@@ -219,16 +219,16 @@ predefined = "fixture-predefined.txt"
 
     def test_matrix_selection_builds_and_bad_input(self):
         rows = matrix()['include']
-        self.assertEqual({r['profile'] for r in rows}, {'atcoder', 'codeforces'})
-        self.assertEqual(matrix('atcoder')['include'][0]['version'], '15.2.0')
-        self.assertEqual(matrix('codeforces')['include'][0]['runner'], 'windows-2025')
-        self.assertEqual(matrix('codeforces')['include'][0]['build'], '')
-        self.assertEqual(matrix('codeforces')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-3')
+        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23'})
+        self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['version'], '15.2.0')
+        self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['runner'], 'windows-2025')
+        self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['build'], '')
+        self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-3')
         with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '14.2.0'}, 'triple': 'x86_64-w64-mingw32',
                    'build': {'package': 'msys2:mingw-w64-x86_64-gcc=14.2.0-1'},
                    'snapshot_compiler': {'package': 'msys2:mingw-w64-x86_64-gcc=14.2.0-3'}}):
-            self.assertEqual(matrix('codeforces')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-1')
-        for selection in ['', 'typo', 'atcoder,', 'all,atcoder']:
+            self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-1')
+        for selection in ['', 'typo', 'atcoder-gcc15-gnupp23,', 'all,atcoder-gcc15-gnupp23']:
             with self.assertRaises(ValueError):
                 matrix(selection)
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Synthetic fixture: NOT a real judge snapshot or an exhaustive compiler capture.
-name = "mingw"
+name = "mingw-gcc14-cpp23"
 description = "Synthetic MinGW fixture"
 triple = "x86_64-w64-mingw32"
 compiler = { family = "gcc", version = "14.2" }

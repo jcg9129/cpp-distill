@@ -2,8 +2,13 @@
 #include "support.h"
 #include "core/profile/profile.h"
 #include "core/profile/toml.h"
+#include "core/profile/sha256.h"
+#include "core/report/report.h"
+#include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <tuple>
 using namespace distill;
 namespace {
@@ -14,19 +19,22 @@ std::string replace(std::string text, std::string_view before, std::string_view 
   text.replace(pos, before.size(), after);
   return text;
 }
+std::string quotedPath(const std::filesystem::path& path) {
+  std::ostringstream out; out << std::quoted(pathToUtf8(path)); return out.str();
+}
 std::string allowProfile() {
-  auto text = test::read(profileFixture("mingw.toml"));
+  auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
   text = replace(text, "predefined = \"mingw-predefined.txt\"", "");
   return text;
 }
 Result<Profile> synthetic(std::string text, std::string snapshot = test::read(profileFixture("mingw-predefined.txt"))) {
-  return parseProfile(text, "mingw.toml", [snapshot](const auto&) -> Result<std::string> { return snapshot; });
+  return parseProfile(text, "mingw-gcc14-cpp23.toml", [snapshot](const auto&) -> Result<std::string> { return snapshot; });
 }
 void badProfile(const std::string& text, std::string_view reason) {
   auto result = synthetic(text);
   CHECK(!result.ok());
   if (!result.ok()) {
-    CHECK(result.error().message.starts_with("mingw.toml:"));
+    CHECK(result.error().message.starts_with("mingw-gcc14-cpp23.toml:"));
     CHECK(result.error().message.find(reason) != std::string::npos);
   }
 }
@@ -87,7 +95,7 @@ TEST(profile_toml_utf8_controls_and_error_line_numbers) {
   const auto u = parseProfileToml("# ok\n#\xff", "file"); CHECK(u.error().message.starts_with("file:2:"));
 }
 TEST(profile_loads_reproduced_and_approximate_fixtures) {
-  auto r = loadProfile(profileFixture("mingw.toml")); CHECK(r.ok()); if (!r.ok()) return;
+  auto r = loadProfile(profileFixture("mingw-gcc14-cpp23.toml")); CHECK(r.ok()); if (!r.ok()) return;
   const auto& p = r.value();
   CHECK(p.reproduced); CHECK_EQ(p.triple, "x86_64-w64-mingw32");
   CHECK_EQ(p.compiler.major, 14); CHECK_EQ(p.compiler.minor, 2); CHECK(!p.patchSpecified);
@@ -99,7 +107,7 @@ TEST(profile_loads_reproduced_and_approximate_fixtures) {
   CHECK_EQ(p.initialState("__absent_reserved").provenance.front(), FactOrigin::a4);
   CHECK_EQ(p.initialState("LOCAL").provenance.front(), FactOrigin::a5);
   CHECK_EQ(p.libraries, (std::vector<std::string>{"mingw-w64", "libstdc++"}));
-  auto linux = loadProfile(profileFixture("linux.toml")); CHECK(linux.ok()); if (!linux.ok()) return;
+  auto linux = loadProfile(profileFixture("linux-gcc15-gnupp23.toml")); CHECK(linux.ok()); if (!linux.ok()) return;
   CHECK(!linux.value().reproduced); CHECK(linux.value().predefined.size() > 400);
   CHECK_EQ(linux.value().initialState("__aarch64__").state, MacroState::known);
   CHECK_EQ(linux.value().initialState("__aarch64__").provenance.back(), FactOrigin::allowList);
@@ -113,7 +121,7 @@ TEST(profile_embedded_shipped_codeforces_snapshot) {
   const auto loaded = lookupProfile("codeforces");
   if (!loaded.ok()) throw std::runtime_error(loaded.error().message);
   const auto& p = loaded.value();
-  CHECK_EQ(p.provenance.file, pathFromUtf8("embedded/codeforces.toml"));
+  CHECK_EQ(p.provenance.file, pathFromUtf8("embedded/codeforces-gcc14-cpp23.toml"));
   CHECK(!p.reproduced);
   for (const auto* name : {"_WIN32", "_WIN64", "__MINGW64__", "__x86_64__", "__STRICT_ANSI__"})
     CHECK_EQ(p.initialState(name).state, MacroState::known);
@@ -142,7 +150,7 @@ TEST(profile_embedded_shipped_atcoder_snapshot) {
   const auto loaded = lookupProfile("atcoder");
   if (!loaded.ok()) throw std::runtime_error(loaded.error().message);
   const auto& p = loaded.value();
-  CHECK_EQ(p.provenance.file, pathFromUtf8("embedded/atcoder.toml"));
+  CHECK_EQ(p.provenance.file, pathFromUtf8("embedded/atcoder-gcc15-gnupp23.toml"));
   CHECK(p.reproduced);
   CHECK_EQ(p.snapshotMetadata.dumpmachine, "x86_64-pc-linux-gnu");
   for (const auto* name : {"__linux__", "__x86_64__", "_OPENMP", "_REENTRANT", "__OPTIMIZE__", "__cpp_modules"})
@@ -166,7 +174,7 @@ TEST(profile_embedded_shipped_atcoder_snapshot) {
   CHECK_EQ(p.initialState("__STRICT_ANSI__").state, MacroState::undefined);
 }
 TEST(profile_mode_requires_matching_build_and_complete_registry) {
-  auto text = test::read(profileFixture("mingw.toml"));
+  auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
   auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   for (const auto& other : {replace(text, "build = { package = \"synthetic:fixture=14.2.0-1\" }", ""),
                            replace(text, "synthetic:fixture=14.2.0-1", "other:build=1")}) {
@@ -194,7 +202,7 @@ TEST(profile_mode_requires_matching_build_and_complete_registry) {
   for (const auto* n : {"__GNUC__", "_WIN32", "__SIZEOF_INT__", "__INT_MAX__", "__CHAR_UNSIGNED__", "__cplusplus"}) CHECK(approximateAllowed(n));
 }
 TEST(profile_snapshot_compiler_is_approximate_and_cannot_claim_reproduction) {
-  const auto original = test::read(profileFixture("mingw.toml"));
+  const auto original = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
   const auto text = replace(original, "build = { package = \"synthetic:fixture=14.2.0-1\" }",
                             "snapshot_compiler = { package = \"msys2:mingw-w64-x86_64-gcc=14.2.0-3\" }");
   const auto snapshot = replace(test::read(profileFixture("mingw-predefined.txt")),
@@ -223,7 +231,7 @@ TEST(profile_schema_required_unknown_types_and_values) {
     (void)entry;
   }
   for (const auto* extra : {"defines=[]", "library='glibc'", "allowed=[]", "typo=true"}) badProfile(text + "\n" + extra, "unknown key");
-  for (auto [before, after, error] : {std::tuple{"name = \"mingw\"", "name = \"Bad_Name\"", "name:"},
+  for (auto [before, after, error] : {std::tuple{"name = \"mingw-gcc14-cpp23\"", "name = \"Bad_Name\"", "name:"},
        {"triple = \"x86_64-w64-mingw32\"", "triple = \"bad\"", "triple:"},
        {"family = \"gcc\"", "family = \"clang\"", "only gcc"},
        {"version = \"14.2\"", "version = \"14\"", "major.minor"},
@@ -259,7 +267,7 @@ TEST(profile_ordered_macro_operations_and_exact_replacements) {
   for (const auto* f : {"-D2BAD", "-Ubad(x)", "-D"}) CHECK(!synthetic(replace(allowProfile(), "-DONLINE_JUDGE", f)).ok());
 }
 TEST(profile_special_builtin_state_follows_probe_and_command_operations) {
-  auto text = test::read(profileFixture("mingw.toml")); auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml")); auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   auto p = synthetic(text).value();
   CHECK(p.initialState("__has_include").activeSpecialBuiltin());
   CHECK_EQ(p.initialState("__FILE_NAME__").state, MacroState::definedUnknown);
@@ -276,7 +284,7 @@ TEST(profile_special_builtin_state_follows_probe_and_command_operations) {
   CHECK(d.ok()); if (d.ok()) { CHECK(!d.value().initialState("__has_include").activeSpecialBuiltin()); CHECK_EQ(d.value().initialState("__has_include").definition->replacement, "0"); }
 }
 TEST(profile_snapshot_format_metadata_provenance_and_validation) {
-  const auto text = test::read(profileFixture("mingw.toml")), snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  const auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml")), snapshot = test::read(profileFixture("mingw-predefined.txt"));
   for (auto [before, after] : {std::pair{"# distill-snapshot: 1", "# distill-snapshot: 2"},
        {"# reproduced: yes", "# reproduced: maybe"}, {"# gcc-version: 14.2.0", "# gcc-version: 15.2.0"},
        {"# builtin-registry: gcc-14.2", "# builtin-registry: none"}, {"# native-model: none", "# native-model: gcc-14.2-x86"},
@@ -292,9 +300,9 @@ TEST(profile_snapshot_format_metadata_provenance_and_validation) {
   CHECK(!compatibleProfileTriple("x86_64-linux-gnu", "x86_64-linux-musl"));
 }
 TEST(profile_snapshot_missing_never_downgrades_and_a3_reports_collisions) {
-  auto text = test::read(profileFixture("mingw.toml"));
-  auto r = parseProfile(text, "mingw.toml"); CHECK(!r.ok()); CHECK(r.error().message.find("snapshot missing") != std::string::npos);
-  auto builtin = lookupProfile("mingw", {}, {{"mingw.toml", text}});
+  auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
+  auto r = parseProfile(text, "mingw-gcc14-cpp23.toml"); CHECK(!r.ok()); CHECK(r.error().message.find("snapshot missing") != std::string::npos);
+  auto builtin = lookupProfile("mingw-gcc14-cpp23", {}, {{"mingw-gcc14-cpp23.toml", text}});
   CHECK(!builtin.ok()); if (!builtin.ok()) CHECK(builtin.error().message.find("snapshot missing") != std::string::npos);
   auto p = synthetic(text).value(); CHECK(p.checkA3({"LOCAL", "GUARD"}).ok());
   auto conflict = p.checkA3({"ONLINE_JUDGE", "WIN32"}); CHECK(!conflict.ok());
@@ -303,17 +311,17 @@ TEST(profile_snapshot_missing_never_downgrades_and_a3_reports_collisions) {
 TEST(profile_lookup_user_directory_environment_embedded_and_path_forms) {
   test::TempDirectory temp;
   auto text = allowProfile();
-  ProfileFiles files{{"mingw.toml", replace(text, "Synthetic MinGW fixture", "Embedded fixture")}};
+  ProfileFiles files{{"mingw-gcc14-cpp23.toml", replace(text, "Synthetic MinGW fixture", "Embedded fixture")}};
   ProfileLookup lookup; lookup.userDirectory = temp.path;
-  auto builtin = lookupProfile("mingw", lookup, files); CHECK(builtin.ok()); CHECK_EQ(builtin.value().description, "Embedded fixture");
-  temp.write("mingw.toml", text);
-  auto user = lookupProfile("mingw", lookup, files); CHECK(user.ok()); CHECK_EQ(user.value().description, "Synthetic MinGW fixture");
-  auto path = lookupProfile(pathToUtf8(temp.path / "mingw.toml"), {}, files); CHECK(path.ok()); CHECK_EQ(path.value().provenance.file, temp.path / "mingw.toml");
-  temp.write("mingw.toml", text + "\ntypo = true"); CHECK(!lookupProfile("mingw", lookup, files).ok());
+  auto builtin = lookupProfile("mingw-gcc14-cpp23", lookup, files); CHECK(builtin.ok()); CHECK_EQ(builtin.value().description, "Embedded fixture");
+  temp.write("mingw-gcc14-cpp23.toml", text);
+  auto user = lookupProfile("mingw-gcc14-cpp23", lookup, files); CHECK(user.ok()); CHECK_EQ(user.value().description, "Synthetic MinGW fixture");
+  auto path = lookupProfile(pathToUtf8(temp.path / "mingw-gcc14-cpp23.toml"), {}, files); CHECK(path.ok()); CHECK_EQ(path.value().provenance.file, temp.path / "mingw-gcc14-cpp23.toml");
+  temp.write("mingw-gcc14-cpp23.toml", text + "\ntypo = true"); CHECK(!lookupProfile("mingw-gcc14-cpp23", lookup, files).ok());
   CHECK(!lookupProfile("absent", lookup, files).ok()); CHECK(!lookupProfile("BAD", lookup, files).ok());
-  CHECK(!lookupProfile("mingw.toml", lookup, files).ok()); // Path form does not search by name.
-  auto snapshotFiles = ProfileFiles{{"mingw.toml", test::read(profileFixture("mingw.toml"))}, {"mingw-predefined.txt", test::read(profileFixture("mingw-predefined.txt"))}};
-  auto embedded = lookupProfile("mingw", {}, snapshotFiles); CHECK(embedded.ok()); CHECK(embedded.value().reproduced);
+  CHECK(!lookupProfile("mingw-gcc14-cpp23.toml", lookup, files).ok()); // Path form does not search by name.
+  auto snapshotFiles = ProfileFiles{{"mingw-gcc14-cpp23.toml", test::read(profileFixture("mingw-gcc14-cpp23.toml"))}, {"mingw-predefined.txt", test::read(profileFixture("mingw-predefined.txt"))}};
+  auto embedded = lookupProfile("mingw-gcc14-cpp23", {}, snapshotFiles); CHECK(embedded.ok()); CHECK(embedded.value().reproduced);
 }
 TEST(profile_lookup_environment_is_injected_for_posix_and_windows) {
   ProfileLookup lookup; lookup.windows = false;
@@ -332,24 +340,24 @@ TEST(profile_lookup_environment_is_injected_for_posix_and_windows) {
   lookup.userDirectory = "explicit"; CHECK_EQ(*profileUserDirectory(lookup), std::filesystem::path("explicit"));
   test::TempDirectory temp;
   auto config = temp.path / "distill" / "judges"; std::filesystem::create_directories(config);
-  std::ofstream(config / "mingw.toml") << allowProfile();
+  std::ofstream(config / "mingw-gcc14-cpp23.toml") << allowProfile();
   lookup.userDirectory.reset(); lookup.environment["APPDATA"] = pathToUtf8(temp.path);
-  CHECK(lookupProfile("mingw", lookup, {}).ok());
+  CHECK(lookupProfile("mingw-gcc14-cpp23", lookup, {}).ok());
   lookup.windows = false; lookup.environment["XDG_CONFIG_HOME"] = pathToUtf8(temp.path);
-  CHECK(lookupProfile("mingw", lookup, {}).ok());
+  CHECK(lookupProfile("mingw-gcc14-cpp23", lookup, {}).ok());
 }
 
 TEST(profile_file_errors_and_relative_snapshot_lookup) {
   test::TempDirectory temp;
   CHECK(!loadProfile(temp.path / "missing.toml").ok());
   CHECK(!loadProfile(temp.path).ok());
-  temp.write("mingw.toml", test::read(profileFixture("mingw.toml")));
-  auto missing = loadProfile(temp.path / "mingw.toml"); CHECK(!missing.ok());
+  temp.write("mingw-gcc14-cpp23.toml", test::read(profileFixture("mingw-gcc14-cpp23.toml")));
+  auto missing = loadProfile(temp.path / "mingw-gcc14-cpp23.toml"); CHECK(!missing.ok());
   if (!missing.ok()) CHECK(missing.error().message.find("snapshot missing") != std::string::npos);
   temp.write("mingw-predefined.txt", test::read(profileFixture("mingw-predefined.txt")));
-  CHECK(loadProfile(temp.path / "mingw.toml").ok());
+  CHECK(loadProfile(temp.path / "mingw-gcc14-cpp23.toml").ok());
   temp.write("mingw-predefined.txt", "# metadata\nnot a macro\n");
-  auto malformed = loadProfile(temp.path / "mingw.toml"); CHECK(!malformed.ok());
+  auto malformed = loadProfile(temp.path / "mingw-gcc14-cpp23.toml"); CHECK(!malformed.ok());
   if (!malformed.ok()) CHECK(malformed.error().message.find("snapshot line 1") != std::string::npos);
 }
 TEST(profile_toml_schema_accepts_escaped_description_and_quoted_schema_keys) {
@@ -359,7 +367,7 @@ TEST(profile_toml_schema_accepts_escaped_description_and_quoted_schema_keys) {
 }
 
 TEST(profile_native_model_states_and_missing_records) {
-  auto text = replace(test::read(profileFixture("mingw.toml")), "flags = [\"-DONLINE_JUDGE\"]", "flags = [\"-DONLINE_JUDGE\", \"-mtune=native\"]");
+  auto text = replace(test::read(profileFixture("mingw-gcc14-cpp23.toml")), "flags = [\"-DONLINE_JUDGE\"]", "flags = [\"-DONLINE_JUDGE\", \"-mtune=native\"]");
   auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   snapshot = replace(snapshot, "# flag: -DONLINE_JUDGE", "# flag: -DONLINE_JUDGE\n# flag: -mtune=native");
   snapshot = replace(snapshot, "# native-model: none", "# native-model: gcc-14.2-x86");
@@ -373,11 +381,129 @@ TEST(profile_native_model_states_and_missing_records) {
   CHECK(!synthetic(text, snapshot + "# state __NOT_IN_MODEL unknown native-model\n").ok());
 }
 TEST(profile_command_snapshot_must_agree_and_only_link_flags_are_accepted) {
-  auto text = test::read(profileFixture("mingw.toml")), snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml")), snapshot = test::read(profileFixture("mingw-predefined.txt"));
   CHECK(!synthetic(text, replace(snapshot, "# command-operation #define ONLINE_JUDGE 1", "# command-operation #define ONLINE_JUDGE 2")).ok());
   CHECK(!synthetic(text, replace(snapshot, "# command-operation #define ONLINE_JUDGE 1", "#define ONLINE_JUDGE 1")).ok());
   CHECK(!synthetic(text, snapshot + "# command-operation #define UNDECLARED 1\n").ok());
   CHECK(synthetic(text + "\nlink=['-static','-Wl,--stack=268435456','-lstdc++exp']").ok());
   CHECK(!synthetic(text + "\nlink=['-DBAD=1']").ok());
   CHECK(!synthetic(text + "\nlink=['-O2']").ok());
+}
+
+TEST(profile_names_and_optional_alias_schema) {
+  const auto text = allowProfile();
+  for (const auto* name : {"mingw", "Mingw-gcc14-cpp23", "mingw_gcc14_cpp23", "mingw-clang14-cpp23",
+                           "mingw-gcc-cpp23", "mingw-gcc14-c++23", "-mingw-gcc14-cpp23", "mingw-gcc14-cpp23-"}) {
+    auto changed = replace(text, "mingw-gcc14-cpp23", name);
+    auto parsed = parseProfile(changed, std::string(name) + ".toml");
+    CHECK(!parsed.ok()); if (!parsed.ok()) CHECK(parsed.error().message.find("name:") != std::string::npos);
+  }
+  CHECK(parseProfile(replace(text, "mingw-gcc14-cpp23", "mingw-gcc14-cpp23-32bit"), "mingw-gcc14-cpp23-32bit.toml").ok());
+  CHECK(!parseProfile(text, "different-gcc14-cpp23.toml").ok());
+  for (const auto* alias : {"''", "'Upper'", "'bad_alias'", "'bad/alias'", "'c++23'", "true", "[]"})
+    badProfile(text + "\nalias = " + alias, "alias:");
+  auto valid = synthetic(text + "\nalias = 'mingw'");
+  CHECK(valid.ok()); if (valid.ok()) CHECK_EQ(valid.value().alias.value(), "mingw");
+}
+TEST(profile_full_names_aliases_and_selection_line) {
+  for (const auto& [alias, name] : {std::pair{"codeforces", "codeforces-gcc14-cpp23"}, {"atcoder", "atcoder-gcc15-gnupp23"}}) {
+    auto shortName = lookupProfile(alias), fullName = lookupProfile(name);
+    CHECK(shortName.ok()); CHECK(fullName.ok()); if (!shortName.ok() || !fullName.ok()) continue;
+    CHECK_EQ(shortName.value().name, name);
+    CHECK_EQ(fullName.value().alias.value(), alias);
+    CHECK_EQ(shortName.value().provenance.origin, "bundled");
+    CHECK_EQ(shortName.value().provenance.selector, alias);
+    CHECK_EQ(shortName.value().provenance.contentDigest, fullName.value().provenance.contentDigest);
+    CHECK_EQ(profileSelectionLine(shortName.value()), "judge: " + std::string(alias) + " -> " + name + "\n");
+    CHECK_EQ(profileSelectionLine(fullName.value()), "judge: " + std::string(name) + " -> " + name + "\n");
+  }
+}
+TEST(profile_alias_shadowing_and_user_identifier_collisions) {
+  test::TempDirectory temp;
+  ProfileLookup lookup; lookup.userDirectory = temp.path;
+  const auto text = allowProfile();
+  const ProfileFiles bundled{{"mingw-gcc14-cpp23.toml", text + "\nalias = 'judge'"}};
+  auto userText = replace(text, "mingw-gcc14-cpp23", "custom-gcc14-cpp23") + "\nalias = 'judge'";
+  temp.write("custom-gcc14-cpp23.toml", userText);
+  for (int run = 0; run < 2; ++run) {
+    auto p = lookupProfile("judge", lookup, bundled);
+    CHECK(p.ok()); if (!p.ok()) continue;
+    CHECK_EQ(p.value().name, "custom-gcc14-cpp23"); CHECK_EQ(p.value().provenance.origin, "user");
+    CHECK_EQ(p.value().provenance.file, temp.path / "custom-gcc14-cpp23.toml");
+    CHECK_EQ(p.value().warnings.size(), 1u);
+    CHECK(p.value().warnings.front().find("shadows bundled identifier 'judge'") != std::string::npos);
+  }
+  auto pinned = lookupProfile("mingw-gcc14-cpp23", lookup, bundled);
+  CHECK(pinned.ok()); if (pinned.ok()) CHECK_EQ(pinned.value().provenance.origin, "bundled");
+  // A user filename also shadows a bundled full name.
+  temp.write("mingw-gcc14-cpp23.toml", text);
+  auto overridden = lookupProfile("mingw-gcc14-cpp23", lookup, bundled);
+  CHECK(overridden.ok()); if (overridden.ok()) {
+    CHECK_EQ(overridden.value().provenance.origin, "user");
+    CHECK_EQ(overridden.value().warnings.size(), 2u);
+  }
+  // Duplicate aliases, and a user name claimed by another user's alias, fail
+  // regardless of which identifier was requested (including list).
+  for (const auto* alias : {"judge", "mingw-gcc14-cpp23"}) {
+    temp.write("custom-gcc14-cpp23.toml", replace(userText, "alias = 'judge'", "alias = '" + std::string(alias) + "'"));
+    if (std::string_view(alias) == "judge") temp.write("mingw-gcc14-cpp23.toml", text + "\nalias = 'judge'");
+    else temp.write("mingw-gcc14-cpp23.toml", text);
+    auto result = lookupProfile("mingw-gcc14-cpp23", lookup, bundled);
+    CHECK(!result.ok()); if (!result.ok()) {
+      CHECK(result.error().message.find("identifier collision '" + std::string(alias) + "'") != std::string::npos);
+      CHECK(result.error().message.find("custom-gcc14-cpp23.toml") != std::string::npos);
+      CHECK(result.error().message.find("mingw-gcc14-cpp23.toml") != std::string::npos);
+    }
+    CHECK(!listProfiles(lookup, bundled).ok());
+  }
+}
+TEST(profile_list_columns_and_order) {
+  test::TempDirectory temp;
+  ProfileLookup lookup; lookup.userDirectory = temp.path;
+  temp.write("mingw-gcc14-cpp23.toml", allowProfile());
+  auto catalog = listProfiles(lookup);
+  CHECK(catalog.ok()); if (!catalog.ok()) return;
+  const auto list = renderProfileList(catalog.value());
+  CHECK(list.starts_with("atcoder-gcc15-gnupp23\tatcoder\tbundled\treproduced\t2026-11-15\t\"AtCoder"));
+  CHECK(list.find("codeforces-gcc14-cpp23\tcodeforces\tbundled\tapproximate\t2026-11-15\t\"Codeforces") != std::string::npos);
+  CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\n") != std::string::npos);
+  CHECK_EQ(std::count(list.begin(), list.end(), '\n'), 3);
+  catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
+  const auto escaped = renderProfileList(catalog.value());
+  CHECK_EQ(std::count(escaped.begin(), escaped.end(), '\n'), 3);
+}
+TEST(profile_digest_sha256_vectors_and_exact_input_bytes) {
+  CHECK_EQ(detail::sha256(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  CHECK_EQ(detail::sha256("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  CHECK_EQ(detail::sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+           "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+  CHECK_EQ(lookupProfile("codeforces").value().provenance.contentDigest,
+           "95171947eee3866811e9991b7bb409663dd3bbf2a26583ab4901f45723dc1668");
+  CHECK_EQ(lookupProfile("atcoder").value().provenance.contentDigest,
+           "d9f25b0229392919818ab56f1b9670f22fcb896b0c673ca2fc308be1b1c2d3e4");
+  const auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
+  const auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
+  auto p = synthetic(text); CHECK(p.ok()); if (!p.ok()) return;
+  // Independently framed per the documented rule; path and selector are excluded.
+  auto frame = [](const std::string& bytes) { return std::to_string(bytes.size()) + ":" + bytes; };
+  const auto expected = detail::sha256("distill-profile-v1\n" + frame(text) + frame("mingw-predefined.txt") + frame(snapshot));
+  CHECK_EQ(p.value().provenance.contentDigest, expected);
+  auto moved = parseProfile(text, "elsewhere/mingw-gcc14-cpp23.toml", [&](const auto&) -> Result<std::string> { return snapshot; });
+  CHECK(moved.ok()); if (moved.ok()) CHECK_EQ(moved.value().provenance.contentDigest, expected);
+  CHECK(synthetic(text + "\n# byte change\n").value().provenance.contentDigest != expected);
+  CHECK(synthetic(text, snapshot + "\n").value().provenance.contentDigest != expected);
+  CHECK(synthetic(allowProfile()).value().provenance.contentDigest != expected);
+}
+TEST(profile_report_selection_origin_path_and_digest) {
+  auto p = lookupProfile("codeforces"); CHECK(p.ok()); if (!p.ok()) return;
+  const auto bundled = renderReport(PipelineResult{}, CompileCommand{}, &p.value());
+  CHECK(bundled.find("judge: codeforces -> codeforces-gcc14-cpp23\n") != std::string::npos);
+  CHECK(bundled.find("judge selector: \"codeforces\"\njudge resolved name: codeforces-gcc14-cpp23\njudge origin: bundled\njudge digest: sha256:" + p.value().provenance.contentDigest) != std::string::npos);
+  test::TempDirectory temp;
+  temp.write("mingw-gcc14-cpp23.toml", allowProfile());
+  auto user = lookupProfile(pathToUtf8(temp.path / "mingw-gcc14-cpp23.toml")); CHECK(user.ok()); if (!user.ok()) return;
+  const auto report = renderReport(PipelineResult{}, CompileCommand{}, &user.value());
+  CHECK(report.find("judge selector: " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml")) != std::string::npos);
+  CHECK(report.find("judge resolved name: mingw-gcc14-cpp23\njudge origin: user " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml")) != std::string::npos);
+  CHECK(report.find("judge digest: sha256:" + user.value().provenance.contentDigest) != std::string::npos);
 }

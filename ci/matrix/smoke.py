@@ -133,10 +133,11 @@ class Smoke:
     def profile(self, dialect, no_prune):
         # Fixture profile with explicit command facts, no claimed reproduced
         # build. Mirrors tests/support/profile.cpp without fabricating a snapshot.
-        profile = self.work / "matrix-fixture.toml"
+        profile_name = f"matrix-fixture-gcc{self.version.split('.')[0]}-{dialect.replace('gnu++', 'gnupp').replace('c++', 'cpp')}"
+        profile = self.work / f"{profile_name}.toml"
         profile.write_text(
             "# SPDX-License-Identifier: GPL-3.0-or-later\n"
-            "name = 'matrix-fixture'\ndescription = 'CI command-fact fixture'\n"
+            f"name = '{profile_name}'\ndescription = 'CI command-fact fixture'\n"
             f"triple = '{self.triple}'\ncompiler = {{ family = 'gcc', version = '{self.version}' }}\n"
             f"std = '{dialect}'\nflags = ['-DDISTILL_FIXTURE_JUDGE=1']\n"
             "libraries = ['libstdc++']\ncheck = []\nupdated = '2026-11-16'\n"
@@ -181,11 +182,11 @@ class Smoke:
                     "shipped-profile failure did not use cross check compiler")
             self.cross_runtime(text)
             adapter = "Codeforces adapter omits unavailable -lstdc++exp; shipped profile raw fallback asserted"
-            profile = self.work / "codeforces.toml"
-            shipped = Path("data/judges/codeforces.toml").read_text(encoding="utf-8")
+            profile = self.work / "codeforces-gcc14-cpp23.toml"
+            shipped = Path("data/judges/codeforces-gcc14-cpp23.toml").read_text(encoding="utf-8")
             require(shipped.count(', "-lstdc++exp"') == 1, "profile link spelling changed")
             profile.write_text(shipped.replace(', "-lstdc++exp"', ''), encoding="utf-8")
-            shutil.copy2("data/judges/codeforces-predefined.txt", self.work)
+            shutil.copy2("data/judges/codeforces-gcc14-cpp23-predefined.txt", self.work)
             options[1] = str(profile)
             result, text, output, artifact = self.invoke(name + "-adapter", fixture, "c++23", options)
             require(result.returncode == 0 and output.is_file(), result.stderr)

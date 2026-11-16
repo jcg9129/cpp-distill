@@ -213,7 +213,10 @@ definitions as compiler builtins.
 
 `loadProfile` reads a file and its sibling snapshot. `lookupProfile` treats a
 separator or `.toml` suffix as a path; otherwise the injected user directory
-precedes embedded data. The real home/environment is never inspected implicitly.
+precedes embedded data by matching full name or alias; identifier collisions
+between user profiles are errors and bundled shadowing warns on every run.
+`listProfiles` supplies the catalog for `--judge list`. The real home/environment
+is never inspected implicitly.
 An invalid override or missing named snapshot is an error. CMake embeds profiles,
 snapshots, the approximate allow-list, special registries and native models;
 adding/removing data triggers reconfiguration. The Linux fixture is a real local
@@ -359,8 +362,9 @@ substring. SPDX/comment lines beginning `#` are ignored in metadata. `profile.tx
 selects a shipped profile or `local`. `local` captures macros and special probes
 from the actual GCC under a fixed gnu++20 fixture command (`-O0 -fsigned-char
 -DDISTILL_FIXTURE_JUDGE=1`), records startup-header provenance separately, and
-writes the snapshot only in its temporary test directory. `profile.toml` (name
-`profile`, with an optional sibling snapshot) is also supported; its resolutions
+writes the snapshot only in its temporary test directory.
+`profile-gcc15-gnupp20.toml` (with an optional sibling snapshot) is also
+supported; its resolutions
 must be satisfied by facts freshly captured under its effective local command.
 Without a profile, local fixture facts check the decisions. Builds replace local
 `-D`/`-U` with profile operations, and compare raw/flat preprocessing tokens with

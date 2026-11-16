@@ -61,6 +61,8 @@ the compile command you would normally use to build your solution:
 ```sh
 distill -o submit.cpp g++ -std=gnu++23 -O2 -I ~/lib main.cpp
 distill --judge codeforces -o submit.cpp g++ -I ~/lib main.cpp
+distill --judge codeforces-gcc14-cpp23 -o submit.cpp g++ main.cpp
+distill --judge list
 distill main.cpp                       # same as: distill g++ main.cpp
 distill --verify-run samples --report report.txt -o submit.cpp g++ -std=gnu++20 main.cpp
 distill --version
@@ -77,7 +79,7 @@ explain rejected features and options that limit transformations.
 | Option | Meaning |
 | --- | --- |
 | `-o <file>` | Write checked output to this file; default stdout. |
-| `--judge <name\|file>` | Use a bundled/user judge profile or a profile file. |
+| `--judge <name\|alias\|file>` | Select a bundled/user profile by full name, alias or TOML path; `--judge list` lists profiles. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. `// distill: keep` before a declaration also keeps it. |
 | `--verify-run <path>` | Compare stdout and exit status on a sample file, or immediate `*.in` files in a directory, sorted without recursion; repeatable. |
 | `--report <file>` | Write validation, configuration, conditional and pruning explanations. |
@@ -87,6 +89,26 @@ explain rejected features and options that limit transformations.
 | `-v` | Show progress on stderr. |
 | `--version` | Print the distill version, source commit and LLVM revision. |
 | `--help` | Show help. |
+
+Profiles have stable full names: `codeforces-gcc14-cpp23` and
+`atcoder-gcc15-gnupp23`. The aliases `codeforces` and `atcoder` currently point
+to those profiles; aliases may move to a judge's newest GCC option in later
+releases. Use a full name to pin an option. Every selection prints
+`judge: <selector> -> <resolved name>` on stderr. `--report` also records the
+selector, resolved name, origin and SHA-256 profile content digest.
+
+User profiles live in `$XDG_CONFIG_HOME/distill/judges` (when absolute), otherwise
+`~/.config/distill/judges`, or `%APPDATA%\distill\judges` on Windows. A user name
+or alias shadows the same bundled identifier with a warning on every run.
+User names and aliases share a namespace; collisions between user profiles
+are errors. User profile names follow the same shape as bundled ones
+(`<judge>-gcc<major>-<cppNN|gnuppNN>[-<variant>]`, matching the file name);
+every `.toml` in the user directory is validated on each lookup, so a user
+profile from 0.1.0 with a free-form name must be renamed. A selector containing a path separator or ending in `.toml` loads
+that file directly. `--judge list` needs no compile command and prints one line
+per profile: name, alias (`-` if absent), origin (including user path),
+reproduced/approximate, updated date and description. See
+[data/judges/README.md](data/judges/README.md) for the schema and digest rule.
 
 The result line is printed on stderr and begins the report, for example:
 

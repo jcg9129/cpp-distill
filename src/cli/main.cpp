@@ -108,6 +108,20 @@ int run(const std::vector<std::string>& args) {
   auto parsed = take(parseDistillOptions({args.begin() + 1, args.end()}));
   if (parsed.help) { std::cout << distillHelp(); return 0; }
   if (parsed.version) { std::cout << distillVersion(); return 0; }
+  std::optional<Profile> profile;
+  if (parsed.judge) {
+    ProfileLookup lookup;
+    for (const char* name : {"HOME", "XDG_CONFIG_HOME", "APPDATA"}) if (const auto* value = std::getenv(name)) lookup.environment[name] = value;
+    if (*parsed.judge == "list") {
+      auto catalog = take(listProfiles(lookup));
+      for (const auto& warning : catalog.warnings) std::cerr << warning << '\n';
+      std::cout << renderProfileList(catalog);
+      return std::cout ? 0 : 1;
+    }
+    profile = take(lookupProfile(*parsed.judge, lookup));
+    for (const auto& warning : profile->warnings) std::cerr << warning << '\n';
+    std::cerr << profileSelectionLine(*profile);
+  }
   const auto cwd = std::filesystem::current_path();
   const auto command = take(parseCompileCommand(parsed.compile, cwd));
   // Prevent output/report aliases from overwriting input or one another.
@@ -118,12 +132,6 @@ int run(const std::vector<std::string>& args) {
   };
   if ((parsed.output && same(*parsed.output, command.source)) || (parsed.report && same(*parsed.report, command.source)) ||
       (parsed.output && parsed.report && same(*parsed.output, pathFromUtf8(*parsed.report)))) throw Error{"output/report must differ from the input and one another"};
-  std::optional<Profile> profile;
-  if (parsed.judge) {
-    ProfileLookup lookup;
-    for (const char* name : {"HOME", "XDG_CONFIG_HOME", "APPDATA"}) if (const auto* value = std::getenv(name)) lookup.environment[name] = value;
-    profile = take(lookupProfile(*parsed.judge, lookup));
-  }
   DistillOptions options; options.profile = profile ? &*profile : nullptr;
   options.compilerExplicit = parsed.compilerExplicit; options.strict = parsed.strict;
   options.noPrune = parsed.noPrune; options.stripComments = parsed.stripComments; options.keep = parsed.keep;

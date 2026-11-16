@@ -183,14 +183,14 @@ int run(int argc, char** argv) {
       KeptWork kept;
       if (cli) {
         if (value("profile") == "fixture") {
-          auto text = read(temp.path / "fixture.toml");
+          auto text = read(fixture.provenance.file);
           if (value("check") == "present" || value("check") == "wrong-target") {
             const auto begin = text.find("check = "), end = text.find('\n', begin);
             std::ostringstream line; line << "check = [" << std::quoted(profile->check.front()) << "]";
             text.replace(begin, end - begin, line.str());
           }
           if (value("check") == "wrong-target") text += "link = ['-Wl,--stack=268435456']\n";
-          write(cwd / "fixture.toml", text);
+          write(cwd / fixture.provenance.file.filename(), text);
           write(cwd / "fixture-predefined.txt", read(temp.path / "fixture-predefined.txt"));
         }
         if (!value("fault").empty()) {
@@ -214,7 +214,7 @@ int run(int argc, char** argv) {
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
-        if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? "fixture.toml" : value("profile")); }
+        if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? pathToUtf8(fixture.provenance.file.filename()) : value("profile")); }
         const bool samples = value("prune") == "yes" || value("samples") == "yes";
         if (samples) {
           write(cwd / "sample.in",value("sample"));
@@ -225,6 +225,13 @@ int run(int argc, char** argv) {
         const auto r = take(runProcess(s)); caseDiagnostics += r.stderrText;
         check(!r.timedOut && !r.stdoutTruncated && !r.stderrTruncated, "CLI limit");
         code = r.exitCode; diagnostic = r.stderrText; report = read(cwd / "report.txt");
+        if (profile) {
+          const auto selector = value("profile") == "fixture" ? pathToUtf8(fixture.provenance.file.filename()) : value("profile");
+          const auto selection = "judge: " + selector + " -> " + profile->name + "\n";
+          check(diagnostic.find(selection) != diagnostic.npos, "CLI missing judge selection on stderr");
+          check(report.find(selection) != report.npos, "report missing judge selection");
+          check(report.find("judge digest: sha256:") != report.npos, "report missing profile digest");
+        }
         if (value("kept") == "yes") {
           const std::string marker = "work files kept at ";
           const auto begin = diagnostic.find(marker);

@@ -1,2 +1,2 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-atcoder
+atcoder-gcc15-gnupp23
