@@ -839,6 +839,31 @@ Clarifications from D3a (implementation, reviewed):
   `-o` writes a temporary file and renames it after the checks; stdout gets
   nothing before the checks finish.
 
+Clarifications from D3b (implementation, reviewed):
+
+- **Directives in the rendering invariant:** a retained source directive
+  keeps its token sequence, boundaries, order and logical starting line; its
+  internal physical lines may contract when a multi-line comment becomes a
+  space. Other surviving tokens keep their exact logical file and line.
+- **Comments in conditional directives:** a multi-line comment inside a
+  conditional directive stays as is, since a resynchronizing marker after a
+  skipped group can't restore `__LINE__` for a later `#elif`.
+- **`__LINE__` and `__FILE__`** are location facts, certified by the
+  rendering invariant, not predefined values: their use doesn't trigger the
+  predefined-macro precondition (§1.1 already excludes `__FILE__`'s text).
+  Explicit `#define`/`#undef` of them stays an ordinary binding fact; pasting
+  them from system macros still disables pruning. No other builtin is exempt.
+- **Byte accounting** measures unique input source bytes per rule, family
+  ownership and structural text apart; it is not the output size.
+- **`--keep`** matches the unqualified namespace-scope index spelling, all
+  occurrences; a name with no indexed declaration is an error (exit 1), also
+  with `--no-prune`, and a keep request that can't be checked fails rather
+  than being ignored.
+- **Samples** (internal API until D4): ordered named stdin files; each checked
+  build's runs are cached; execution is skipped when the build's target can't
+  run on this host. `-Ofast` disables pruning (cc1 doesn't imply the driver's
+  fast-math options).
+
 ### 4.9 Report
 
 Header: result (artifact, verification level, runtime status), the
