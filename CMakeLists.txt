@@ -26,12 +26,17 @@ add_library(distill_core STATIC
   src/core/profile/toml.cpp
   src/core/profile/profile.cpp
   src/core/profile/facts.cpp
+  src/core/validate/preprocess.cpp
+  src/core/validate/configuration.cpp
+  src/core/pipeline/pipeline.cpp
+  src/core/report/report.cpp
   src/core/resolve/resolve.cpp
   src/core/resolve/requirements.cpp
   src/core/lex/scan.cpp
   src/core/names/names.cpp
   src/core/inline/search.cpp
   src/core/inline/inline.cpp
+  src/core/command/options.cpp
   src/core/command/command.cpp
   src/core/process/process.cpp
   src/core/process/posix.cpp
@@ -61,16 +66,27 @@ if(DISTILL_LLVM_DIR)
   if(NOT LLVM_PACKAGE_VERSION VERSION_EQUAL "23.1.5")
     message(FATAL_ERROR "The resolver requires LLVM 23.1.5")
   endif()
+  foreach(LIB clangFrontend clangLex clangBasic)
+    get_target_property(LIB_TYPE ${LIB} TYPE)
+    if(NOT LIB_TYPE STREQUAL "STATIC_LIBRARY")
+      message(FATAL_ERROR "${LIB} must be static, got ${LIB_TYPE}")
+    endif()
+  endforeach()
   add_library(distill_clang STATIC src/clang/evaluate.cpp)
   target_include_directories(distill_clang SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
   target_link_libraries(distill_clang PUBLIC distill_core PRIVATE clangFrontend clangLex clangBasic)
+  add_executable(distill src/cli/main.cpp)
+  target_link_libraries(distill PRIVATE distill_clang)
+  if(UNIX AND NOT APPLE)
+    target_link_options(distill PRIVATE -static-libstdc++ -static-libgcc)
+  endif()
   if(NOT LLVM_ENABLE_RTTI)
     target_compile_options(distill_clang PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/GR-> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-rtti>)
   endif()
 endif()
 include(CTest)
 if(BUILD_TESTING)
-  add_library(distill_test_evaluate STATIC tests/support/evaluate.cpp)
+  add_library(distill_test_evaluate STATIC tests/support/evaluate.cpp tests/support/profile.cpp)
   target_include_directories(distill_test_evaluate PUBLIC tests/support)
   target_link_libraries(distill_test_evaluate PUBLIC distill_core)
   if(TARGET distill_clang)

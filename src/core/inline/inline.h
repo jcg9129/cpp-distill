@@ -30,6 +30,7 @@ struct FileIdentity {
 Result<FileIdentity> fileIdentity(const std::filesystem::path&);
 std::string onceGuardName(FileIdentity, std::uint64_t salt = 0);
 struct InlineOptions {
+  std::optional<std::chrono::steady_clock::time_point> deadline;
   std::size_t maxIncludeDepth = 200, maxOutputBytes = 64 * 1024 * 1024;
   NameLists names;
   std::vector<std::string> libraries;
@@ -49,6 +50,7 @@ struct SystemInclude {
 };
 struct InlineFlags { bool counter = false, pushMacro = false, popMacro = false, pragmaOperator = false; };
 struct InlineResult {
+  std::set<std::string> assumptions;
   std::string text;
   std::vector<UserFile> userFiles; // One record per opened spelling; identity may repeat.
   std::vector<SystemInclude> systemIncludes; // One record per textual occurrence.

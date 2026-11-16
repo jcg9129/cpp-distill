@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=raw
+verification=local
+exit=0
+configuration=local
+profile=codeforces
+report=no configuration satisfies
+requires=linux

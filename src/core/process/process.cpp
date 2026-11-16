@@ -2,10 +2,14 @@
 #include "core/process/process.h"
 #include "core/path.h"
 #include <cstdlib>
+#include <cstdint>
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 namespace distill {
@@ -71,6 +75,29 @@ Result<std::filesystem::path> resolve(const std::filesystem::path& executable,
   return Error{"executable not found on PATH: " + name};
 }
 } // namespace
+Result<std::filesystem::path> runningExecutable() {
+  try {
+#ifdef _WIN32
+    for (DWORD size = 1024; size <= 32768; size *= 2) {
+      std::wstring buffer(size, L'\0');
+      const auto copied = GetModuleFileNameW(nullptr, buffer.data(), size);
+      if (!copied) return Error{"GetModuleFileNameW failed"};
+      if (copied < size) { buffer.resize(copied); return std::filesystem::path(buffer); }
+    }
+    return Error{"running executable path too long"};
+#elif defined(__APPLE__)
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::vector<char> buffer(size);
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) return Error{"_NSGetExecutablePath failed"};
+    return std::filesystem::canonical(buffer.data());
+#elif defined(__linux__)
+    return std::filesystem::read_symlink("/proc/self/exe");
+#else
+    return Error{"running executable lookup unsupported"};
+#endif
+  } catch (const std::exception& e) { return Error{std::string("running executable: ") + e.what()}; }
+}
 Result<std::filesystem::path> resolveExecutable(const std::filesystem::path& executable,
                                                const std::filesystem::path& cwd) {
   try { return resolve(executable, cwd); }

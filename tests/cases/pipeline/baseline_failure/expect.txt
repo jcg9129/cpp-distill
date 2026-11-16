@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=
+verification=local
+exit=1
+configuration=local

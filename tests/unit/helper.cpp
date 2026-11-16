@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/path.h"
+#include "core/process/process.h"
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -25,6 +26,10 @@ int run(const std::vector<std::string>& argv) {
   const auto& command = argv[1];
   if (command == "echo-args") {
     for (std::size_t i = 2; i < argv.size(); ++i) std::cout << argv[i].size() << ':' << argv[i] << '\n';
+  } else if (command == "self-path") {
+    auto self = distill::runningExecutable();
+    if (!self.ok()) return 3;
+    std::cout << distill::pathToUtf8(self.value()) << '\n';
   } else if (command == "exit" && argv.size() == 3) return std::stoi(argv[2]);
   else if (command == "signal") std::raise(SIGTERM);
   else if (command == "sleep" && argv.size() >= 3) {

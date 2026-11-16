@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D2d)
+# Core library (D2a–D2e)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -40,11 +40,15 @@ the job. No signal handler or global process registry is installed.
 
 `probe/` provides pure parsers for verbose include search lists and `-dM`
 macros, identifies GCC/Clang/Apple Clang, infers the effective dialect, and
-drives three bounded compiler invocations. Search entries retain order, kind,
+drives bounded compiler invocations for search, triple, macros, special builtins
+and startup-header provenance. Search entries retain order, kind,
 framework status and a GCC-internal flag; none are removed. Macro replacement
 text retains every byte after the single separating whitespace character.
-Probes forward modelled flags except user include paths, optionally replace
-local macros, and pass only `-m32`/`-m64` to `-dumpmachine`. Each invocation
+Probes forward every effective compile option (including `-O` and `-pthread`),
+optionally replace local macros, and pass only `-m32`/`-m64` to `-dumpmachine`.
+The search-list invocation excludes user include paths, which `buildIncludeSearch`
+inserts separately; macro/special/startup probes keep the configured paths.
+Each invocation
 has a 30-second deadline and 4 MiB per-stream cap. Unique temporary directories
 default to `std::filesystem::temp_directory_path()` (or `ProbeOptions::temporaryRoot`)
 and are removed on success and failure. Operational entry points return `Result<T>` with an
@@ -123,7 +127,8 @@ other generated guards are retried. Recursive includes require a whole-file
 guard without an outer `#else`/`#elif`, the first inner directive defining it,
 and all design §4.4 protections. Nonrecursive repeated includes are copied.
 The include depth counts the main source as level one. Output limits include
-markers and generated guards. Input bytes are not charged against that limit:
+markers and generated guards. Each input file also has a 64 MiB read ceiling.
+Input bytes are not charged against the output limit:
 a long directive with whitespace can legitimately produce a smaller output.
 
 Unchanged source spans are copied as bytes, including CRLF and missing final
@@ -307,9 +312,11 @@ skipped alternative has no effect. The line map retains original entries for
 copied physical lines and null entries for generated markers. Unknown groups keep
 all their original directives; nested groups can still resolve independently.
 Disabled resolution returns byte-identical raw text and map. Resolver limits
-cover nesting, closure tokens and output size. Clang evaluation is an in-process
-component; a future CLI must run the Clang phase in the bounded worker described
-by design §3. CTest bounds the whole test binary at 120 seconds in this milestone.
+cover nesting, closure tokens and output size, with a cooperative step deadline
+through discovery, walking and rendering. `ConditionInput` carries the remaining
+step deadline to evaluators. The library Clang evaluator is in-process; the CLI
+uses a separate bounded worker for each evaluation. CTest bounds each test binary
+at 120 seconds.
 
 `ConditionEvaluator` has two implementations. Production `distill_clang`
 (`src/clang/evaluate.cpp`) is a separate optional static library; `distill_core`
@@ -381,3 +388,147 @@ the SDK, CTest adds Clang and differential runs for both resolver suites. Linkin
 these targets needs CI-runner memory; on the small development VM only compile
 the Clang-dependent TUs with `-fsyntax-only -fno-rtti -Isrc -isystem <sdk>/include`,
 one at a time, and remove SDK/build directories after verification.
+
+
+`validate/` implements configurations and preprocessing comparisons. A
+`Configuration` owns its exact option argv, structured command (ordered macro
+operations, include paths and classified options), compiler identity/triple and
+probe, observed four-state facts and option changes with reasons. Probe options
+accept an injected `ProcessRunner`, timeout, output cap and temporary root.
+`-dM -E` includes the complete effective compile flags; `#ifdef` probes cover the
+GCC version's embedded special registry (the union is also probed conservatively
+for unsupported compilers). A separate `-dD -E` run attributes `stdc-predef.h`
+definitions to startup headers. Unexpected startup headers fail the probe.
+A command definition overrides an operator binding; a final `-U` removes it.
+
+Local requirements use the same `Profile::initialState` and
+`profileRequirements` rules as snapshots. A complete registered local GCC has
+exhaustive observed facts; a compiler without a complete registry uses the
+approximate allow-list. The internal observed profile's `reproduced` field means
+complete local observations, never a claim about a judge build. A3 is checked
+against the actual effective local definitions before assuming a user-defined
+non-reserved name initially absent. A5's local counterpart is an observation:
+unlisted non-reserved names are absent from that configuration's macro dump and
+special probes. Startup-header facts do not receive A2(a)'s builtin protection.
+Native settings describe the concrete local host; they are never a judge fact.
+
+`flatCommand` strips user `-I`/`-iquote` paths and controlled outputs. With a
+profile it removes local `-D`/`-U` and dialect, then appends the profile dialect
+and **all** profile compile flags in order. Other local compile options remain;
+later profile options therefore take precedence. A check compiler uses profile
+link options; the local fallback keeps local link options and records each
+omitted profile link argument and why. Relative system/library paths become
+absolute before generated builds change cwd. `satisfies` reruns the resolver on
+raw using the observed facts and compares directionally with `sameDecisions`.
+Candidates are available `check` compilers in profile order, then the local
+fallback. After probing, a check candidate must pass
+`compatibleProfileTriple(profile.triple, probe.triple)`; an incompatible target
+is skipped before satisfaction/build checks, with the compiler and both triples
+recorded in the diagnostic and report. Thus native Linux `g++` in Codeforces'
+check list is skipped, and the local fallback omits its Windows link flags.
+The first satisfying configuration is selected; a failed preprocess
+or build check rejects flat rather than searching for a compiler that accepts it.
+
+Without a profile, **resolution still receives no local macro snapshot or local
+integer model**. It uses source facts, A3, and the explicit command dialect (or
+the probed default dialect when omitted). Thus `#ifdef LOCAL` and compiler/OS
+conditions remain unknown. The local configuration's own probes then validate
+the decisions actually made. This preserves §4.5's no-profile rule while checking
+that its dialect and A3 assumptions hold for the local compiler.
+
+`targetEquivalent` additionally requires a reproduced judge profile, exact
+ordinary-macro equality and every registered special-builtin probe, compatible
+triple/compiler/dialect, the full ordered profile flags, and no host-dependent
+option in either the original or validation command. Agreement only on used
+facts, an approximate profile, and any `native` command give `local`.
+
+`parsePreprocessed` reuses the D2b lexer. Numeric GCC markers (including escaped
+file names, zero line numbers and flags 1–4) set the following logical location;
+blank lines advance it. A scan before marker interpretation keeps marker-shaped
+lines in multiline literals intact. Tokens retain their logical starting line;
+pragma start/end events retain directive boundaries. User spellings map through
+the inliner's filesystem identities to one original spelling; system files keep
+their spelled paths, identified by marker flag 3. `comparePreprocessed` reports
+the first differing token or boundary with both locations. Parser fixtures test
+line shifts, spelling/boundary differences, aliases, system paths and raw strings.
+
+`pipeline/distillNoPrune` is the core entry point: command/probe, original build,
+inlining, raw preprocessing/build, resolution, configuration selection, flat
+preprocessing/build, then selection of the checked bytes. It accepts the
+command, `DistillOptions`, evaluator and process runner. It returns a
+`PipelineResult`; the caller publishes `bytes` without rendering them again.
+Generated files are binary writes, and their bytes are checked again after the
+checks. Baseline preprocessing retains user include paths; raw/flat checks run
+from a new directory without them. Unique private work directories default to
+`std::filesystem::temp_directory_path()`; `DistillOptions::temporaryRoot` remains
+an override for tests. They are removed by RAII, except raw failures: exit 1,
+no output bytes, files kept in that same temporary directory and their path
+reported. Quoted includes cannot find a missed user header beside the original
+source. Flat failure, unavailable satisfying configurations,
+resolution limits or disabled resolution fall back to the already checked raw.
+Each phase shares a 30-second deadline across its child processes/evaluations;
+process output is capped. Inline/resolve also enforce their structural limits.
+Runtime is always `not requested` in D2e; strict success returns 3.
+
+`report/` renders the result header, profile/date, option classes, assumption
+dependencies, configurations and their satisfied macro/arithmetic facts, exact
+process argv/cwd, omissions and failures, then every conditional directive at
+its original location (generated guards use `<generated>`). No family lines are
+emitted before D3. A failed flat resolution's decisions remain visible alongside
+its rejection, and do not certify the selected raw artifact.
+
+`src/cli/main.cpp` is built only with `DISTILL_LLVM_DIR`; it links the static
+Clang libraries and static C++ runtimes like the spike. It parses the options
+through the LLVM-free `command/options` component, loads an embedded or explicit
+TOML profile (and sibling snapshot), constructs a Clang worker evaluator, calls
+the pipeline and writes the exact result bytes. Default source-only commands use
+`g++`; an implicit Clang is rejected and an explicitly named Clang is noted.
+Each worker is the same executable with a private file protocol. Its condition
+files and cwd live in a separate unique private OS temporary directory, removed
+by RAII, so the CLI creates no work files in the user's source directory.
+The executable path comes from `/proc/self/exe` on Linux,
+`_NSGetExecutablePath` on macOS, or `GetModuleFileNameW` on Windows; only a failed
+OS lookup falls back to resolving `argv[0]`. Workers are launched by
+D2a's process runner in a process group/Job Object with the remaining deadline
+and bounded output. No LLVM resource headers are needed for isolated conditions.
+`--no-prune` is mandatory; `--keep`, `--verify-run`, `--strip-comments` are rejected
+as not supported yet. Output defaults to stdout; progress/result go to stderr.
+
+```sh
+# SDK builds only (link/run on CI, not the small development VM):
+build/distill --no-prune --judge codeforces --report report.txt -o submit.cpp g++ main.cpp
+# Core pipeline cases, without LLVM:
+timeout 120 build/tests/runner/distill_pipeline_cases
+```
+
+`tests/cases/pipeline/<name>/` has `cmd.txt`, sources and `expect.txt` key/value
+metadata: `artifact`, `verification`, `exit`, `configuration`, optional `profile`,
+`strict`, report/reason substrings, platform requirements and fault injection.
+SPDX/comment metadata lines begin `#`. `profile=fixture` captures a valid TOML
+profile and sibling snapshot from the actual test GCC under gnu++20, `-O0`,
+`-fsigned-char`, `-DDISTILL_FIXTURE_JUDGE=1`. It exercises `target` for supported
+registry versions, otherwise conservatively expects `local`. It is test
+provenance about this compiler only. `check=present` tests a found check compiler;
+the default fixture lists an absent check compiler and tests fallback.
+`check=wrong-target` puts a compiler shim on PATH that reports a MinGW triple
+for a Linux fixture. It must be skipped and reported before the local fallback
+produces `flat (local)`, omitting the deliberately incompatible profile link flag.
+The missed-inline hook restores a quoted user include, with matching headers
+beside the source and under its `-I`/`-iquote` path; raw must fail without those
+search paths and retain files in the temporary root. Cases verify generated
+argv/cwd, the core temporary-root override, successful cleanup and reported
+retention, then clean up retained test files. The resolver hook corrupts a
+return token in flat **after**
+correct decisions, so satisfaction alone passes but preprocessing rejects it.
+Hooks use the injected process runner; the CLI run uses a test compiler shim
+with the same mutations, with no product testing backdoor.
+
+All required unit jobs run the LLVM-free pipeline cases. The unchanged
+`resolver (linux, clang)` job also builds `distill`, runs those same cases through
+the real binary (`distill_pipeline_cases --cli <binary>`), runs core pipeline
+cases with Clang evaluation, and checks help, default commands, strict exit and
+option errors, custom `argv[0]` and symlink invocation. An LLVM-free process test
+also checks OS executable discovery when a child receives an unusable `argv[0]`.
+Local verification never links LLVM: syntax-check `src/clang/`,
+CLI and Clang-enabled test support one TU at a time against the published arm64
+SDK, then delete the SDK and build trees.

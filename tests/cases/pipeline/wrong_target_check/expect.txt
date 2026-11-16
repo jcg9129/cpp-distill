@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+profile=fixture
+check=wrong-target
+artifact=flat
+verification=local
+exit=0
+configuration=local
+requires=linux
+report=flat: check compiler skipped:
+report.triple=target triple x86_64-w64-mingw32 is incompatible with judge target
+report.local=profile link option omitted for local fallback
+reason=check compiler skipped:

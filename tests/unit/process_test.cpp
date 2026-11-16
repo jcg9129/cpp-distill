@@ -161,6 +161,25 @@ TEST(process_explicit_path_lookup) {
   CHECK(resolveExecutable("g++", std::filesystem::current_path()).ok());
 #endif
 }
+TEST(process_running_executable) {
+  const auto self = runningExecutable();
+  CHECK(self.ok());
+  CHECK(self.value().is_absolute());
+  auto expected = test::helper.parent_path() / "distill_unit_tests";
+#ifdef _WIN32
+  expected += ".exe";
+#endif
+  CHECK(std::filesystem::equivalent(self.value(), expected));
+  auto process = spec({"self-path"});
+  process.argv[0] = "distill-custom-argv0-not-on-path-17931";
+  auto child = detail::runNative(process, test::helper);
+  CHECK(child.ok());
+  CHECK_EQ(child.value().exitCode, 0);
+  auto output = child.value().stdoutText;
+  CHECK(!output.empty() && output.back() == '\n');
+  if (!output.empty()) output.pop_back();
+  CHECK(std::filesystem::equivalent(pathFromUtf8(output), test::helper));
+}
 TEST(process_missing_executable_and_bad_specs) {
   auto process = spec({"pwd"});
   process.argv[0] = "distill-definitely-not-an-executable-8239";

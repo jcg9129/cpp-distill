@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=flat
+verification=local
+exit=3
+configuration=local
+strict=yes

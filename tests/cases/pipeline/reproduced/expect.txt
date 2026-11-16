@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=flat
+verification=fixture
+exit=0
+configuration=local
+profile=fixture
+report=DISTILL_FIXTURE_JUDGE: profile command

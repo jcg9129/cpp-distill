@@ -1,0 +1,2 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+g++ main.cpp -std=gnu++20 -O0 -D"LOCAL=1"

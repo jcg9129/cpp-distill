@@ -3,6 +3,7 @@
 #include "core/result.h"
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,9 +25,12 @@ struct ProcessResult {
   std::string stdoutText, stderrText;
   std::chrono::milliseconds wall{0};
 };
+using ProcessRunner = std::function<Result<ProcessResult>(const ProcessSpec&)>;
 // Explicit PATH lookup. Relative PATH entries and executable paths use cwd.
 Result<std::filesystem::path> resolveExecutable(const std::filesystem::path& executable,
                                               const std::filesystem::path& cwd);
+// OS-reported path of this process, independent of argv[0] and PATH.
+Result<std::filesystem::path> runningExecutable();
 Result<ProcessResult> runProcess(const ProcessSpec& spec);
 namespace detail {
 Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::path& executable);

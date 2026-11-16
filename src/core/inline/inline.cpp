@@ -137,7 +137,11 @@ struct Engine {
     }
     n.guard = std::move(guard); n.guardDefine = directives[1];
   }
+  void checkDeadline() const {
+    if (options.deadline && std::chrono::steady_clock::now() >= *options.deadline) throw Error{"inline deadline exceeded"};
+  }
   std::size_t load(HeaderLookup hit, std::size_t depth) {
+    checkDeadline();
     if (depth > options.maxIncludeDepth) throw Error{hit.fileName + ":1: include depth limit exceeded"};
     const auto identity = take(fileIdentity(hit.path));
     for (auto id : discovering) if (nodes[id]->info.identity == identity) return id;
@@ -146,6 +150,7 @@ struct Engine {
     const auto id = nodes.size();
     auto node = std::make_unique<Node>();
     node->info = UserFile{hit.path, hit.fileName, identity, 0, 0};
+    if (std::filesystem::file_size(hit.path) > 64 * 1024 * 1024) throw Error{"input size limit exceeded"};
     std::ifstream input(hit.path, std::ios::binary);
     if (!input) throw Error{hit.fileName + ":1: cannot read user file"};
     node->bytes.assign(std::istreambuf_iterator<char>(input), {});
@@ -192,6 +197,7 @@ struct Engine {
       struct Group { std::vector<std::size_t> switches; bool dirty = false; };
       std::vector<Group> groups;
       for (std::size_t i = 0; i < n.scan.lines.size(); ++i) {
+        checkDeadline();
         const auto& l = n.scan.lines[i];
         if (l.directive && beginsGroup(l.directive->name)) groups.push_back({{}, false});
         const auto include = n.includes.find(i);
@@ -246,22 +252,26 @@ struct Engine {
         const auto& parent = *nodes[stack.back().node];
         fail(parent, parent.scan.lines[stack.back().position].tokens.front().line, cycle(n));
       }
+      for (const char* a : {"A1", "A2", "A3"}) result.assumptions.insert(a);
       return true;
     }
     return false;
   }
   void render(std::size_t id) {
+    checkDeadline();
     auto& n = *nodes[id];
     if (recursive(id)) { append("\n"); return; }
     if (stack.size() >= options.maxIncludeDepth) throw Error{n.info.fileName + ":1: include depth limit exceeded"};
     ++n.info.times;
     stack.push_back({id, 0, {}});
     if (n.once) {
+      result.assumptions.insert("A3");
       newline(); append("#ifndef " + n.guard + "\n#define " + n.guard + "\n");
       stack.back().guardEpoch = unsafeIncludes;
     }
     marker(n, 1);
     for (std::size_t i = 0; i < n.scan.lines.size(); ++i) {
+      checkDeadline();
       const auto& l = n.scan.lines[i];
       stack.back().position = i;
       if (n.guardDefine == i) stack.back().guardEpoch = unsafeIncludes;
