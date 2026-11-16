@@ -1,18 +1,16 @@
 # cpp-distill design
 
-Status: **approved v7**, 2026-11-15 (user): v6 plus the §4.3 amendment (judge
-command, build provenance, special builtins, host-dependent options, A5),
-challenged by Codex in two rounds (`docs/reviews/2026-11-15-codex-profiles-r1.md`,
-`-r2.md`, cited as *P1-n*, *P2-n*). Opus drafted v1; Codex
-challenged v1–v5 (`docs/reviews/2026-11-15-codex-design-r1.md` … `-r5.md`,
-cited as *R1-n* … *R5-n*). Round 5 found no blocker for D2; v6 closes its two
-D3 holes (§4.7: predefined macros used as values, template-selected aliases).
-**Draft v8**, 2026-11-16: the D3 pruning amendment (A6, §4.7, §4.8, §4.9,
-§6) after Codex's review of the pruning rules against v7 and D2
-(`docs/reviews/2026-11-16-codex-pruning-r1.md`, cited as *D3-1-n*); pending a
-user approval after Codex's second round
-(`docs/reviews/2026-11-16-codex-pruning-r2.md`, *D3-2-n*), whose findings are
-folded in.
+Status: **approved v8**, 2026-11-16 (user): v7 plus the D3 pruning amendment
+(A6, §4.7, §4.8, §4.9, §6, §7), after Codex's two rounds on the pruning rules
+against v7 and D2 (`docs/reviews/2026-11-16-codex-pruning-r1.md`, `-r2.md`,
+cited as *D3-1-n*, *D3-2-n*). v7 (2026-11-15) was v6 plus the §4.3 amendment
+(judge command, build provenance, special builtins, host-dependent options,
+A5), challenged by Codex in two rounds
+(`docs/reviews/2026-11-15-codex-profiles-r1.md`, `-r2.md`, cited as *P1-n*,
+*P2-n*). Opus drafted v1; Codex challenged v1–v5
+(`docs/reviews/2026-11-15-codex-design-r1.md` … `-r5.md`, cited as *R1-n* …
+*R5-n*). Round 5 found no blocker for D2; v6 closed its two D3 holes (§4.7:
+predefined macros used as values, template-selected aliases).
 
 `distill` turns a C++ solution that `#include`s a personal library into one
 self-contained `.cpp`, removes code it can show unused, and checks the result
