@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Compatibility matrix
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'ci/**'
+      - 'data/**'
+      - 'spike/**'
+      - '.github/workflows/matrix.yml'
+      - 'tests/cases/**'
+  schedule:
+    - cron: '31 5 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: matrix-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  matrix:
+    name: matrix (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+          # Also covers the oldest supported macOS, rather than only minos.
+          - platform: macos-arm64
+            runner: macos-14
+          - platform: macos-x86_64
+            runner: macos-15-intel
+          - platform: windows-x86_64
+            runner: windows-2025
+    env:
+      SDK_PLATFORM: ${{ matrix.platform }}
+      SDK_CONTAINER: ${{ matrix.container }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - if: runner.os != 'Linux'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@a102174a2b586eec2ea151a69e6fd14404a8ce7c # v1.13.0
+        with:
+          arch: x64
+      - name: Compatibility harness self-tests (LLVM-free)
+        shell: bash
+        run: python -m unittest discover -s ci/matrix -p 'test_*.py'
+      - name: Acquire SDK and build CLI (manylinux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ci/llvm/in-container.sh "$SDK_CONTAINER" bash ci/matrix/linux.sh build
+      - name: Acquire SDK and build CLI (native)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
+          python ci/matrix/build.py --platform "$SDK_PLATFORM"
+      - name: Move CLI and worker, delete SDK and build (manylinux)
+        id: isolate_linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ci/llvm/in-container.sh "$SDK_CONTAINER" bash ci/matrix/linux.sh isolate
+      - name: Move CLI and worker, delete SDK and build (native)
+        id: isolate_native
+        if: runner.os != 'Linux'
+        shell: bash
+        run: python ci/matrix/build.py --platform "$SDK_PLATFORM" --isolate
+      - name: Dependency and minimum OS audit
+        if: ${{ !cancelled() && (steps.isolate_linux.outcome == 'success' || steps.isolate_native.outcome == 'success') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix=''
+          if [[ $RUNNER_OS == Windows ]]; then suffix=.exe; fi
+          python ci/llvm/binary-audit.py "isolated/distill$suffix" --output results/cli-audit.json
+          python ci/llvm/binary-audit.py "isolated/distill_prune_worker$suffix" --output results/worker-audit.json
+      - name: Toolset GCC CLI smoke and dialects
+        if: ${{ !cancelled() && steps.isolate_linux.outcome == 'success' }}
+        shell: bash
+        run: bash ci/llvm/in-container.sh "$SDK_CONTAINER" bash ci/matrix/linux.sh smoke
+      - name: Official GCC 14 and 15 dialects
+        if: ${{ !cancelled() && steps.isolate_linux.outcome == 'success' }}
+        shell: bash
+        run: bash ci/matrix/linux-gcc.sh
+      - name: Ubuntu system GCC CLI smoke
+        if: ${{ !cancelled() && steps.isolate_linux.outcome == 'success' }}
+        shell: bash
+        run: python3 ci/matrix/smoke.py --platform "$SDK_PLATFORM" --label ubuntu --compiler /usr/bin/g++
+      - name: AlmaLinux 8 system GCC and glibc 2.28
+        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.isolate_linux.outcome == 'success' }}
+        shell: bash
+        run: bash ci/llvm/alma-smoke.sh --cli
+      - name: Codeforces cross build checks (no target execution)
+        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.isolate_linux.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-x86-64-posix
+          python3 ci/matrix/smoke.py --platform "$SDK_PLATFORM" --label codeforces-cross \
+            --compiler x86_64-w64-mingw32-g++ --cross
+      - name: Homebrew GCC CLI smoke, dialects and Apple default refusal
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.isolate_native.outcome == 'success' }}
+        shell: bash
+        run: bash ci/matrix/macos-gcc.sh
+      - name: MSYS2 MinGW GCC CLI smoke, dialects and Unicode paths
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.isolate_native.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          python ci/matrix/smoke.py --platform $env:SDK_PLATFORM --label mingw-ucrt64 --compiler C:/msys64/ucrt64/bin/g++.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Compatibility table and job summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          if [[ $RUNNER_OS == Linux ]]; then
+            sudo chown -R "$(id -u):$(id -g)" results isolated 2>/dev/null || true
+          fi
+          if [[ -d isolated/evidence ]]; then cp -R isolated/evidence results/alma; fi
+          python ci/matrix/summary.py
+      - name: Compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: matrix-${{ matrix.platform }}
+          path: results/
+          if-no-files-found: error
+      - name: Delete CI builds and downloads
+        if: always()
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Linux ]]; then
+            sudo rm -rf spike-work isolated
+          else
+            rm -rf spike-work isolated
+          fi

@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D4a)
+# Core library (D2a–D4b)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -1027,3 +1027,84 @@ timeout, full bounded command/report/stderr on failure, then keeps the independe
 measurement pass. Local builds do not link LLVM; normal/fork core suites exercise
 selection, equality, limits, verbose reporting, skips and fallback with injected
 process/worker models. Real CLI/extraction assertions require SDK CI.
+
+
+## D4b compatibility matrix
+
+[Compatibility matrix](../../.github/workflows/matrix.yml) is an independent,
+non-required workflow. It runs on relevant PRs, every Monday, or manually:
+
+```sh
+gh workflow run matrix.yml --ref YOUR_BRANCH
+```
+
+The workflow must already be registered on the default branch; `--ref` chooses
+which branch's implementation to run. No ruleset or required-job setting is
+changed by D4b. The existing required unit/resolver builds remain unchanged.
+
+| Job | Build and smoke environment |
+| --- | --- |
+| `matrix (linux-x86_64)` | manylinux_2_28 x86_64 GCC toolset; Ubuntu system GCC; official GCC 14.2/15.2 images; AlmaLinux 8 system GCC; Ubuntu MinGW cross GCC |
+| `matrix (linux-arm64)` | manylinux_2_28 aarch64 GCC toolset; Ubuntu system GCC; native official GCC 14.2/15.2 images |
+| `matrix (macos-arm64)` | Apple clang consumer on macos-14, deployment target 14.0; every installed Homebrew GCC (ensure GCC 14 or 15, installing gcc@15 if needed) |
+| `matrix (macos-x86_64)` | Apple clang consumer on macos-15-intel, deployment target 14.0; every installed Homebrew GCC |
+| `matrix (windows-x86_64)` | MSVC `/MT` on windows-2025; MSYS2 UCRT64 GCC as in the unit job |
+
+Each job acquires the checksum-verified published `llvm-23.1.5-1` SDK and builds
+`distill` plus `distill_prune_worker` with the spike's toolchains, pinned
+CMake/Ninja and at most two compilation jobs. A separate step moves both binaries
+into `isolated/` and deletes the entire SDK/download/build directory. Both moved
+binaries pass the spike's dynamic-dependency and minimum-OS audits. No CMake or
+CLI entry-point changes were needed: static runtimes, embedded headers, wide
+Windows argv and the CLI's internal worker modes were already implemented.
+
+The moved CLI runs `--help`, no-prune and default pruning on `no_profile`,
+`pruned_typical_library`, `profile_macro_replace` and `pruned_strip_keep` from
+`tests/cases/pipeline`. The profile case uses explicit command facts in a native
+fixture profile, without inventing a reproduced snapshot. Its resolved branch
+exercises the condition worker. The typical library asserts removal of the
+unused SparseTable and retention of Mint, LazySegTree, Fenwick and DSU. Stripping
+asserts preservation of the keep root and removal of comments. Empty sample
+input exercises `--verify-run` on the deterministic no-input solutions. Every
+case uses spaces and `café` in source-directory, output and report paths, including
+Windows. macOS also asserts that implicit `/usr/bin/g++` is refused as Apple
+Clang. AlmaLinux reuses `ci/llvm/alma-smoke.sh --cli`, mounts only the moved
+binaries/copied fixtures/harness, and runs against GCC 8 in GNU C++17 mode;
+GCC 8 is a minimum-platform smoke check, outside the six-dialect parse matrix.
+
+For each matrix GCC, the CLI parses `stl_preprocess` (bits/stdc++.h, vector,
+sort, accumulate, optional and structured bindings) under `c++17`, `c++20`,
+`c++23` and their `gnu++` spellings. Each result must be pruned or flat with
+explicit pruning-disable reasons. A pruning analysis and nonempty parse argv
+must be reported; Clang parse errors, recovery ASTs, missing workers and invalid
+parse targets fail even if a flat artifact builds. Refusal reasons are recorded
+verbatim; a raw result or a flat fallback without an analysis reason fails.
+
+Linux x86_64 additionally installs `g++-mingw-w64-x86-64-posix`. For both simple
+and typical-library sources it checks the shipped Codeforces profile, with
+no-prune and default pruning. The compile command itself uses the cross compiler,
+so even the baseline cannot execute a target binary. Reports must show a passed
+flat check using the compatible `x86_64-w64-mingw32` check compiler and runtime
+`skipped: can't run target binaries here`; recorded process argv must contain no
+invocation of a target `.exe`. `--verify-run` requests the comparison to exercise
+the skip path, rather than silently omitting runtime verification.
+
+Ubuntu's older MinGW package may lack Codeforces' `-lstdc++exp`. In that case the
+shipped profile must report the precise missing-library flat failure and raw
+fallback. A separately named external build-only profile then omits only
+`-lstdc++exp`, retaining the Codeforces flags, triple, snapshot and other link
+options. The summary explicitly labels this adapter; it does not establish
+judge build equivalence or `target` verification. Other profile/build failures
+fail the job. This is an intentional compatibility check with a different GCC
+version, not a reproduced Codeforces toolchain.
+
+Each `matrix-<platform>` workflow artifact contains `compatibility.tsv`,
+`compatibility.md`, per-compiler `rows.json`, full command/stdout/stderr logs,
+reports, acquisition/isolation evidence, configure/build logs and dependency
+audits. The same table appears in each job summary even after smoke failures;
+failed rows do not prevent later dialects from running. Nine LLVM-free harness self-tests guard against false passes from parse/worker
+failures, missing analyses, target execution and lost failure evidence. Run them
+with `python3 -m unittest discover -s ci/matrix -p 'test_*.py'`. Each CLI invocation has
+a 120-second deadline and each job has a 90-minute deadline. This workflow must
+run in CI: local LLVM-free tests and script checks cannot establish SDK linkage,
+resource independence, GCC/Clang parsing or platform portability.
