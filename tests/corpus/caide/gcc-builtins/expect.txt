@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: deadPopcount goes; countBits and the builtin call remain (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=int countBits
+contains.1=__builtin_popcount(x)
+contains.2=countBits(255u)
+absent=deadPopcount

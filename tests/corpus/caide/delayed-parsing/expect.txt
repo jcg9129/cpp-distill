@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# unsupported because the original command requests Clang-only -fdelayed-template-parsing; GCC rejects it before a baseline can build (§1.2).
+exit=1
+artifact=
+reason=-fdelayed-template-parsing

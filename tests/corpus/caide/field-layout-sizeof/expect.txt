@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; Packet stays whole including its unnamed-by-use reserved field (§4.7 whole records).
+exit=0
+artifact=pruned
+contains=struct Packet
+contains.1=unsigned char reserved[32]
+contains.2=int value
+contains.3=sizeof(Packet) == 36

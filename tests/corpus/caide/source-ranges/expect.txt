@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: trailing-return f and noexcept g declaration/definition go (§4.7).
+exit=0
+artifact=pruned
+contains=int main()
+absent=auto f()
+absent.1=auto g()
+absent.2=int g()

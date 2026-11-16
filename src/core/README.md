@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D3d)
+# Core library (D2a–D4a)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -468,17 +468,33 @@ no output bytes, files kept in that same temporary directory and their path
 reported. Quoted includes cannot find a missed user header beside the original
 source. Flat failure, unavailable satisfying configurations,
 resolution limits or disabled resolution fall back to the already checked raw.
-Each phase shares a 30-second deadline across its child processes/evaluations;
-process output is capped. Inline/resolve also enforce their structural limits.
-`DistillOptions::samples` is the internal D3 runtime API: named stdin paths,
+Each phase shares a 30-second deadline across its child processes/evaluations,
+including samples. Every sample run also has a 30-second per-run cap, clipped to
+the remaining phase budget. Process output is capped. Inline/resolve also enforce
+their structural limits.
+`DistillOptions::samples` is the shared runtime API: named stdin paths,
 resolved against the original command cwd. Baseline runs are compared with raw;
 flat is compared with the original built in flat's configuration (restoring user
 include paths for that original build); pruned is compared with flat's saved
 runs. Each artifact has its own executable in the private work directory. Runs
 compare stdout and exit code, allow nonzero exits, ignore stderr and fail on
 signals, deadlines or output caps. Unsupported host OS/architecture combinations
-report a runtime skip. Empty samples give `not requested`. CLI sample selection
-remains D4. Strict returns 3 unless the selected bytes are pruned/target.
+report `skipped: can't run target binaries here`. Empty samples give
+`not requested`. A completed comparison reports `compared N samples` in the
+result line and report. A difference rejects the candidate with
+`differs on sample X (distill bug or nondeterministic program)`; flat/pruned fall
+back to checked raw/flat, while a raw difference exits 1, publishes no source,
+and keeps the work directory. Strict returns 3 unless selected bytes are
+pruned/target.
+
+The CLI exposes this API with repeatable `--verify-run <path>` before the
+compiler. A regular file (any suffix) is one stdin sample; a directory contributes
+its immediate regular `*.in` files in filename order. It does not recurse.
+Selections retain command-line order, including repeats. Missing/non-regular
+paths and directories without `*.in` samples fail with exit 1 before pipeline
+work. `collectRunSamples` implements this selection in the LLVM-free core.
+`-v` prints each sample comparison and whether it matches. Stderr differences
+do not affect equality, while its output remains bounded by §3's caps.
 
 `report/` renders the result header, profile/date, option classes, assumption
 dependencies, configurations and their satisfied macro/arithmetic facts, exact
@@ -510,9 +526,9 @@ Pruning is the default; `--no-prune` requests inline/resolve only. Repeatable
 `--keep <name>` requests namespace-indexed names; an unknown name exits 1 with
 no artifact. Keep names are validated even alongside `--no-prune`; if no checked
 flat configuration/index is available they cannot be bound and exit 1.
-`--strip-comments` runs before every artifact's checks. `--verify-run` is still
-rejected as D4. The CLI uses its own `--internal-prune` mode for extraction, so
-its deployed binary needs no sibling worker executable. Output defaults to
+`--strip-comments` runs before every artifact's checks. Repeatable `--verify-run`
+selects samples for those checks. The CLI uses its own `--internal-prune` mode
+for extraction, so its deployed binary needs no sibling worker executable. Output defaults to
 stdout; progress/result go to stderr. File output is staged in a private sibling
 directory, then atomically renamed over the destination after checks (Windows
 uses MoveFileExW replacement). Stdout receives bytes only after all checks.
@@ -883,9 +899,11 @@ SDK-only cases in `tests/cases/pipeline` use `prune=yes`, `strip=yes`, `keep`,
 `contains`/`absent` and test-only `fault` metadata. `--worker <path>` enables the
 real extraction path and internal sample comparisons. `--cli <binary>` uses the
 real CLI and independently builds/runs its exact output against a real-CLI flat
-artifact; runtime still says `not requested` in the product. The forced runtime
-fault is API-only until D4. Fault hooks remain in the test runner, without a
-product flag. Every case continues after failures with its complete diagnostic.
+artifact. D4a passes `--verify-run sample.in` for sample-enabled CLI cases,
+including the forced pruning runtime difference and constructor/destructor roots.
+The existing compiler-boundary fault hook exercises CLI fallback to flat.
+Fault hooks remain in the test runner, without a product flag. Every case
+continues after failures with its complete diagnostic.
 The unchanged resolver CI job runs these plus the existing extraction suites;
 its diagnostic rerun includes pipeline and CLI cases as well as extraction.
 
@@ -952,7 +970,7 @@ diagnostic logs. The unchanged `resolver (linux, clang)` job measures eligible
 pruning/pipeline fixtures and `tests/corpus/caide/`, then uploads both tables and
 logs as `d3-pruning-measurements`. Fault, checker and explicit refusal fixtures
 are excluded from size measurements. Corpus rows may legitimately fail or fall
-back; their expected outputs belong to the D4 port.
+back; D4a runs their assertions separately from measurements.
 
 `tests/corpus/caide/` contains all 81 directories copied from the user's GPL-3.0
 caide fork, original-file hashes and documented compile/source adapters.
@@ -984,3 +1002,28 @@ failure now includes complete bounded worker stderr as well as all disable
 reasons. `ci/measure.py` retains the original corpus adapters and hashes;
 `tests/corpus/caide/README.md` records per-case expected classes for comparison,
 including the raw-only exception caused by the corpus's unmodelled `-v`.
+
+
+## D4a caide assertions
+
+All 81 copied cases in `tests/corpus/caide/` now have individual `expect.txt`
+assertions and a per-case review in [PORT.md](../../tests/corpus/caide/PORT.md),
+compared with the original numbered inputs and `etalon.cpp`. Copied source
+hashes and compile adapters are unchanged. The runner shares the pipeline
+metadata format; corpus `contains[.N]` and `absent[.N]` compare complete
+preprocessing-token sequences, ignoring formatting and comments. Kept-record,
+macro, overload/specialization-name, static-storage and static-assert differences
+are explicit. Unsupported inputs assert exit 1 and diagnostics; compiler feature
+alternatives are limited to the documented probe/baseline failures. SDK worker
+failures cannot satisfy a flat expectation.
+
+The port explicitly maps caide's noOptimize metadata to `--no-prune`, requested
+member roots to indexed record owner `C`, and stripComments to `--strip-comments`.
+Legacy caide annotations, forceRemove, repair and verifyCommand controls do not
+become product options; each affected case documents and asserts its v8 outcome.
+The two runtime sample cases use the original input files. The resolver
+(linux, clang) CI job runs each caide assertion as its own CTest with a 120-second
+timeout, full bounded command/report/stderr on failure, then keeps the independent
+measurement pass. Local builds do not link LLVM; normal/fork core suites exercise
+selection, equality, limits, verbose reporting, skips and fallback with injected
+process/worker models. Real CLI/extraction assertions require SDK CI.

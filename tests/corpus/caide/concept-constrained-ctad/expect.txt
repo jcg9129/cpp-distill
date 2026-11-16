@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains splitter as well as the combiner constraint and deduction guide.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=concept combiner
+contains.1=concept splitter
+contains.2=class fold
+contains.3=fold(R &&, T, Op) -> fold<T, Op>
+contains.4=lib::fold f

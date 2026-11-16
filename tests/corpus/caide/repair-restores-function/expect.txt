@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: unused goes and twice remains by §4.7 rules 2/4; caide forceRemove/repair metadata is not a distill option (§4.6).
+exit=0
+artifact=pruned
+contains=int twice
+contains.1=return twice(21)
+absent=int unused()

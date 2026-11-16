@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 never removes namespace using-directives; dead still goes and factorial remains.
+exit=0
+artifact=pruned
+contains=#include <bits/stdc++.h>
+contains.1=using namespace std
+contains.2=long long factorial
+contains.3=factorial(5)
+absent=long long dead(

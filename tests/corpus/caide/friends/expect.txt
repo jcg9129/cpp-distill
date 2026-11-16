@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 keeps A whole and rule 2 retains all classes/functions named in its friend declarations.
+exit=0
+artifact=pruned
+contains=class Class
+contains.1=class ClassTemplate
+contains.2=class AnotherClassTemplate
+contains.3=void func()
+contains.4=void funcTemplate()
+contains.5=void anotherFuncTemplate()
+contains.6=friend class Class
+contains.7=struct A
+contains.8=case1::main()

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: unused goes; Point stays whole (§4.7); caide repair injection is not applied.
+exit=0
+artifact=pruned
+contains=struct Point
+contains.1=int x
+contains.2=int y
+contains.3=Point p{20, 22}
+absent=int unused()

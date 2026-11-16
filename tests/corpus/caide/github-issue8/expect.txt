@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: the unused C7 primary/specializations and out-of-line member go; the used dependent/default/constraint paths remain (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=struct S1
+contains.1=struct S2
+contains.2=struct S3
+contains.3=struct S4
+contains.4=struct S5
+contains.5=struct S6
+contains.6=test8::main()
+contains.7=test15::main()
+contains.8=concept C
+absent=class C7
+absent.1=void C7<int, int>::f<int>()

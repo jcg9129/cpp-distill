@@ -218,6 +218,16 @@ struct Extraction {
       if (!user(t->getBeginLoc())) { f.kind = FamilyKind::specialization; f.systemSpecialization = true; }
     auto r = range(d->getSourceRange());
     if (!r) { disable("unbounded declaration range: " + f.label); return; }
+    // A member FunctionTemplateDecl starts at its own template header, but
+    // its templated declarator also owns the enclosing class template headers
+    // in an out-of-line definition. Neither range alone covers every template
+    // spelling (ordinary templates need the wrapper's header).
+    if (base != d) {
+      auto declarator = range(base->getSourceRange());
+      if (!declarator) { disable("unbounded templated declaration range: " + f.label); return; }
+      r->begin = std::min(r->begin,declarator->begin);
+      r->end = std::max(r->end,declarator->end);
+    }
     if (d->getBeginLoc().isMacroID() || d->getEndLoc().isMacroID() ||
         (isa<NamedDecl>(base) && cast<NamedDecl>(base)->getLocation().isMacroID())) f.pinned = "macro invocation";
     // A complete declaration includes its terminator and any shared declarators.

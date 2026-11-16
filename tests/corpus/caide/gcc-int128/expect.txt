@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: unusedBig goes; square and __int128 remain (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=__int128 square
+contains.1=__int128 r = square(7)
+absent=unusedBig

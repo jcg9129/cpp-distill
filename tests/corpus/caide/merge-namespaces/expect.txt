@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: unused scalar, unused2 and Unused go; all used1/used2/used3 declarations remain; namespace merging is not required (§4.7 shells).
+exit=0
+artifact=pruned
+contains=void used1()
+contains.1=void used2()
+contains.2=void used3()
+contains.3=int used = 1
+contains.4=ns2::internal::used3()
+absent=int unused =
+absent.1=void unused2
+absent.2=struct Unused

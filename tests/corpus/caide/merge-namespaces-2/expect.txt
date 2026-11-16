@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; both f declaration and definition stay; shell formatting is unconstrained (§4.7 family aggregation).
+exit=0
+artifact=pruned
+contains=void f();
+contains.1=void f() { }
+contains.2=ns::f()

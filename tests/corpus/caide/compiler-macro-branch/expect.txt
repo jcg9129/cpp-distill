@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: both compiler branches remain; §4.5 leaves __clang__ unknown without a profile, disabling pruning.
+exit=0
+artifact=flat
+reason=unknown
+contains=#ifdef __clang__
+contains.1=backend = 1
+contains.2=backend = 2
+contains.3=return backend

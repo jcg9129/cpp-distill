@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: unused goes; scanf/printf main remains and both original samples compare (§4.6).
+exit=0
+artifact=pruned
+sample.1=first.in
+sample.2=second.in
+runtime=compared 2 samples
+contains=std::scanf
+contains.1=std::printf
+contains.2=a + b
+contains.3=int main()
+absent=int unused()

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 template-family aggregation retains every I3 specialization and hence S1; inert unused I1 still goes.
+exit=0
+artifact=pruned
+contains=int I2 = 2
+contains.1=struct TS1
+contains.2=struct S1
+contains.3=int I3 = 3
+contains.4=int I3<TS1<T>>
+contains.5=int I3<TS1<S1>>
+contains.6=int I3<double>
+absent=I1

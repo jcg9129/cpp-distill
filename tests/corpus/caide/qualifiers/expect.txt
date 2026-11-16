@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; base aliases, inherited using-declarations and F::i stay with their whole records (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=struct A
+contains.1=struct B
+contains.2=struct C
+contains.3=struct D
+contains.4=struct E
+contains.5=struct F
+contains.6=struct F1
+contains.7=using Base = A
+contains.8=using Base::f
+contains.9=int F::i = 0

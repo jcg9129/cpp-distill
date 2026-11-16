@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains unused_pair along with all point3 fields.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=point3
+contains.1=std::uint32_t a, b, c
+contains.2=unused_pair
+contains.3=make()
+contains.4=int main

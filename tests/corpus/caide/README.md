@@ -8,11 +8,13 @@ These sources retain their original notices and are distributed under GPL-3.0;
 see the repository's [LICENSE](../../../LICENSE). SHA256SUMS identifies the
 byte-for-byte copied files; generated cmd.txt and main.cpp adapters are excluded.
 
-This is measurement input only. No golden output or expected-result assertions
-were imported; D4 ports those assertions. Error cases, unsupported options,
-missing judge compilers and newer dialects can legitimately produce error/raw/flat
-rows. Keep/force-remove/verification metadata is preserved for the later port but
-is not interpreted by measurements. No corpus program is run by measurement.
+The corpus supplies both measurements and D4a assertions. Each directory now has
+an individually reviewed `expect.txt`; [PORT.md](PORT.md) classifies all 81 against
+caide's original `etalon.cpp` and explains every deliberate v8 difference and
+legacy metadata adapter. SDK CTest runs these assertions separately from the
+measurement pass. Measurements continue to ignore keep/force-remove/verification
+metadata and never run corpus programs. Error cases, unsupported options and
+newer dialects can legitimately produce error/raw/flat measurement rows.
 
 The original layout has one or more numbered C++ source fragments per case.
 For the four multi-fragment cases, a generated main.cpp includes them in numeric
@@ -25,8 +27,9 @@ No flags or input source contents are silently repaired to obtain a smaller row.
 ## Expected outcome classes after D3d
 
 These are review expectations for the unchanged adapters on Linux GCC with the
-requested language features available, not a new SDK measurement or D4 golden
-assertions. Compare case names with the `file` column of `ci/measure.py` output;
+requested language features available, not a new SDK measurement. The D4a
+assertions and compiler-feature alternatives in `expect.txt` are the executable
+contracts. Compare case names with the `file` column of `ci/measure.py` output;
 verification may be local. `pruned` means the checked pruning stage succeeds,
 even if the conservative rules remove no bytes. Compiler/library versions can
 add baseline or system-header parse failures; retain their full diagnostics.

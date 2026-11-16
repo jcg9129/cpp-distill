@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; F constructor and callback used survive lambda dependency traversal (§4.7 rule 4).
+exit=0
+artifact=pruned
+contains=struct F
+contains.1=F(const T& f)
+contains.2=void used()
+contains.3=F<void(int)> f
+contains.4=used()

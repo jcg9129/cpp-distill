@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; compiler -v is unmodelled (§4.1) so raw preserves all standard includes and main.
+exit=0
+artifact=raw
+reason=-v
+contains=#include <algorithm>
+contains.1=#include <vector>
+contains.2=#include <iostream>
+contains.3=int main()

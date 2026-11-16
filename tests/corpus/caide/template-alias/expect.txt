@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; Type/Alias and declval2/3/R2/R3 dependencies survive (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=struct Type
+contains.1=using Alias =
+contains.2=auto declval2()
+contains.3=using Alias2 =
+contains.4=using R2 =
+contains.5=void f2
+contains.6=auto declval3()
+contains.7=using Alias3 =
+contains.8=using R3 =
+contains.9=void f3
+contains.10=Alias<void>

@@ -58,12 +58,77 @@ struct Fixture {
           built[pathToUtf8(p.stem())] = test::read(p);
       }
       auto result = runProcess(spec);
+      const auto program = pathFromUtf8(spec.argv.front()).filename();
+      if (result.ok() && fault == "cross" && std::find(spec.argv.begin(),spec.argv.end(),"-dumpmachine") != spec.argv.end())
+        result.value().stdoutText = "unrunnable-distill-test-target\n";
+      if (result.ok() && spec.argv.size() == 1) {
+        if (fault == "stderr") result.value().stderrText = pathToUtf8(program);
+        if ((fault == "raw-stdout" && program == "raw.exe") || (fault == "flat-stdout" && program == "flat.exe"))
+          result.value().stdoutText = "different sample output";
+        if (fault == "raw-exit" && program == "raw.exe") ++result.value().exitCode;
+        if (fault == "raw-timeout" && program == "raw.exe") result.value().timedOut = true;
+        if (fault == "raw-cap" && program == "raw.exe") result.value().stdoutTruncated = true;
+      }
       if (fault == "stdout" && pathFromUtf8(spec.argv.front()).filename() == "pruned.exe" && result.ok())
         result.value().stdoutText = "different output";
       return result;
     }));
   }
 };
+}
+TEST(pipeline_sample_selection_file_directory_order_repetition_and_errors) {
+  test::TempDirectory temp;
+  std::filesystem::create_directories(temp.path / "samples" / "nested");
+  temp.write("one.txt",""); temp.write("samples/z.in",""); temp.write("samples/a.in","");
+  temp.write("samples/ignored.txt",""); temp.write("samples/nested/ignored.in","");
+  auto samples = take(collectRunSamples({"one.txt","samples","one.txt"},temp.path));
+  CHECK_EQ(samples.size(),4u);
+  CHECK_EQ(samples[0].name,"one.txt");
+  CHECK_EQ(samples[1].name,pathToUtf8(std::filesystem::path("samples") / "a.in"));
+  CHECK_EQ(samples[2].input,temp.path / "samples" / "z.in");
+  CHECK_EQ(samples[3].input,samples[0].input);
+  CHECK(collectRunSamples({},temp.path).value().empty());
+  CHECK(!collectRunSamples({"missing"},temp.path).ok());
+  std::filesystem::create_directory(temp.path / "empty");
+  CHECK(!collectRunSamples({"empty"},temp.path).ok());
+  CHECK(!collectRunSamples({"samples/nested/ignored.in","empty"},temp.path).ok());
+}
+TEST(pipeline_runtime_raw_failures_keep_work_and_flat_difference_falls_back) {
+  for (const auto& fault : {"raw-stdout","raw-exit","raw-timeout","raw-cap","flat-stdout"}) {
+    Fixture f("int main(){return 7;}\n"); f.options.noPrune = true;
+    auto r = f.run(fault);
+    if (std::string_view(fault) == "flat-stdout") {
+      CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"raw"); CHECK_EQ(r.runtime,"compared 1 samples");
+      CHECK_EQ(r.bytes,f.built.at("raw"));
+    } else {
+      CHECK_EQ(r.exitCode,1); CHECK(r.bytes.empty()); CHECK(r.keptWork.has_value());
+      CHECK(std::filesystem::exists(*r.keptWork / "raw.cpp"));
+      CHECK(r.report.find("raw failed:") != r.report.npos);
+      std::filesystem::remove_all(*r.keptWork);
+    }
+    if (std::string_view(fault).ends_with("stdout") || std::string_view(fault) == "raw-exit")
+      CHECK(r.diagnostic.find("differs on sample empty sample (distill bug or nondeterministic program)") != r.diagnostic.npos);
+  }
+}
+TEST(pipeline_runtime_stderr_ignored_progress_and_shared_run_limits) {
+  Fixture f("int main(){return 7;}\n"); f.options.noPrune = true;
+  std::vector<std::string> progress;
+  f.options.progress = [&](std::string_view s) { progress.emplace_back(s); };
+  f.options.samples.push_back(f.options.samples.front());
+  auto r = f.run("stderr"); CHECK_EQ(r.artifact,"flat"); CHECK_EQ(r.runtime,"compared 2 samples");
+  CHECK_EQ(std::count_if(progress.begin(),progress.end(),[](const auto& s) { return s.ends_with("sample empty sample matches"); }),4);
+  std::size_t runs = 0;
+  std::map<std::string,std::chrono::milliseconds> remaining;
+  for (const auto& record : r.processes) if (record.spec.argv.size() == 1) {
+    ++runs; CHECK(record.spec.timeout.count() > 0); CHECK(record.spec.timeout <= f.options.stepTimeout);
+    if (remaining.contains(record.step)) CHECK(record.spec.timeout <= remaining.at(record.step));
+    remaining[record.step] = record.spec.timeout;
+    CHECK(record.spec.maxOutputBytes <= f.options.maxProcessOutput);
+  }
+  CHECK_EQ(runs,8u);
+  r = f.run("cross"); CHECK_EQ(r.artifact,"flat");
+  CHECK_EQ(r.runtime,"skipped: can't run target binaries here");
+  CHECK(std::none_of(r.processes.begin(),r.processes.end(),[](const auto& p) { return p.spec.argv.size() == 1; }));
 }
 TEST(pipeline_pruned_core_exact_checked_bytes_and_samples) {
   Fixture f("int unused(){return 7;}\nint main(){return 0;}\n");

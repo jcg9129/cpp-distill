@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; legacy noOptimize.txt maps explicitly to --no-prune and retains unusedHelper (§2).
+exit=0
+artifact=flat
+prune=no
+reason=--no-prune
+contains=int usedHelper()
+contains.1=int unusedHelper()
+contains.2=return usedHelper()

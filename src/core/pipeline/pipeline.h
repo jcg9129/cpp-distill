@@ -4,11 +4,13 @@
 
 namespace distill {
 struct RunSample { std::string name; std::filesystem::path input; };
+Result<std::vector<RunSample>> collectRunSamples(const std::vector<std::string>& paths,
+                                                const std::filesystem::path& cwd);
 struct DistillOptions {
   bool noPrune = false, stripComments = false;
   std::vector<std::string> keep;
   std::filesystem::path pruningWorker;
-  // Internal API; D4 will expose sample selection in the CLI.
+  // CLI selection and internal callers share the same bounded comparisons.
   std::vector<RunSample> samples;
   const Profile* profile = nullptr;
   bool compilerExplicit = true, strict = false;

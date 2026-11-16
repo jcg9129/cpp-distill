@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/prune/extract.h"
+#include "core/render/render.h"
 #include "core/path.h"
 #include "core/temporary.h"
 #include <algorithm>
@@ -121,6 +122,108 @@ int main(int argc, char** argv) {
       check(!box.ranges.empty() && box.ranges[0].end > 0 && m.text[box.ranges[0].end-1] == ';',"record terminator missing");
       check(!box.names.contains("local") && !box.names.contains("f"),"member/local indexed");
       check(!m.unions.empty(),"out-of-line member not aggregated");
+    });
+    // Inspect both retained and removed spellings, including every redeclaration.
+    auto templateCase = [&](std::string text, const std::set<std::string>& live,
+                            const std::set<std::string>& dead) {
+      m = extract(std::move(text),o); r = take(computeRetention(m));
+      check(r.disabledReasons.empty(),"template extraction disabled");
+      std::set<std::string> found;
+      std::vector<FamilyId> groups(m.families.size());
+      for (FamilyId id = 0; id < groups.size(); ++id) groups[id] = id;
+      auto group = [&](FamilyId id) { while (groups[id] != id) id = groups[id]; return id; };
+      for (auto [a,b] : m.unions) groups[group(a)] = group(b);
+      std::map<std::string,FamilyId> first;
+      for (FamilyId id = 0; id < m.families.size(); ++id) {
+        const auto& f = m.families[id];
+        if (!live.contains(f.label) && !dead.contains(f.label)) continue;
+        found.insert(f.label);
+        const auto [it,fresh] = first.emplace(f.label,id);
+        check(fresh || group(id) == group(it->second),"split template redeclarations/specializations: " + f.label);
+        check(r.families[id].kept == live.contains(f.label),"wrong template retention: " + f.label);
+        check(!f.ranges.empty(),"missing template spelling: " + f.label);
+        for (auto range : f.ranges)
+          check(m.text.substr(range.begin,8) == "template" || f.kind == FamilyKind::record,
+                "template header not owned: " + f.label);
+      }
+      for (const auto& label : live) check(found.contains(label),"missing live template: " + label);
+      for (const auto& label : dead) check(found.contains(label),"missing dead template: " + label);
+      const auto out = take(renderSource(m,&r));
+      take(renderingInvariant(m,&r,out.provenance.text));
+      take(staticNameInvariant(m,r,out.provenance.text));
+      return out.provenance.text;
+    };
+    run("function template forward declaration and definition", [&] {
+      const auto out = templateCase(
+          "template<class T> int forwarded();\n"
+          "template<class T> int deadForward();\n"
+          "int main(){return forwarded<int>()-3;}\n"
+          "template<class T> int forwarded(){return 3;}\n"
+          "template<class T> int deadForward(){return 7;}\n",
+          {"forwarded"},{"deadForward"});
+      const auto first = out.find("int forwarded");
+      check(first != out.npos && out.find("int forwarded",first+1) != out.npos,"lost forward declaration or definition");
+      check(out.find("deadForward") == out.npos,"dead redeclarations retained");
+    });
+    run("member template owns outer and inner headers", [&] {
+      const auto out = templateCase(
+          "template<class T> struct Live { template<class U> int f(U); };\n"
+          "template<class T> template<class U> int Live<T>::f(U value){return value;}\n"
+          "template<class T> struct Dead { template<class U> void f(U); };\n"
+          "template<class T> template<class U> void Dead<T>::f(U){}\n"
+          "template<class T> int forwarded();\n"
+          "int main(){Live<int> x; return x.f(3)-forwarded<int>();}\n"
+          "template<class T> int forwarded(){return 3;}\n",
+          {"Live","Live::f","forwarded"},{"Dead","Dead::f"});
+      check(out.find("template<class T> template<class U> int Live<T>::f") != out.npos,"outer header lost");
+      check(out.find("Dead") == out.npos,"dead member template retained");
+      const auto& f = family(m,"Dead::f");
+      check(f.ranges.size() == 1 && std::string_view(m.text).substr(f.ranges[0].begin).starts_with("template<class T> template<class U>"),"outer header orphaned");
+    });
+    run("explicit specializations share template family", [&] {
+      const auto out = templateCase(
+          "template<class T> int chosen(){return 1;}\n"
+          "template<> int chosen<int>(){return 3;}\n"
+          "template<class T> struct Box { static int get(){return 1;} };\n"
+          "template<> struct Box<int> { static int get(){return 3;} };\n"
+          "template<class T> int deadSpecial(){return 1;}\n"
+          "template<> int deadSpecial<int>(){return 2;}\n"
+          "int main(){return chosen<int>()-Box<int>::get();}\n",
+          {"chosen","Box"},{"deadSpecial"});
+      check(out.find("template<> int chosen<int>") != out.npos,"specialization prefix lost");
+      check(out.find("deadSpecial") == out.npos,"dead specialization retained");
+    });
+    run("friend template declaration and definition ownership", [&] {
+      const auto out = templateCase(
+          "struct LiveFriend { template<class T> friend int friendCall(T); };\n"
+          "template<class T> int friendCall(T){return 3;}\n"
+          "struct DeadFriend { template<class T> friend int deadFriend(T); };\n"
+          "template<class T> int deadFriend(T){return 7;}\n"
+          "int main(){LiveFriend x; (void)x; return friendCall(0)-3;}\n",
+          {"LiveFriend","friendCall"},{"DeadFriend","deadFriend"});
+      check(out.find("friend int friendCall") != out.npos,"friend declaration lost");
+      check(out.find("deadFriend") == out.npos,"dead friend family retained");
+    });
+    run("namespace shells do not root contents", [&] {
+      m = extract("namespace gone { namespace inner { int dead; } }\n"
+                  "inline namespace version { int deadInline; }\n"
+                  "namespace { int deadAnonymous; }\n"
+                  "namespace viaUsing { int deadUsing; }\nusing namespace viaUsing;\n"
+                  "namespace viaAlias { int deadAlias; }\nnamespace alias = viaAlias;\nusing namespace alias;\n"
+                  "int main(){}\n",o);
+      r = take(computeRetention(m));
+      check(r.disabledReasons.empty(),"namespace extraction disabled");
+      for (FamilyId id = 0; id < m.families.size(); ++id) {
+        if (m.families[id].kind == FamilyKind::variable)
+          check(!r.families[id].kept,"shell rooted variable " + m.families[id].label);
+      }
+      const auto out = take(renderSource(m,&r)).provenance.text;
+      take(renderingInvariant(m,&r,out)); take(staticNameInvariant(m,r,out));
+      check(out.find("namespace gone") == out.npos,"nested empty shell retained");
+      check(out.find("namespace version") == out.npos,"inline empty shell retained");
+      check(out.find("namespace {") == out.npos,"anonymous empty shell retained");
+      check(out.find("namespace viaUsing") != out.npos,"using target shell removed");
+      check(out.find("namespace viaAlias") != out.npos,"alias target shell removed");
     });
     run("shared declarators", [&] {
       m = extract("int a, b; struct S {} object; int main(){return b;}\n",o); r = take(computeRetention(m));

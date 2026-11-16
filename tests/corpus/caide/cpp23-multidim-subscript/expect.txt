@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains deadFn and the multidimensional operator.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=struct Matrix
+contains.1=operator[](int i, int j)
+contains.2=int deadFn()
+contains.3=m[1, 1]

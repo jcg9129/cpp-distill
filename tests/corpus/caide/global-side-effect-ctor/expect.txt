@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; class-type boot is a root and retains Boot/state (§4.7 rule 1).
+exit=0
+artifact=pruned
+contains=int state = 0
+contains.1=struct Boot
+contains.2=Boot boot
+contains.3=state = 7
+contains.4=return state

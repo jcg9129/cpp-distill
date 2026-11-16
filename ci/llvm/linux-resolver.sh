@@ -10,7 +10,8 @@ cmake -S . -B build-resolver -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DDISTILL_LLVM_DIR="$PWD/spike-work/sdk/lib/cmake/llvm"
 cmake --build build-resolver -j2
 # Includes the thin CLI, shared pipeline cases through its real binary, and
-# CLI help/option errors, and both pruning extraction model/case suites.
+# CLI help/option/runtime checks, all 81 caide assertion cases (one CTest per
+# case), and both pruning extraction model/case suites.
 # All subprocess/test deadlines remain bounded.
 status=0
 if ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1; then
@@ -18,7 +19,7 @@ if ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1; then
 else
   status=$?
   # Preserve the original failure even if the diagnostic rerun passes.
-  ctest --test-dir build-resolver -R 'prune_extract|pipeline|checker|cli_options' --output-on-failure -V --timeout 120 -j1 || true
+  ctest --test-dir build-resolver -R 'caide_|prune_extract|pipeline|checker|cli_options' --output-on-failure -V --timeout 120 -j1 || true
 fi
 # Each solution gets its own 120-second runner deadline. Keep the observations
 # outside build-resolver so the EXIT cleanup leaves workflow artifacts intact.

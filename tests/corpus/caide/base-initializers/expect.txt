@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: no eligible removals; Type in the base initializer retains the alias and A (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=struct A
+contains.1=using Type = A
+contains.2=struct B: A
+contains.3=B(): Type()
+contains.4=B b

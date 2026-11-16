@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; read_float survives uninstantiated if-constexpr lookup in the whole reader record (§4.7).
+exit=0
+artifact=pruned
+contains=struct reader
+contains.1=T read_float()
+contains.2=T read_one()
+contains.3=return read_float<T>()
+contains.4=read_one<int>()

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains unusedHelper; an unavailable GCC pack-indexing baseline is an explicit exit-1 outcome (§1.2).
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=args
+baseline-feature.1=-std=c++2c
+contains=auto pick
+contains.1=return args...[I]
+contains.2=int unusedHelper
+contains.3=pick<1>

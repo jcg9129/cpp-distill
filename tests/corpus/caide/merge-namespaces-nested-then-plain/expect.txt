@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; inB/inA retain their distinct owners (§4.7 namespace shells).
+exit=0
+artifact=pruned
+contains=namespace a::b
+contains.1=int inB()
+contains.2=namespace a {
+contains.3=int inA()
+contains.4=a::b::inB() + a::inA()

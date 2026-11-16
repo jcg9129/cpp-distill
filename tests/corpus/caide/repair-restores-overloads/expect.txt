@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: unused goes; all f overloads remain in the same family (§4.7); caide repair injection is not applied.
+exit=0
+artifact=pruned
+contains=int f(long)
+contains.1=int f(double)
+contains.2=int f(int)
+contains.3=return f(0)
+absent=int unused()

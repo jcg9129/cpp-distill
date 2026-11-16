@@ -60,7 +60,9 @@ struct Pipeline {
   }
   Result<ProcessResult> limited(const ProcessSpec& input, bool compilation = true, bool preprocessing = false) {
     auto spec = input;
-    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
+    // Both the per-run cap and the enclosing phase deadline apply (§3/§4.6).
+    const auto processDeadline = compilation ? deadline : std::min(deadline,Clock::now() + options.stepTimeout);
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(processDeadline - Clock::now());
     if (left.count() <= 0) return Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
     spec.timeout = std::min(spec.timeout, left);
     spec.maxOutputBytes = std::min(spec.maxOutputBytes, preprocessing ? options.maxPreprocessOutput : options.maxProcessOutput);
@@ -68,7 +70,7 @@ struct Pipeline {
     auto run = runner(spec);
     if (!run.ok()) return run.error();
     const auto& r = run.value();
-    if (Clock::now() >= deadline || r.timedOut) return Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
+    if (Clock::now() >= processDeadline || r.timedOut) return Error{currentStep + ": " + (compilation ? "step" : "run") + " deadline exceeded in " + pathToUtf8(spec.cwd)};
     if (r.stdoutTruncated || r.stderrTruncated) return Error{currentStep + ": process output cap exceeded in " + pathToUtf8(spec.cwd)};
     if (r.signal || (compilation && r.exitCode)) return Error{currentStep + ": process " + (spec.argv.empty() ? "<empty argv>" : spec.argv.front()) + " failed (exit " + std::to_string(r.exitCode) + ") in " + pathToUtf8(spec.cwd) + ": " + r.stderrText};
     return run;
@@ -118,14 +120,17 @@ struct Pipeline {
       if (!r.ok()) throw Error{"sample " + sample.name + ": " + r.error().message};
       output.push_back(std::move(r.value()));
     }
-    result.runtime = "compared " + std::to_string(output.size()) + " samples";
     return output;
   }
   void compareRuns(const std::vector<ProcessResult>& reference, const std::vector<ProcessResult>& candidate) {
     if (reference.size() != candidate.size()) throw Error{"sample execution availability differs"};
-    for (std::size_t i = 0; i < reference.size(); ++i)
-      if (reference[i].exitCode != candidate[i].exitCode || reference[i].stdoutText != candidate[i].stdoutText)
+    for (std::size_t i = 0; i < reference.size(); ++i) {
+      result.runtime = "compared " + std::to_string(i + 1) + " samples";
+      const bool same = reference[i].exitCode == candidate[i].exitCode && reference[i].stdoutText == candidate[i].stdoutText;
+      if (options.progress) options.progress(currentStep + ": sample " + options.samples[i].name + (same ? " matches" : " differs"));
+      if (!same)
         throw Error{"differs on sample " + options.samples[i].name + " (distill bug or nondeterministic program)"};
+    }
   }
   PruningModel sourceModel(const std::string& text, const std::vector<std::optional<SourceLocation>>& lines,
                            const std::vector<std::size_t>& keep) {
@@ -338,13 +343,32 @@ struct Pipeline {
     } catch (const Error& e) {
       result.exitCode = 1; result.bytes.clear(); result.artifact.clear();
       result.diagnostic += e.message + '\n';
-      result.resultLine = "distill: nothing written, runtime not requested";
+      result.resultLine = "distill: nothing written, runtime " + result.runtime;
     }
     result.report = renderReport(result, command, options.profile);
     return std::move(result);
   }
 };
 } // namespace
+Result<std::vector<RunSample>> collectRunSamples(const std::vector<std::string>& paths,
+                                                const std::filesystem::path& cwd) {
+  try {
+    std::vector<RunSample> samples;
+    for (const auto& name : paths) {
+      const auto path = cwd / pathFromUtf8(name);
+      if (std::filesystem::is_regular_file(path)) samples.push_back({name,path});
+      else if (std::filesystem::is_directory(path)) {
+        std::vector<std::filesystem::path> files;
+        for (const auto& entry : std::filesystem::directory_iterator(path))
+          if (entry.is_regular_file() && entry.path().extension() == ".in") files.push_back(entry.path());
+        std::sort(files.begin(),files.end());
+        if (files.empty()) return Error{"--verify-run " + name + ": directory has no *.in samples"};
+        for (const auto& file : files) samples.push_back({pathToUtf8(pathFromUtf8(name) / file.filename()),file});
+      } else return Error{"--verify-run " + name + ": not a sample file or directory"};
+    }
+    return samples;
+  } catch (const std::exception& e) { return Error{std::string("--verify-run: ") + e.what()}; }
+}
 Result<PipelineResult> distillProgram(const CompileCommand& command, const DistillOptions& options,
                                     ConditionEvaluator& evaluator, ProcessRunner runner) {
   try { return Pipeline(command, options, evaluator, std::move(runner)).run(); }

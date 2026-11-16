@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: deadCode goes; using-directive, vector use and used remain (§4.7 rules 1/2/4).
+exit=0
+artifact=pruned
+contains=#include <bits/stdc++.h>
+contains.1=using namespace std
+contains.2=int used(vector<int>& a)
+contains.3=vector<int> v
+absent=deadCode

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 roots namespace static_asserts and preserves function bodies, retaining int2/c_zero and all assertions.
+exit=0
+artifact=pruned
+contains=using int2
+contains.1=static_assert(int2{} == 0
+contains.2=constexpr int c_zero
+contains.3=static_assert(c_zero == 0
+contains.4=static_assert(n != 0
+contains.5=int func()
+contains.6=case1::main()

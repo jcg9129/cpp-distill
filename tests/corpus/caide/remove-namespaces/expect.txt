@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 keeps UsedClass whole, including the out-of-line UnusedMethod; unused namespaces/declarations still go.
+exit=0
+artifact=pruned
+contains=void used()
+contains.1=struct UsedClass
+contains.2=void UnusedMethod
+contains.3=void UsedClass<T>::UnusedMethod
+absent=void unused()
+absent.1=struct void_t
+absent.2=unusedVariable
+absent.3=UnusedTypeAlias
+absent.4=namespace outer3
+absent.5=namespace inner2

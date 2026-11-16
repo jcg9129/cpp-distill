@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# unsupported because caide verifyCommand is not a distill profile/check compiler (§4.6); normal pruning keeps usedHelper and removes unusedHelper.
+exit=0
+artifact=pruned
+contains=int usedHelper()
+contains.1=return usedHelper()
+absent=unusedHelper

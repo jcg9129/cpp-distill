@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+milestone=D3d
+contains=namespace used
+contains.1=namespace viaUsing
+contains.2=namespace viaAlias
+contains.3=namespace inside
+absent=namespace removed
+absent.1=removedInline
+absent.2=deadAnonymous
+absent.3=removedOuter
+absent.4=deadUsed
+absent.5=deadUsing
+absent.6=deadAlias
+absent.7=namespace {

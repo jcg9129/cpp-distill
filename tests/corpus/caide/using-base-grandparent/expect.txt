@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; whole base records retain helper and twice reached through dependent using-declarations (§4.7).
+exit=0
+artifact=pruned
+contains=struct base_a
+contains.1=void helper()
+contains.2=T twice(T x)
+contains.3=struct base_b
+contains.4=class calc
+contains.5=using base::helper
+contains.6=using base::twice
+contains.7=lib::calc<int>

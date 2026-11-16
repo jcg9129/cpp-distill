@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.5 leaves external/integer conditions unknown without a profile and §4.7 preserves macros; pruning is disabled.
+exit=0
+artifact=flat
+reason=unknown
+contains=void unused()
+contains.1=int unused_func()
+contains.2=int unused_func2()
+contains.3=#define MULTILINE
+contains.4=#define UNUSED_MACRO1
+contains.5=#ifdef ONLINE_JUDGE
+contains.6=TemplateMethodInTemplateClass
+contains.7=func<int*>()

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# unsupported because caide forceRemove/verifyCommand repair metadata has no v8 counterpart (§4.6 no repair loop); normal checked pruning retains twice and removes unused.
+exit=0
+artifact=pruned
+contains=int twice
+contains.1=return twice(21)
+absent=int unused()
