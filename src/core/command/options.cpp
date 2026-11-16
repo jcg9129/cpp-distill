@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/command/options.h"
 #include "core/path.h"
+#include "distill_build_version.h"
 
 namespace distill {
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
@@ -8,6 +9,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   for (std::size_t i = 0; i < args.size(); ++i) {
     const auto& a = args[i];
     if (a == "--help") { o.help = true; return o; }
+    if (a == "--version") { o.version = true; return o; }
     if (a == "--no-prune") o.noPrune = true;
     else if (a == "--strict") o.strict = true;
     else if (a == "-v") o.verbose = true;
@@ -41,6 +43,11 @@ std::string distillHelp() {
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"
       "  --help             show this help\n"
+      "  --version          show version, commit and LLVM revision\n"
       "distill main.cpp means distill g++ main.cpp\n";
+}
+std::string distillVersion() {
+  return "distill " DISTILL_BUILD_VERSION " (commit " DISTILL_BUILD_COMMIT
+      "; LLVM " DISTILL_BUILD_LLVM_REVISION ")\n";
 }
 } // namespace distill

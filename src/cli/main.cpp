@@ -107,6 +107,7 @@ int run(const std::vector<std::string>& args) {
   if (args.size() == 3 && args[1] == "--internal-condition") return worker(args[2]);
   auto parsed = take(parseDistillOptions({args.begin() + 1, args.end()}));
   if (parsed.help) { std::cout << distillHelp(); return 0; }
+  if (parsed.version) { std::cout << distillVersion(); return 0; }
   const auto cwd = std::filesystem::current_path();
   const auto command = take(parseCompileCommand(parsed.compile, cwd));
   // Prevent output/report aliases from overwriting input or one another.

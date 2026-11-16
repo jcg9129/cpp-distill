@@ -7,11 +7,12 @@
 
 namespace distill {
 struct CliOptions {
-  bool help = false, strict = false, verbose = false, compilerExplicit = true;
+  bool help = false, version = false, strict = false, verbose = false, compilerExplicit = true;
   std::optional<std::string> output, judge, report;
   bool noPrune = false, stripComments = false;
   std::vector<std::string> compile, keep, verifyRun;
 };
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>&);
 std::string distillHelp();
+std::string distillVersion();
 } // namespace distill
