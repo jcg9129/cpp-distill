@@ -2,7 +2,7 @@
 # Progress
 
 Where cpp-distill stands, so a new session can continue from the repo alone.
-Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
+Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 [`reviews/`](reviews/).
 
 ## How work is done
@@ -27,7 +27,7 @@ Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
-| D3 pruning | design v8 approved 2026-11-16 (A6, §4.7–4.9) after Codex rounds D3-1, D3-2; implementation next |
+| D3 pruning | D3a analysis/model/A6 registry implemented; extraction link/run remains CI-only; rendering and pipeline integration are D3b/D3c |
 | D4–D5 | see design §7 |
 
 ## D1 findings (2026-11-15)
@@ -146,3 +146,28 @@ Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
   still require CI. Local normal/fork suites and published-SDK syntax checks are
   recorded in temporary `D2E-SUMMARY.md`. No design edits were made; proposed
   wording for implementation ambiguities is collected there for review.
+
+## D3a pruning analysis (2026-11-16)
+
+- Added an LLVM-free pruning model, preconditions, union-find retention closure
+  for rules 1–5, static name invariant, strict worker protocol and separate
+  analysis report with policy/registry identity and byte/cause attribution.
+- A6 registry is embedded, versioned for C++20/23 and SHA-256 identified.
+  Stable clauses were checked against N4861/N4950; N4861's exact error-code
+  ADL permission remains explicitly UNVERIFIED and conservatively retained.
+- The selected flat configuration supplies the parse target/search/dialect and
+  ordered macro operations; unsupported semantic translations disable pruning.
+  SDK-only extraction uses embedded resource headers in a bounded child process,
+  physical ownership and D2 marker provenance, PP callbacks/token watching,
+  AST/association/system edges, dependent names and syntactic inertness facts.
+- Unsupported asm/attributes/dependent qualified or member lookup/pragmas,
+  recovery/error ASTs, foreign macro pasting and unknown facts fail closed.
+  GCC 14.2/15.2 PBDS inspection is incomplete: explicitly not covered, so PBDS,
+  rope and other unaudited extension includes disable pruning.
+- Core model tests run in every required unit job. The existing resolver job
+  additionally builds the worker and checks extraction cases directly, including
+  cross-target ADL retention/refusal and Mint retained-byte measurement.
+- Local verification, counts, conservative decisions and proposed design wording
+  are recorded in temporary root D3A-SUMMARY.md. No design changes were made.
+  LLVM linking/extraction execution require CI. D3b/D3c still own rendering,
+  comment stripping, pruned CLI/pipeline integration and the adversarial suite.

@@ -1,0 +1,2 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+disabled | predefined macro differs or unknown: __GNUC__

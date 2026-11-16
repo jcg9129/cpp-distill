@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept app::customize | dependent name: customize
+kept main | root: main

@@ -1,0 +1,307 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "support.h"
+#include "core/prune/extract.h"
+#include "core/names/adl.h"
+#include "core/report/prune.h"
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+using namespace distill;
+namespace {
+struct Model {
+  PruningModel m;
+  Model() { m.dialect = "gnu++20"; }
+  FamilyId add(std::string name, std::string text, FamilyKind kind = FamilyKind::function) {
+    auto begin = m.text.size(); m.text += text; m.text += '\n';
+    PruneFamily f; f.label = name; f.kind = kind; f.names.insert(name);
+    if (kind == FamilyKind::function) f.callableNames.insert(name);
+    f.ranges.push_back({begin,m.text.size()}); m.families.push_back(f); return m.families.size()-1;
+  }
+  PruningResult run() { auto r = computeRetention(m); if (!r.ok()) throw std::runtime_error(r.error().message); return r.value(); }
+};
+MacroFact known(std::string s) { return {MacroState::known,Macro{false,{},false,std::move(s)},{FactOrigin::compilerBuiltin}}; }
+}
+TEST(prune_empty_and_unreachable_cycles) {
+  Model b; CHECK(b.run().families.empty());
+  b.add("a","int a(){return b();}"); b.add("b","int b(){return a();}");
+  auto r = b.run(); CHECK(!r.families[0].kept); CHECK(!r.families[1].kept);
+  CHECK(r.assumptions.contains("A6")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
+}
+TEST(prune_roots_name_ast_association_fixpoint) {
+  Model b; auto main = b.add("main","int main(){return invoke();}");
+  auto invoke = b.add("invoke","int invoke(){return 0;}");
+  auto record = b.add("Key","struct Key{};",FamilyKind::record);
+  auto spec = b.add("hash","template<> struct hash<Key>{};",FamilyKind::specialization);
+  auto dep = b.add("dep","int dep(){return 1;}"); b.add("unused","void unused(){}");
+  b.m.families[invoke].edges = {record}; b.m.families[spec].associatedTypes = {record}; b.m.families[spec].edges = {dep};
+  auto r = b.run(); for (auto i : {main,invoke,record,spec,dep}) CHECK(r.families[i].kept);
+  CHECK(!r.families.back().kept); CHECK_EQ(r.families[dep].initialCause,main);
+  CHECK_EQ(r.families[spec].reason,"associated with Key");
+  CHECK_EQ(r.keptBytes+r.removedBytes,b.m.text.size());
+  auto report = renderPruningReport(b.m,r); CHECK(report.ok());
+  CHECK(report.value().find("pruning assumption: A6") != std::string::npos);
+  CHECK(report.value().find("transitive bytes") != std::string::npos);
+  CHECK(report.value().find("does not certify an artifact") != std::string::npos);
+  std::size_t sum = 0; for (const auto& [reason,bytes] : r.transitiveBytes) { (void)reason; sum += bytes; } CHECK_EQ(sum,r.keptBytes);
+}
+TEST(prune_union_closure_without_merging_ranges) {
+  Model b; auto a = b.add("a","void a(){}"); auto c = b.add("c","void c(){}"); auto d = b.add("d","void d(){}");
+  b.m.unions = {{a,c},{d,c},{a,a}}; b.m.families[d].root = "explicit keep";
+  auto r = b.run(); for (const auto& f : r.families) CHECK(f.kept);
+  CHECK_EQ(b.m.families[a].ranges.size(),1u); CHECK_EQ(r.families[a].initialCause,d);
+}
+TEST(prune_never_removed_rules_and_nonroots) {
+  for (int rule = 0; rule < 10; ++rule) {
+    Model b; auto id = b.add("candidate","int candidate;",FamilyKind::variable); auto& f = b.m.families[id];
+    if (rule == 0) f.pinned = "macro invocation";
+    if (rule == 1) f.neverRemoved = "specified policy";
+    if (rule == 2) f.nonMemberOperator = true;
+    if (rule == 3) f.namespaceUsing = true;
+    if (rule == 4) f.externCDefinition = true;
+    if (rule == 5) f.systemSpecialization = true;
+    if (rule == 6) f.root = "not inert (class type)";
+    if (rule == 7) b.m.keepNames.insert("candidate");
+    if (rule == 8) b.m.annotations.push_back({0,id});
+    CHECK_EQ(b.run().families[id].kept,rule != 9);
+  }
+}
+TEST(prune_adl_dialects_and_all_registry_names) {
+  const auto& registry = embeddedAdlRegistry(); CHECK(registry.digest.starts_with("sha256:")); CHECK_EQ(registry.digest.size(),71u);
+  for (const auto* dialect : {"c++20","gnu++20","c++23","gnu++23"}) {
+    CHECK(registry.supports(dialect)); auto names = registry.names(dialect); CHECK(names.size() >= 38u);
+    for (const auto& name : names) {
+      Model b; b.m.dialect = dialect; b.add(name,"void unrelated(){}");
+      auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.families[0].reason,"never removed: ADL name (A6)");
+    }
+  }
+  for (const auto* dialect : {"c++17","gnu++26","c++2b",""}) { Model b; b.m.dialect = dialect; b.add("x","int x;"); CHECK(!b.run().disabledReasons.empty()); }
+  CHECK(!parseAdlRegistry("c++20 x ADL [clause] x verified\n").ok());
+  bool delegated = false;
+  for (const auto& row : registry.entries) if (row.name == "cdata") delegated |= row.mechanism.starts_with("public-CPO-overretention");
+  CHECK(delegated);
+}
+TEST(prune_dependent_name_all_namespaces_and_hidden_friends) {
+  Model b; auto main = b.add("main","int main(){return 0;}"); auto a = b.add("customize","void first(){}");
+  auto hidden = b.add("Box","struct Box{};",FamilyKind::record); auto dead = b.add("dead","void dead(){}");
+  b.m.families[main].dependentNames.insert("customize"); b.m.families[hidden].callableNames.insert("customize");
+  auto r = b.run(); CHECK(r.families[a].kept); CHECK(r.families[hidden].kept); CHECK(!r.families[dead].kept);
+  CHECK_EQ(r.families[a].reason,"dependent name: customize");
+}
+TEST(prune_dependent_members_and_qualifiers_use_whole_carrier_closure) {
+  Model b;
+  auto main = b.add("main","int main(){run<First,Second>();}");
+  auto run = b.add("run","template<class A,class B> void run(){ using T=std::conditional_t<sizeof(long)==4,A,B>; T x; x.template f<int>(); T::e(); }");
+  auto first = b.add("First","struct First : Base { using nested = Nested; };",FamilyKind::record);
+  auto second = b.add("Second","struct Second { Target operator->(); operator Target(); };",FamilyKind::record);
+  auto base = b.add("Base","struct Base { template<class T> void f(); static void e(); };",FamilyKind::record);
+  auto nested = b.add("Nested","struct Nested { using type = Target; };",FamilyKind::record);
+  auto target = b.add("Target","struct Target { void pasted_member(); };",FamilyKind::record);
+  auto unrelated = b.add("Unrelated","struct Unrelated { void f(); static void e(); };",FamilyKind::record);
+  // Even without an instantiation edge to the judge's selected alternative,
+  // both inputs and every carrier's bases/aliases/returns survive by rule 2.
+  // Member names are not indexed, so a same-name record is still removable.
+  auto r = b.run(); CHECK(r.disabledReasons.empty());
+  for (auto id : {main,run,first,second,base,nested,target}) CHECK(r.families[id].kept);
+  CHECK(!r.families[unrelated].kept);
+  // A type synthesized in a seen instantiation instead follows rule 4.
+  b.m.families[second].edges = {unrelated}; CHECK(b.run().families[unrelated].kept);
+}
+TEST(prune_static_tokens_literals_macros_and_self_exclusion) {
+  Model b; auto self = b.add("self","int self(){return self();}");
+  auto ignored = b.add("ignored","void ignored(){}"); auto a = b.add("suffix","void other(){}");
+  auto numeric = b.add("_unit","void units(){}");
+  b.m.text += "#define KEEP suffix\n// ignored\nconst char* s = \"ignored\";\nauto v = 17_unit;\n";
+  auto r = b.run(); CHECK(!r.families[self].kept); CHECK(!r.families[ignored].kept); CHECK(r.families[a].kept); CHECK(r.families[numeric].kept);
+  CHECK(staticNameInvariant(b.m,r,"// self ignored\n\"ignored\"\n").ok());
+  CHECK(!staticNameInvariant(b.m,r,"int ignored;").ok());
+  CHECK(!staticNameInvariant(b.m,r,"int se\\\nlf;").ok());
+  CHECK(staticNameInvariant(b.m,r,"SELF").ok());
+}
+TEST(prune_system_edges_transitive_cycles_positive_only) {
+  Model b; auto main = b.add("main","int main(){}"); auto hook = b.add("hook","void hook(){}"); b.add("unused","void unused(){}");
+  b.m.systemEntities = {{"instantiate",{}, {1}}, {"body",{hook}, {0}}}; b.m.systemUses = {{main,0}};
+  auto r = b.run(); CHECK(r.families[hook].kept); CHECK(!r.families.back().kept);
+  b.m.systemUses.clear(); CHECK(!b.run().families[hook].kept);
+  b.m.systemUses = {{noFamily,0}}; CHECK(b.run().families[hook].kept);
+}
+TEST(prune_all_disable_reasons_accumulate) {
+  Model b; b.add("x","int x;"); b.m.unknownInUserCode = true; b.m.dialect = "c++17";
+  b.m.includes = {"ext/rope","ext/pb_ds/assoc_container.hpp","bits/extc++.h","vendor.h"};
+  b.m.disabledReasons = {"parse error","limit","parse error"};
+  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6"));
+  CHECK(!staticNameInvariant(b.m,r,"").ok());
+}
+TEST(prune_predefined_macros_source_overrides_and_pasting) {
+  for (int scenario = 0; scenario < 8; ++scenario) {
+    Model b; b.add("x","int x;"); PruneMacroExpansion e; e.name = "__GNUC__"; e.predefined = true;
+    e.parse = known("4"); e.judge = known("4");
+    if (scenario == 1) e.judge = known("15");
+    if (scenario == 2) e.judge = {};
+    if (scenario == 3) { e.paste = true; e.externalPasteOperand = true; }
+    if (scenario == 4) { e.paste = true; e.pasteOperandsKnown = false; }
+    if (scenario == 5) { e.judge = known("15"); e.condition = true; }
+    if (scenario == 6) { e.judge = known("15"); e.user = false; }
+    if (scenario == 7) { e.predefined = false; e.paste = true; }
+    b.m.expansions.push_back(e);
+    CHECK_EQ(b.run().disabledReasons.empty(),scenario == 0 || scenario >= 5);
+  }
+  Model b; PruneMacroExpansion e; e.name = "X"; e.predefined = true; e.parse = known("a + b"); e.judge = known("a+b"); b.m.expansions.push_back(e); CHECK(b.run().disabledReasons.empty());
+}
+TEST(prune_directives_pin_generated_markers_do_not) {
+  Model b; b.add("x","void x(){\n#line 20 \"file\"\n}\n");
+  b.m.generatedMarkers = {{10,26}}; CHECK(!b.run().families[0].kept);
+  b.m.sourceDirectives = {{10,26}}; CHECK(b.run().families[0].kept);
+}
+TEST(prune_model_protocol_roundtrip_and_rejections) {
+  Model b; b.add("main","int main(){}"); b.add("f","int f();");
+  b.m.families[0].edges = {1}; b.m.families[0].original = SourceLocation{"a.hpp",42}; b.m.lineMap = {std::nullopt,SourceLocation{"a.hpp",42}};
+  b.m.judgeInitial["__GNUC__"] = known("15"); b.m.expansions.push_back({0,"X",true,false,true,known("1"),known("2"),false,false,true});
+  auto encoded = serializePruningModel(b.m); CHECK(encoded.ok()); auto decoded = parsePruningModel(encoded.value()); CHECK(decoded.ok());
+  CHECK_EQ(serializePruningModel(decoded.value()).value(),encoded.value());
+  CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
+  CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
+  CHECK(!parsePruningModel("DISTILL-PRUNE-9").ok());
+  b.m.families[0].edges = {100}; CHECK(!computeRetention(b.m).ok()); b.m.families[0].edges.clear();
+  b.m.families[1].ranges = b.m.families[0].ranges; CHECK(!computeRetention(b.m).ok());
+}
+TEST(prune_protocol_errors_locate_field_and_line) {
+  for (const auto* value : {"oops", "11", "65"}) {
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-1 \"first\nsecond\" \"c++20\" 1 ") + value);
+    CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
+  }
+  auto string = parsePruningModel("DISTILL-PRUNE-1 unquoted");
+  CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
+  auto truncated = parsePruningModel("DISTILL-PRUNE-1 \"first\nsecond");
+  CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
+  PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
+  auto encoded = serializePruningModel(m); CHECK(encoded.ok());
+  auto bad = encoded.value(); const auto offset = bad.find("987 "); CHECK(offset != bad.npos);
+  bad.replace(offset,3,"9999");
+  auto invalid = parsePruningModel(bad); CHECK(!invalid.ok());
+  CHECK(invalid.error().message.find("field model.keepOffsets[0], line 2, byte " + std::to_string(offset)) != std::string::npos);
+}
+TEST(prune_prepare_selected_configuration_and_provenance) {
+  Configuration c; c.command = parseCompileCommand({"g++","-std=c++23","-DU=1","-UU","-DU=2","-funsigned-char","-march=native","-O2","main.cpp"},std::filesystem::current_path()).value();
+  c.probe.triple = "x86_64-w64-mingw32"; c.probe.dialect = {"c++23",false,202302};
+  c.probe.searchLists.directories = {{"/cxx",IncludeKind::system,false,false},{"/gcc/internal",IncludeKind::system,false,true},{"/crt",IncludeKind::system,false,false}};
+  ResolveResult flat; flat.text = "#line 1 \"a\"\nvoid unused(){}\n"; flat.lineMap = {std::nullopt,SourceLocation{"a",1}};
+  auto m = preparePruning(c,{},flat); CHECK(m.ok()); CHECK_EQ(m.value().generatedMarkers.size(),1u);
+  const auto& args = m.value().parseArgv;
+  CHECK(std::find(args.begin(),args.end(),"-fgnuc-version=4.2.1") != args.end());
+  CHECK(std::find(args.begin(),args.end(),"-DU=1") < std::find(args.begin(),args.end(),"-UU"));
+  CHECK(std::find(args.begin(),args.end(),"-UU") < std::find(args.begin(),args.end(),"-DU=2"));
+  CHECK(std::find(args.begin(),args.end(),"/gcc/internal") == args.end());
+  CHECK(std::find(args.begin(),args.end(),"-undef") == args.end());
+  CHECK(!m.value().disabledReasons.empty()); CHECK_EQ(m.value().untranslatedOptions.size(),2u);
+}
+TEST(prune_prepare_cpp_defaults_and_explicit_disables) {
+  for (int disables = 0; disables < 4; ++disables) {
+    std::vector<std::string> argv{"g++","-std=gnu++20"};
+    if (disables & 1) argv.push_back("-fno-exceptions");
+    if (disables & 2) argv.push_back("-fno-rtti");
+    argv.push_back("main.cpp");
+    Configuration c; c.command = parseCompileCommand(argv,std::filesystem::current_path()).value();
+    c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"gnu++20",true,202002};
+    auto m = preparePruning(c,{},{}); CHECK(m.ok()); CHECK(m.value().disabledReasons.empty());
+    const auto& args = m.value().parseArgv;
+    auto has = [&](const char* flag) { return std::find(args.begin(),args.end(),flag) != args.end(); };
+    CHECK(has("-fsyntax-only")); CHECK(has("-fmath-errno")); CHECK(has("-fdeprecated-macro"));
+    CHECK_EQ(has("-fcxx-exceptions"),!(disables & 1));
+    CHECK_EQ(has("-fexceptions"),!(disables & 1));
+    CHECK_EQ(has("-fno-rtti"),bool(disables & 2));
+    CHECK(!has("-fno-builtin")); CHECK(!has("-ffreestanding"));
+  }
+}
+TEST(prune_prepare_pragmas_allow_only_audited_effects_and_preserve_directives) {
+  Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"gnu++20",false,202002};
+  for (const auto* pragma : {"GCC optimize(\"O3\")", "GCC target(\"avx2\")", "GCC push_options", "GCC pop_options", "GCC reset_options",
+       "GCC diagnostic push", "GCC diagnostic ignored \"-Wunused-variable\"", "GCC diagnostic pop", "clang diagnostic pop",
+       "pack(push,1)", "pack(pop)", "message(\"fixture\")", "warning(disable:4996)", "once"}) {
+    ResolveResult flat; flat.text = "#pragma " + std::string(pragma) + "\nint unused;\n";
+    auto m = preparePruning(c,{},flat); CHECK(m.ok()); CHECK(m.value().disabledReasons.empty());
+    CHECK_EQ(m.value().sourceDirectives.size(),1u);
+    CHECK_EQ(m.value().text.substr(m.value().sourceDirectives[0].begin,m.value().sourceDirectives[0].end),"#pragma " + std::string(pragma) + "\n");
+    CHECK(computeRetention(m.value()).value().disabledReasons.empty());
+  }
+  for (const auto* pragma : {"", "unknown", "GCC visibility push(hidden)", "GCC optimize_extra(\"O3\")", "GCC push_options unexpected",
+       "clang attribute push", "omp parallel", "comment(linker,\"symbol\")", "once extra"}) {
+    ResolveResult flat; flat.text = "#pragma " + std::string(pragma) + "\n";
+    auto m = preparePruning(c,{},flat); CHECK(m.ok());
+    CHECK_EQ(m.value().disabledReasons,std::vector<std::string>{"unsupported user pragma"});
+  }
+  ResolveResult flat; flat.text = "void crossed(){\n#pragma GCC diagnostic push\n}\n";
+  auto m = preparePruning(c,{},flat).value();
+  PruneFamily f; f.label = "crossed"; f.ranges = {{0,m.text.size()}}; m.families.push_back(f);
+  auto r = computeRetention(m).value(); CHECK(r.disabledReasons.empty()); CHECK(r.families[0].kept);
+  CHECK_EQ(r.families[0].reason,"pinned: source directive");
+}
+TEST(prune_worker_failures_use_bounded_core_runner) {
+  Model b; b.add("x","int x;"); test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  for (int scenario = 0; scenario < 8; ++scenario) {
+    o.runner = [&](const ProcessSpec& spec) -> Result<ProcessResult> {
+      CHECK_EQ(spec.argv[1],"--internal-prune"); CHECK(spec.timeout <= o.timeout); CHECK(std::filesystem::exists(spec.argv[2]));
+      CHECK(spec.cwd.is_absolute()); CHECK(pathFromUtf8(spec.argv[2]).is_absolute());
+      CHECK(!spec.memoryLimitBytes); // A condition-sized AS cap cannot host a Clang AST.
+      if (scenario == 7) return Error{"spawn fixture failure"};
+      ProcessResult r; r.exitCode = 0; r.stderrText = "diagnostic fixture\n" + std::string(3000,'x') + "OMITTED TAIL";
+      if (scenario == 0) r.timedOut = true;
+      if (scenario == 1) r.stdoutTruncated = true;
+      if (scenario == 2) r.exitCode = 1;
+      if (scenario == 3) r.stdoutText = "broken";
+      if (scenario == 4) r.stdoutText = serializePruningModel(b.m).value();
+      if (scenario == 5) { r.signal = 11; r.exitCode = 139; }
+      if (scenario == 6) r.stderrTruncated = true;
+      return r;
+    };
+    auto r = extractPruning(b.m,o); CHECK(r.ok()); CHECK_EQ(r.value().disabledReasons.empty(),scenario == 4);
+    if (scenario != 4) {
+      const auto& why = r.value().disabledReasons.back();
+      for (const auto* key : {"exit_code=", "signal=", "timed_out=", "stdout_truncated=", "stderr_truncated=", "cwd=", "argv=[", "--internal-prune", "stderr (first 2048 bytes):"}) CHECK(why.find(key) != why.npos);
+      std::istringstream argv(why.substr(why.find("argv=[")+6)); std::string executable;
+      argv >> std::quoted(executable); CHECK_EQ(executable,pathToUtf8(o.executable));
+      if (scenario != 7) { CHECK(why.find("diagnostic fixture\n") != why.npos); CHECK(why.find("OMITTED TAIL") == why.npos); }
+      if (scenario == 0) CHECK(why.find("timed_out=true") != why.npos);
+      if (scenario == 1) CHECK(why.find("stdout_truncated=true") != why.npos);
+      if (scenario == 2) CHECK(why.find("exit_code=1;") != why.npos);
+      if (scenario == 3) { CHECK(why.find("field version") != why.npos); CHECK(why.find("line 1") != why.npos); }
+      if (scenario == 5) { CHECK(why.find("exit_code=139") != why.npos); CHECK(why.find("signal=11") != why.npos); }
+      if (scenario == 6) CHECK(why.find("stderr_truncated=true") != why.npos);
+      if (scenario == 7) CHECK(why.find("spawn fixture failure") != why.npos);
+    }
+    CHECK(std::filesystem::is_empty(temp.path));
+  }
+  o.timeout = std::chrono::milliseconds(0); CHECK(!extractPruning(b.m,o).value().disabledReasons.empty());
+}
+
+TEST(prune_exhaustive_three_family_graph_closure) {
+  // Independent graph oracle over every directed graph and root subset. This
+  // exercises cycles and processing order without reproducing the queue logic.
+  for (unsigned graph = 0; graph < 512; ++graph) for (unsigned roots = 0; roots < 8; ++roots) {
+    Model b;
+    for (unsigned i = 0; i < 3; ++i) b.add("f"+std::to_string(i),"void body(){}");
+    for (unsigned i = 0; i < 3; ++i) {
+      if (roots & (1u<<i)) b.m.families[i].root = "explicit";
+      for (unsigned j = 0; j < 3; ++j) if (graph & (1u<<(3*i+j))) b.m.families[i].edges.push_back(j);
+    }
+    unsigned expected = roots;
+    for (unsigned path = 0; path < 3; ++path) for (unsigned i = 0; i < 3; ++i) if (expected & (1u<<i))
+      for (unsigned j = 0; j < 3; ++j) if (graph & (1u<<(3*i+j))) expected |= 1u<<j;
+    auto r = b.run(); for (unsigned i = 0; i < 3; ++i) CHECK_EQ(r.families[i].kept,(expected & (1u<<i)) != 0);
+  }
+}
+TEST(prune_kinds_association_and_report_attribution) {
+  Model b; auto key = b.add("Key","struct Key {};",FamilyKind::record); b.m.families[key].root = "explicit";
+  auto hidden = b.add("Box","struct Box {};",FamilyKind::record); b.m.families[hidden].callableNames.insert("custom"); b.m.families[hidden].associatedTypes = {key};
+  auto spec = b.add("hash","struct H {};",FamilyKind::specialization); b.m.families[spec].systemSpecialization = true; b.m.families[spec].associatedTypes = {key};
+  auto assertion = b.add("assertion","static_assert(true);",FamilyKind::assertion);
+  auto inst = b.add("inst","template struct T<int>;",FamilyKind::instantiation);
+  auto r = b.run(); CHECK(r.families[hidden].kept); CHECK(r.families[spec].kept); CHECK(r.families[assertion].kept); CHECK(r.families[inst].kept);
+  b.m.families[key].root.clear(); r = b.run(); CHECK(!r.families[hidden].kept); CHECK(!r.families[spec].kept);
+}
+TEST(prune_keep_metadata_before_comment_stripping) {
+  const std::string text = "// distill: keep\nint retained();\nconst char* decoy=R\"(// distill: keep)\";\n/* // distill: keep */\nvoid ignored();\n";
+  auto offsets = captureKeepOffsets(text); CHECK(offsets.ok()); CHECK_EQ(offsets.value().size(),1u);
+  CHECK_EQ(text.substr(offsets.value().front(),3),"int");
+  Model b; auto id = b.add("keep","int keep();"); b.m.annotations.push_back({0,id});
+  CHECK(b.run().families[id].kept);
+}

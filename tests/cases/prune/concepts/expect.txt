@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Small | name: Small
+removed Unused | outside the retention closure
+kept main | root: main

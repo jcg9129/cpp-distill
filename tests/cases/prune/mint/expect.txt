@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept operator+ | never removed: operator
+kept operator* | never removed: operator
+kept Mint | name: Mint
+kept main | root: main

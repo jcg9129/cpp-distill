@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Packed |
+removed Unused | outside the retention closure
+kept pinned | pinned: source directive
+kept main | root: main

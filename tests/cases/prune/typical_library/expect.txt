@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Mint |
+kept Sum |
+kept LazySegTree |
+kept Fenwick |
+kept DSU |
+kept total |
+kept twice |
+removed SparseTable | outside the retention closure
+kept main | root: main

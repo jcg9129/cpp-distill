@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed unused_result | outside the retention closure
+removed unused_variable | outside the retention closure
+removed multiple | outside the retention closure
+removed unused_inline | outside the retention closure
+removed unused_scoped | outside the retention closure
+removed unused_aligned | outside the retention closure
+removed UnusedAligned | outside the retention closure
+kept used_result |
+kept main | root: main
+removed between | outside the retention closure
+kept repeated |

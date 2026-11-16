@@ -45,3 +45,22 @@ foreach(index RANGE 0 3)
 endforeach()
 string(APPEND names_source "default: return 0;\n}\n}\n}\n")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp" "${names_source}")
+
+# A6 and extension eligibility are immutable build-time policy data.
+foreach(kind adl extension-coverage)
+  set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/${kind}.txt")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
+  file(READ "${input}" content)
+  file(SHA256 "${input}" digest)
+  if(kind STREQUAL "adl")
+    set(symbol adl)
+  else()
+    set(symbol extensionCoverage)
+  endif()
+  file(APPEND "${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp"
+    "namespace distill::embedded { extern const std::string_view ${symbol} = R\"DISTILL(${content})DISTILL\"; }\n")
+  if(kind STREQUAL "adl")
+    file(APPEND "${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp"
+      "namespace distill::embedded { extern const std::string_view adlDigest = \"sha256:${digest}\"; }\n")
+  endif()
+endforeach()

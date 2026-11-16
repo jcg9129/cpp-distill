@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Box |
+kept Box<4>::get |
+kept Box<8>::get |
+kept Box<4>::f |
+kept Box<8>::f |
+kept Box<4>::value |
+kept Box<8>::value |
+kept run |
+removed Unused | outside the retention closure
+kept main | root: main

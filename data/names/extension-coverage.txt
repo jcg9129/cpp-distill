@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# version: GNU-lookup-1 (2026-11-16)
+# header-pattern | status | evidence
+ext/rope | not-covered | D3-2-3: unqualified copy_n and uninitialized_copy_n with user-associated character pointers in ropeimpl.h.
+bits/extc++.h | not-covered | Aggregates unaudited GNU extensions, including ext/rope.
+ext/pb_ds/* | not-covered | GCC 14.2.0 and 15.2.0 spot audit only; no complete transitive customization-surface proof.
+ext/* | not-covered | No standard-only A6 certificate for other extensions.
+# Sources are the gcc-mirror release tags, not trunk:
+# https://github.com/gcc-mirror/gcc/tree/releases/gcc-14.2.0/libstdc++-v3/include/ext/pb_ds
+# https://github.com/gcc-mirror/gcc/tree/releases/gcc-15.2.0/libstdc++-v3/include/ext/pb_ds
+# Inspected detail/bin_search_tree_/split_join_fn_imps.hpp,
+# and
+# detail/resize_policy/hash_standard_resize_policy_imp.hpp in both tags.
+# The attempted pat_trie_/split_join_fn_imps.hpp URLs returned 404.
+# Available files contain unqualified member/policy calls (e.g. split/join/resize
+# notifications). Their presence alone is not evidence of free-function ADL.
+# The audit did not classify every call across policy implementations,
+# transitive includes, macro-generated bodies and inactive branches. In
+# particular it did not prove which arguments can carry user-associated
+# namespaces. Therefore PBDS is explicitly NOT covered in either release;
+# inclusion disables pruning. No additional GNU hook names are certified.

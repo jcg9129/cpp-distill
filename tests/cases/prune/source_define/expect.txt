@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept unused | pinned: source directive
+kept main | root: main

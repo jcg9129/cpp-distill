@@ -30,9 +30,14 @@ add_library(distill_core STATIC
   src/core/validate/configuration.cpp
   src/core/pipeline/pipeline.cpp
   src/core/report/report.cpp
+  src/core/report/prune.cpp
   src/core/resolve/resolve.cpp
   src/core/resolve/requirements.cpp
   src/core/lex/scan.cpp
+  src/core/names/adl.cpp
+  src/core/prune/prune.cpp
+  src/core/prune/protocol.cpp
+  src/core/prune/extract.cpp
   src/core/names/names.cpp
   src/core/inline/search.cpp
   src/core/inline/inline.cpp
@@ -66,19 +71,47 @@ if(DISTILL_LLVM_DIR)
   if(NOT LLVM_PACKAGE_VERSION VERSION_EQUAL "23.1.5")
     message(FATAL_ERROR "The resolver requires LLVM 23.1.5")
   endif()
-  foreach(LIB clangFrontend clangLex clangBasic)
+  foreach(LIB clangFrontend clangParse clangSema clangAST clangLex clangBasic)
     get_target_property(LIB_TYPE ${LIB} TYPE)
     if(NOT LIB_TYPE STREQUAL "STATIC_LIBRARY")
       message(FATAL_ERROR "${LIB} must be static, got ${LIB_TYPE}")
     endif()
   endforeach()
-  add_library(distill_clang STATIC src/clang/evaluate.cpp)
+  # Reuse the distribution spike's bounded per-header resource embedding.
+  get_filename_component(DISTILL_SDK "${DISTILL_LLVM_DIR}/../../.." ABSOLUTE)
+  set(RESOURCE_DIR "${DISTILL_SDK}/lib/clang/${LLVM_VERSION_MAJOR}/include")
+  if(NOT EXISTS "${RESOURCE_DIR}/stddef.h")
+    message(FATAL_ERROR "Missing Clang resource headers: ${RESOURCE_DIR}")
+  endif()
+  file(GLOB_RECURSE RESOURCE_FILES CONFIGURE_DEPENDS LIST_DIRECTORIES false
+    RELATIVE "${RESOURCE_DIR}" "${RESOURCE_DIR}/*")
+  list(SORT RESOURCE_FILES)
+  set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/resources")
+  set(GENERATED_FILES "${GENERATED_DIR}/table.cpp")
+  set(RESOURCE_DEPENDS)
+  set(INDEX 0)
+  foreach(HEADER IN LISTS RESOURCE_FILES)
+    list(APPEND GENERATED_FILES "${GENERATED_DIR}/resource_${INDEX}.cpp")
+    list(APPEND RESOURCE_DEPENDS "${RESOURCE_DIR}/${HEADER}")
+    math(EXPR INDEX "${INDEX} + 1")
+  endforeach()
+  add_executable(distill_embed_resources spike/embed-resources.cpp)
+  add_custom_command(OUTPUT ${GENERATED_FILES}
+    COMMAND distill_embed_resources "${RESOURCE_DIR}" "${GENERATED_DIR}"
+    DEPENDS distill_embed_resources ${RESOURCE_DEPENDS} VERBATIM)
+  add_library(distill_resources STATIC ${GENERATED_FILES})
+  target_include_directories(distill_resources PRIVATE spike)
+  add_library(distill_clang STATIC src/clang/evaluate.cpp src/clang/prune_extract.cpp)
+  target_include_directories(distill_clang PRIVATE spike)
   target_include_directories(distill_clang SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
-  target_link_libraries(distill_clang PUBLIC distill_core PRIVATE clangFrontend clangLex clangBasic)
+  target_link_libraries(distill_clang PUBLIC distill_core PRIVATE distill_resources clangFrontend clangParse clangSema clangAST clangLex clangBasic)
+  add_executable(distill_prune_worker src/clang/prune_worker.cpp)
+  target_link_libraries(distill_prune_worker PRIVATE distill_clang)
   add_executable(distill src/cli/main.cpp)
   target_link_libraries(distill PRIVATE distill_clang)
   if(UNIX AND NOT APPLE)
     target_link_options(distill PRIVATE -static-libstdc++ -static-libgcc)
+    target_link_options(distill_prune_worker PRIVATE -static-libstdc++ -static-libgcc)
   endif()
   if(NOT LLVM_ENABLE_RTTI)
     target_compile_options(distill_clang PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/GR-> $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-rtti>)
