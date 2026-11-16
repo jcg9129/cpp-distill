@@ -1046,7 +1046,7 @@ changed by D4b. The existing required unit/resolver builds remain unchanged.
 | --- | --- |
 | `matrix (linux-x86_64)` | manylinux_2_28 x86_64 GCC toolset; Ubuntu system GCC; official GCC 14.2/15.2 images; AlmaLinux 8 system GCC; Ubuntu MinGW cross GCC |
 | `matrix (linux-arm64)` | manylinux_2_28 aarch64 GCC toolset; Ubuntu system GCC; native official GCC 14.2/15.2 images |
-| `matrix (macos-arm64)` | Apple clang consumer on macos-14, deployment target 14.0; every installed Homebrew GCC (ensure GCC 14 or 15, installing gcc@15 if needed) |
+| `matrix (macos-arm64)` | Apple clang consumer on macos-15, deployment target 14.0; every installed Homebrew GCC (ensure GCC 14 or 15, installing gcc@15 if needed) |
 | `matrix (macos-x86_64)` | Apple clang consumer on macos-15-intel, deployment target 14.0; every installed Homebrew GCC |
 | `matrix (windows-x86_64)` | MSVC `/MT` on windows-2025; MSYS2 UCRT64 GCC as in the unit job |
 
@@ -1057,6 +1057,12 @@ into `isolated/` and deletes the entire SDK/download/build directory. Both moved
 binaries pass the spike's dynamic-dependency and minimum-OS audits. No CMake or
 CLI entry-point changes were needed: static runtimes, embedded headers, wide
 Windows argv and the CLI's internal worker modes were already implemented.
+
+The matrix CLI build explicitly sets `CMAKE_OSX_DEPLOYMENT_TARGET=14.0` on macOS.
+A separate step uses `otool -l` to require `LC_BUILD_VERSION` minos exactly 14.0
+for both moved binaries. The arm64 runner uses macos-15 because macos-14 is
+unavailable; this checks the deployment minimum, but does not exercise execution
+on macOS 14.
 
 The moved CLI runs `--help`, no-prune and default pruning on `no_profile`,
 `pruned_typical_library`, `profile_macro_replace` and `pruned_strip_keep` from

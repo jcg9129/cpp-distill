@@ -34,9 +34,9 @@ jobs:
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             container: quay.io/pypa/manylinux_2_28_aarch64
-          # Also covers the oldest supported macOS, rather than only minos.
+          # macos-14 is unavailable; verify the 14.0 deployment target below.
           - platform: macos-arm64
-            runner: macos-14
+            runner: macos-15
           - platform: macos-x86_64
             runner: macos-15-intel
           - platform: windows-x86_64
@@ -79,6 +79,19 @@ jobs:
         if: runner.os != 'Linux'
         shell: bash
         run: python ci/matrix/build.py --platform "$SDK_PLATFORM" --isolate
+      - name: Verify macOS LC_BUILD_VERSION minos is 14.0
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in isolated/distill isolated/distill_prune_worker; do
+            minos=$(otool -l "$binary" | awk '
+              $1 == "cmd" { build = ($2 == "LC_BUILD_VERSION") }
+              build && $1 == "minos" { print $2 }
+            ')
+            echo "$binary: LC_BUILD_VERSION minos=$minos (expected 14.0)"
+            [[ "$minos" == '14.0' ]]
+          done
       - name: Dependency and minimum OS audit
         if: ${{ !cancelled() && (steps.isolate_linux.outcome == 'success' || steps.isolate_native.outcome == 'success') }}
         shell: bash
