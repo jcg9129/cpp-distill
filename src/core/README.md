@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D2e)
+# Core library (D2a–D3a)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -473,8 +473,8 @@ Runtime is always `not requested` in D2e; strict success returns 3.
 `report/` renders the result header, profile/date, option classes, assumption
 dependencies, configurations and their satisfied macro/arithmetic facts, exact
 process argv/cwd, omissions and failures, then every conditional directive at
-its original location (generated guards use `<generated>`). No family lines are
-emitted before D3. A failed flat resolution's decisions remain visible alongside
+its original location (generated guards use `<generated>`). D3a adds a separate analysis-only pruning report; the pipeline still
+emits no family lines. A failed flat resolution's decisions remain visible alongside
 its rejection, and do not certify the selected raw artifact.
 
 `src/cli/main.cpp` is built only with `DISTILL_LLVM_DIR`; it links the static
@@ -538,3 +538,183 @@ also checks OS executable discovery when a child receives an unusable `argv[0]`.
 Local verification never links LLVM: syntax-check `src/clang/`,
 CLI and Clang-enabled test support one TU at a time against the published arm64
 SDK, then delete the SDK and build trees.
+
+`prune/` supplies D3a's LLVM-free analysis boundary. `PruningModel` owns the
+immutable checked flat buffer, physical edit ranges and line-map provenance,
+indexed namespace names, callable/dependent names, explicit AST and association
+edges, union obligations, keep annotations, system-entity paths back into user
+families, macro-expansion facts and all disabling reasons. `computeRetention`
+validates the model, applies the preconditions and never-removed policy, then
+computes rules 1–5 to a fixpoint. Union-find joins retention obligations without
+joining source ranges. Every fate has a primary reason, immediate cause and
+initial cause; disjoint family bytes have primary and transitive attribution.
+Removed families report “outside the retention closure”. A6 is recorded for
+negative removal reasoning even if no ADL root was encountered. Invalid models
+are errors; failed preconditions keep every family and return every disable
+reason. Names in shells and directives participate independently of AST edges.
+`staticNameInvariant` checks supplied rendered text against removed indexed
+names, excluding comments/strings and including literal-operator suffixes.
+Rendering and its location invariant remain D3b.
+
+`names/adl` loads embedded `data/names/adl.txt`, with an explicit policy version,
+per-dialect rows and a build-time SHA-256 digest. Only C++20/23 and their GNU
+spellings are covered. Rows identify lookup mechanism, stable normative clause,
+public entry and verification status. The fixed sources are N4861 and N4950;
+public CPO-only over-retention is distinguished from a same-named ADL hook.
+The two N4861 error conversion hooks are conservatively retained but marked
+UNVERIFIED for exact ADL permission; N4950 [contents] supplies that permission
+explicitly. Later defect reports are not silently applied. GNU extension
+eligibility is separate: `extension-coverage.txt` records the incomplete GCC
+14.2/15.2 PBDS spot audit and explicitly declines coverage, as for rope and
+bits/extc++.h. Those includes disable pruning. Data are embedded at build time.
+
+`preparePruning` derives a distinct cc1 parse argv from the selected satisfying
+`Configuration`, preserving its triple, dialect and ordered macro operations.
+GCC-internal search directories are replaced with embedded Clang resource
+headers in the probed search order. User search paths remain absent. Clang keeps
+its own predefinitions. Untranslated options are recorded; semantic options
+without support, including modules/OpenMP/CPU tuning, disable pruning. Source
+pragmas use the audited allow-list below; other pragmas disable pruning.
+Generated markers are identified from D2's null line-map entries, never by
+spelling alone. Keep comments are captured as physical declaration-token offsets by
+`captureKeepOffsets` before any D3b comment stripping, then bound to families
+in the child. `keepOffsets`/`annotations` survive independently of the comment.
+D3b must map the declaration offsets when its rendering changes byte positions.
+
+`extractPruning` serializes the request through a strict bounded private
+protocol and uses D2's `runProcess` process-group/Job Object containment to run
+`distill_prune_worker`. A deadline, crash, invalid protocol or output cap disables
+pruning. `src/clang/prune_extract.cpp` runs only in that child: it parses with a
+real-filesystem overlay and build-time embedded resource headers, discovers
+complete declaration ownership, pins macro-produced declarations and directive
+crossings, and traverses patterns, known instantiations, implicit code, type
+locations, bases, defaults, constraints/requires, constructors/destructors,
+conversions and positive references from system entities. User specializations
+keep their identities; overloads, redeclarations, records/members and user
+template families share retention. Namespace/linkage blocks remain shells.
+Non-member dependent lookup names retain matching families across the TU,
+including later declarations and hidden friends. Dependent member/qualified
+lookup uses the whole-record closure described below. Opaque asm, unaudited
+attributes, recovery ASTs and parse errors still disable it.
+
+Dependent member and qualified lookup do **not** disable pruning, and need no
+extra global member-name rule. For `x.size()`, `x.template f<U>()`, `M::op`,
+`M::e`, `T::value` and `T::template f<U>`, the object's/qualifier's initial user
+type comes from arguments named in kept user text or the AST edges of known
+instantiations. Members are never removed from a kept record (§4.7). This
+includes member templates and out-of-line member definitions/specializations:
+separate canonical specializations explicitly union with their enclosing
+record, and their member names are not indexed at namespace scope. Explicit
+member-template arguments retain their types through the ordinary lexical/AST
+rules. Conversion operators (including implicit conversions) and `operator->`
+chains remain in the whole record, with their return-type carriers retained
+by those same rules. Base lists retain the records supplying inherited members.
+Nested-name chains and `typename Tr::type` follow whole-record aliases and
+bases; dependent type locations are traversed too. An enum qualifier likewise
+keeps its complete enumeration. Template parameters cannot name a namespace.
+Induction through these carrier steps therefore retains the user declaration
+that either dependent lookup can select. A user-only pasted **member** name
+adds no requirement: all members already stay. External/unknown paste
+provenance continues to disable pruning.
+
+A system trait selecting a type from user inputs does not break that argument.
+For `std::conditional_t<sizeof(long) == 4, A, B>`, **both** input types occur in
+kept text, regardless of the locally seen choice. Other standard traits can
+select nested aliases or member/conversion return types (for example
+`common_type`/`invoke_result`); those types follow the carrier closure above.
+A user specialization of a system trait is retained by association with its
+kept user argument types, or unconditionally when its arguments name no user
+type. Its output alias then keeps the next user record. Under the existing
+standard-header/A6 boundary, system traits cannot conjure a disconnected user
+declaration outside these paths. Thus neither dependent AST form requires
+retaining every record declaring/inheriting a matching member name. Extraction
+cases check member templates, explicit specializations, conversions, arrow
+chains, inherited members, nested qualifiers, pasted names, target-dependent
+system-trait selection and user trait specializations; same-name decoys must
+still be removed. The LLVM-free closure test separately checks both candidates
+without any instantiated edge to the judge's alternative.
+
+The source pragma allow-list is `GCC optimize`, `GCC target`,
+`GCC push_options`/`pop_options`/`reset_options`, `GCC diagnostic`,
+`clang diagnostic`, `pack`, `message`, `warning`, and bare `once`. Names are
+matched exactly; arbitrary vendor prefixes and other pragmas disable pruning.
+Optimisation/target controls and their option stacks affect code generation,
+not which user declarations name lookup needs. GCC/Clang diagnostics and MS
+`warning` affect warning policy; `message` emits a diagnostic. `pack` affects
+layout only. Every directive and its ordering survives, and a crossing family
+is pinned, so deletion cannot change the persistent option/packing state.
+D2 already rewrites `#pragma once` into an identity guard (the inliner tests
+assert its removal); it has no repeated-include effect in the flat TU, and
+direct extraction also accepts it. Operator-generated `_Pragma`/`__pragma`
+directives conservatively disable in PP callbacks because their literal source
+range/effects have not been audited. The top-of-file Mint/segment-tree fixture
+with `GCC optimize("O3")` and `GCC target("avx2")` requires enabled pruning;
+an unknown pragma fixture requires refusal.
+
+The audited attribute classes are `WarnUnusedResultAttr` (`nodiscard`),
+`UnusedAttr` (`maybe_unused`), `LikelyAttr`/`UnlikelyAttr`, `AlwaysInlineAttr`,
+`AlignedAttr` (`alignas`/`aligned`) and Clang's `MaxFieldAlignmentAttr` from
+`pack`. Diagnostic attributes, branch/inlining hints and layout annotations
+add no symbol dependencies; their arguments still participate in AST/lexical
+closure. Declaration ownership includes leading `[[...]]`/`alignas(...)`, so
+removing a declaration cannot leave an attribute attached to its successor.
+Inherited/implicit attributes do not expand physical ownership into an earlier
+declaration; macro prefixes remain pinned. All other declaration and statement
+attributes still disable, including unaudited symbol semantics such as `used`.
+Capturing lambdas, recursive `auto self` lambdas, `if constexpr`, fold expressions,
+variadic templates/packs, structured bindings and `std::function` have no disable
+trigger and follow ordinary traversal. The GNU/variadic refusal is specifically
+C `VAArgExpr`, GNU `StmtExpr`, `AddrLabelExpr` and `IndirectGotoStmt`, never C++
+parameter packs or folds. `ordinary_templates` exercises this set, and
+`typical_library` combines it with Mint/operators, a lazy monoid segment tree,
+Fenwick, DSU, `using namespace std`, `rep` and the two GCC pragmas, requiring
+unused `SparseTable` removal and retention of every used structure.
+
+Implicit Clang declarations for common scalar builtins can carry the user
+call-site location. They bypass the otherwise valid “unowned user dependency”
+refusal only for a finite compiler-recognized allow-list: `__builtin_popcount`,
+`clz`, `ctz`, `ffs`, `parity` (each with `l`/`ll` variants),
+`__builtin_bswap16/32/64/128`, `__builtin_expect`,
+`__builtin_expect_with_probability` and `__builtin_unreachable`. These operate
+on scalar values/control flow and introduce no further user lookup; argument
+expressions and conversions are still traversed, and external C runtime
+definitions already stay as roots. This exemption applies only to implicit
+builtin declarations, after checking for an owned user declaration. It does
+not excuse arbitrary builtins or explicitly declared user functions.
+`ordinary_builtins` covers the common forms.
+
+Static/thread storage roots use a positive syntactic initializer/type classifier,
+not a constant evaluator: calls (including constexpr calls), mutation, classes,
+deduced/template/member types and non-whitelisted system macro origins are not
+certified inert. Unrecognized alias/initializer forms over-retain. Ordinary
+locals have no independent root. PP callbacks observe synthesized/rescanned
+predefined names and source overrides; token watching also detects a judge
+predefinition absent from Clang. Pasting is refused if an enclosing invocation
+contains external macro expansion; this intentionally overapproximates operands.
+`report/prune` emits a separate analysis report with policy/registry identity,
+coverage, parse argv/omissions, reasons and byte attribution. It certifies no
+artifact and is not connected to the no-prune pipeline/CLI in D3a.
+
+All required core jobs run the hand-built pruning unit models, including an
+exhaustive 4,096 graph/root closure table and worker-protocol failure cases.
+The unchanged `resolver (linux, clang)` job additionally builds the extraction
+worker and runs `prune_extract_models` (14 model/ownership checks) and
+`prune_extract_cases` (29 cases) under CTest's 120-second timeout. Cases
+live in `tests/cases/prune/<name>/`: `main.cpp` is the immutable extraction
+input, `expect.txt` contains `kept <qualified-label> | <reason substring>`,
+`removed <qualified-label> | <reason substring>`, or `disabled | <reason>`.
+Optional `generated-lines.txt` marks physical lines whose null provenance was
+produced by D2 (the direct extraction fixtures deliberately bypass the inliner's
+source-#line rejection). The runner probes an effective local GCC configuration,
+uses its facts as test judge facts, launches the bounded worker per case and
+checks retention/refusal directly. It prints unique kept/removed family bytes,
+including the Mint/operator measurement. This suite does not render or compare
+pruned execution; those adversarial checks belong to D3b/D3c.
+
+```sh
+# LLVM-free, from the worktree; keep temporary files inside the build directory:
+mkdir -p build/tmp
+TMPDIR="$PWD/build/tmp" ctest --test-dir build --output-on-failure --timeout 120 -j1
+# CI SDK build only:
+ctest --test-dir build-resolver -R prune_extract_cases --output-on-failure --timeout 120
+```

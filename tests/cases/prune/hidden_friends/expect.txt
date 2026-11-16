@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Box | ADL name (A6)
+removed Other | outside the retention closure
+kept main | root: main

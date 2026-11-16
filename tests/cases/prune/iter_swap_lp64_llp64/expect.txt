@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept app::iter_swap | ADL name (A6)
+kept main | root: main

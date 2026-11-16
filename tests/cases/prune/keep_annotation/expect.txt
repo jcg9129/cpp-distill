@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept preserve_me | root: distill: keep
+removed unused | outside the retention closure
+kept main | root: main

@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# version: A6-1-n4861-n4950
+# Fixed draft editions, no later defect reports implicitly applied.
+# Columns: dialect name mechanism stable-clause public-entry verification
+# Verified against https://timsong-cpp.github.io/cppwp/n4861/ and /n4950/
+# Append the stable clause (without brackets) to those URLs.
+# C++20 lookup uses the specified poison-pill/unqualified contexts;
+# C++23 often specifies ADL-only. Both mechanisms retain the same hook names.
+# public-CPO-overretention rows do NOT assert same-named free-function lookup.
+# cdata is the standard CPO in both drafts; const-access CPOs delegate.
+# N4861 error conversion constructors spell make_error_* but [contents]/3
+# generally qualifies library names. Exact ADL permission was not verified in
+# this fixed draft (later LWG 3629 clarification is not silently backported).
+# These two C++20 rows are retained conservatively and marked UNVERIFIED.
+# N4950 [contents]/3 explicitly grants ADL to make_error_code/condition.
+# [range.prim.*] stable subclauses are under the range.access page in both.
+# Not included: members, callbacks, operator functions, permitted template
+# specializations (hash, formatter, tuple/iterator traits, range variables).
+# Those require ownership/AST/association rules, independently of this table.
+c++20 swap unqualified+ADL [swappable.requirements] std::swap verified
+c++20 swap CPO-ADL [concept.swappable] ranges::swap verified
+c++20 iter_move CPO-ADL [iterator.cust.move] ranges::iter_move verified
+c++20 iter_swap CPO-ADL [iterator.cust.swap] ranges::iter_swap verified
+c++20 begin CPO-ADL [range.access.begin] ranges::begin verified
+c++20 end CPO-ADL [range.access.end] ranges::end verified
+c++20 rbegin CPO-ADL [range.access.rbegin] ranges::rbegin verified
+c++20 rend CPO-ADL [range.access.rend] ranges::rend verified
+c++20 size CPO-ADL [range.prim.size] ranges::size verified
+c++20 cbegin public-CPO-overretention:via-begin [range.access.cbegin] ranges::cbegin verified
+c++20 cend public-CPO-overretention:via-end [range.access.cend] ranges::cend verified
+c++20 crbegin public-CPO-overretention:via-rbegin [range.access.crbegin] ranges::crbegin verified
+c++20 crend public-CPO-overretention:via-rend [range.access.crend] ranges::crend verified
+c++20 ssize public-CPO-overretention:via-size [range.prim.ssize] ranges::ssize verified
+c++20 empty public-CPO-overretention:via-size/begin/end [range.prim.empty] ranges::empty verified
+c++20 data public-CPO-overretention:via-begin [range.prim.data] ranges::data verified
+c++20 cdata public-CPO-overretention:via-data [range.prim.cdata] ranges::cdata verified
+c++20 begin language-ADL [stmt.ranged] range-for verified
+c++20 end language-ADL [stmt.ranged] range-for verified
+c++20 get language-ADL [dcl.struct.bind] structured-binding verified
+c++20 make_error_code intended-ADL-overretention [syserr.errcode.constructors] error_code UNVERIFIED
+c++20 make_error_condition intended-ADL-overretention [syserr.errcondition.constructors] error_condition UNVERIFIED
+c++20 strong_order CPO-ADL [cmp.alg] std::strong_order verified
+c++20 weak_order CPO-ADL [cmp.alg] std::weak_order verified
+c++20 partial_order CPO-ADL [cmp.alg] std::partial_order verified
+c++20 from_stream unqualified+ADL [time.parse] chrono::parse verified
+c++20 abs unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 acos unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 asin unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 atan unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 atan2 unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 cos unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 cosh unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 exp unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 log unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 log10 unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 pow unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 sin unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 sinh unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 sqrt unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 tan unqualified-numeric [valarray.transcend] valarray-math verified
+c++20 tanh unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 swap unqualified+ADL [swappable.requirements] std::swap verified
+c++23 swap CPO-ADL [concept.swappable] ranges::swap verified
+c++23 iter_move CPO-ADL [iterator.cust.move] ranges::iter_move verified
+c++23 iter_swap CPO-ADL [iterator.cust.swap] ranges::iter_swap verified
+c++23 begin CPO-ADL [range.access.begin] ranges::begin verified
+c++23 end CPO-ADL [range.access.end] ranges::end verified
+c++23 rbegin CPO-ADL [range.access.rbegin] ranges::rbegin verified
+c++23 rend CPO-ADL [range.access.rend] ranges::rend verified
+c++23 size CPO-ADL [range.prim.size] ranges::size verified
+c++23 cbegin public-CPO-overretention:via-begin [range.access.cbegin] ranges::cbegin verified
+c++23 cend public-CPO-overretention:via-end [range.access.cend] ranges::cend verified
+c++23 crbegin public-CPO-overretention:via-rbegin [range.access.crbegin] ranges::crbegin verified
+c++23 crend public-CPO-overretention:via-rend [range.access.crend] ranges::crend verified
+c++23 ssize public-CPO-overretention:via-size [range.prim.ssize] ranges::ssize verified
+c++23 empty public-CPO-overretention:via-size/begin/end [range.prim.empty] ranges::empty verified
+c++23 data public-CPO-overretention:via-begin [range.prim.data] ranges::data verified
+c++23 cdata public-CPO-overretention:via-data [range.prim.cdata] ranges::cdata verified
+c++23 begin language-ADL [stmt.ranged] range-for verified
+c++23 end language-ADL [stmt.ranged] range-for verified
+c++23 get language-ADL [dcl.struct.bind] structured-binding verified
+c++23 make_error_code unqualified+ADL [syserr.errcode.constructors] error_code verified
+c++23 make_error_condition unqualified+ADL [syserr.errcondition.constructors] error_condition verified
+c++23 strong_order CPO-ADL [cmp.alg] std::strong_order verified
+c++23 weak_order CPO-ADL [cmp.alg] std::weak_order verified
+c++23 partial_order CPO-ADL [cmp.alg] std::partial_order verified
+c++23 from_stream unqualified+ADL [time.parse] chrono::parse verified
+c++23 abs unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 acos unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 asin unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 atan unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 atan2 unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 cos unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 cosh unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 exp unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 log unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 log10 unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 pow unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 sin unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 sinh unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 sqrt unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 tan unqualified-numeric [valarray.transcend] valarray-math verified
+c++23 tanh unqualified-numeric [valarray.transcend] valarray-math verified

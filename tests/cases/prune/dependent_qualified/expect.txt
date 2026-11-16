@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Value |
+kept Ancestor |
+kept Monoid |
+kept Traits |
+kept run |
+removed Decoy | outside the retention closure

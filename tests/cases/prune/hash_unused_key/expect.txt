@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed Key | outside the retention closure
+removed std::hash | outside the retention closure
+kept main | root: main

@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed unused | outside the retention closure
+kept main | root: main

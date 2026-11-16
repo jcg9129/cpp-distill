@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed automatic | outside the retention closure
+removed inert | outside the retention closure
+kept static_local | root: not inert
+kept thread_local_storage | root: not inert
+kept active | root: not inert
+kept main | root: main

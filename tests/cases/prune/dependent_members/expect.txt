@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Result |
+kept Base |
+kept Derived |
+kept Convertible |
+kept Leaf |
+kept Arrow |
+kept Chain |
+kept member |
+kept convert |
+kept arrow |
+removed Decoy | outside the retention closure
+kept consume |
+kept implicit_convert |
