@@ -78,6 +78,7 @@ jobs:
           timeout 120 python3 -m unittest discover -s ci/extensions -p 'test_*.py'
           timeout 120 python3 -m unittest discover -s ci/profiles -p 'test_*.py'
           timeout 120 python3 ci/llvm/test-ci.py
+          timeout 120 python3 ci/test-measure.py
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} ${{ matrix.cmake_options }}
       - name: Build
@@ -96,3 +97,10 @@ jobs:
         run: gh release view llvm-23.1.5-1 --repo "$GITHUB_REPOSITORY" >/dev/null
       - name: Build and test resolver and pruning extraction in manylinux 2.28
         run: bash ci/llvm/in-container.sh quay.io/pypa/manylinux_2_28_x86_64 bash ci/llvm/linux-resolver.sh
+      - name: Upload pruning measurements
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: d3-pruning-measurements
+          path: measurements/
+          if-no-files-found: warn

@@ -2,6 +2,7 @@
 #include "core/prune/extract.h"
 #include "core/path.h"
 #include "core/temporary.h"
+#include "library_features.h"
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -25,12 +26,15 @@ int main(int argc, char** argv) {
     for (const auto& d : std::filesystem::directory_iterator(DISTILL_PRUNE_CASES)) if (d.is_directory()) cases.push_back(d.path());
     std::sort(cases.begin(),cases.end()); std::size_t count = 0, failed = 0;
     for (const auto& path : cases) {
-      PruningModel model; PruningResult retained; bool caseFailed = false;
+      PruningModel model; PruningResult retained; bool caseFailed = false; std::string workerDiagnostics;
       auto fail = [&](const std::string& why) {
         std::cerr << "FAIL " << path.filename() << ": " << why << '\n'; caseFailed = true;
       };
       try {
         ResolveResult flat; flat.text = read(path / "main.cpp");
+        const auto name = pathToUtf8(path.filename());
+        const auto feature = name.starts_with("formatter") ? "formatter" : name == "chrono_parse" ? "chrono_parse" : "";
+        const bool native = !*feature || take(testing::libraryFeature(feature,"g++",work.path));
         auto scan = take(scanDirectives(flat.text));
         std::size_t lines = 1 + std::count(flat.text.begin(),flat.text.end(),'\n');
         for (std::size_t i = 1; i <= lines; ++i) flat.lineMap.push_back(SourceLocation{pathToUtf8(path / "main.cpp"),i});
@@ -39,7 +43,22 @@ int main(int argc, char** argv) {
           while (std::getline(in,l)) if (!l.empty() && !l.starts_with('#')) flat.lineMap.at(std::stoul(l)-1).reset();
         }
         model = take(preparePruning(configuration,{},flat,&configuration.facts));
+        if (*feature) {
+          model.dialect = "gnu++23";
+          for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";
+          if (!native) {
+            const auto header = std::filesystem::path(DISTILL_PRUNING_SUPPORT) / (std::string(feature) == "formatter" ? "format" : "chrono");
+            model.parseArgv.insert(model.parseArgv.begin(),{"-isystem",pathToUtf8(header)});
+            std::cout << "MODEL " << name << ": local library lacks " << feature << "\n";
+          }
+        }
         PruneWorkerOptions options; options.executable = std::filesystem::absolute(argv[1]); options.temporaryRoot = work.path;
+        options.runner = [&](const ProcessSpec& spec) {
+          auto r = runProcess(spec);
+          if (r.ok()) workerDiagnostics += r.value().stderrText;
+          else workerDiagnostics += r.error().message;
+          return r;
+        };
         model = take(extractPruning(model,options)); retained = take(computeRetention(model));
         std::istringstream expect(read(path / "expect.txt")); std::string line; bool disabled = false;
         while (std::getline(expect,line)) {
@@ -49,11 +68,17 @@ int main(int argc, char** argv) {
           if (assertion == "disabled") {
             disabled = true; for (const auto& why : retained.disabledReasons) matched |= why.find(reason) != why.npos;
           } else {
-            auto space = assertion.find(' '); auto fate = assertion.substr(0,space), label = assertion.substr(space+1);
+            auto space = assertion.find(' ');
+            if (space == assertion.npos || (assertion.substr(0,space) != "kept" && assertion.substr(0,space) != "removed")) { fail("invalid expectation: " + line); continue; }
+            auto fate = assertion.substr(0,space), label = assertion.substr(space+1);
+            bool found = false, allFates = true;
             for (FamilyId id = 0; id < model.families.size(); ++id) if (model.families[id].label == label) {
+              found = true;
               const auto& r = retained.families[id];
+              allFates &= r.kept == (fate == "kept");
               if (r.kept == (fate == "kept") && r.reason.find(reason) != r.reason.npos) matched = true;
             }
+            matched &= found && allFates;
           }
           if (!matched) fail("missing " + line);
         }
@@ -67,6 +92,7 @@ int main(int argc, char** argv) {
       catch (const std::exception& e) { fail(e.what()); }
       if (caseFailed) {
         ++failed;
+        std::cerr << workerDiagnostics;
         for (const auto& why : model.disabledReasons) std::cerr << "  disabled: " << why << '\n';
         for (const auto& why : retained.disabledReasons)
           if (std::find(model.disabledReasons.begin(),model.disabledReasons.end(),why) == model.disabledReasons.end())

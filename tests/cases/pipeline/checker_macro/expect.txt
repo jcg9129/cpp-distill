@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# static-invariant must apply the name rule (design §4.7 rule 2) to the never-invoked macro body; builds and samples pass.
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+milestone=D3c
+api=yes
+checker=static-invariant
+victim=chosen
+model.chosen=int chosen(){return 7;}
+model.main=int main(){return 0;}

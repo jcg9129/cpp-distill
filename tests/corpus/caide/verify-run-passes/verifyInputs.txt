@@ -1,0 +1,2 @@
+first.in
+TEST_ROOT/second.in

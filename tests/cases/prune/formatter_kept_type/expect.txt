@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# No A1-A6 violation; missing format uses the test-only standard interface model.
+# No formatting call: retention must follow the user type alone.
+kept Value |
+kept std::formatter | associated with Value

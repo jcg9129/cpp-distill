@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept app::strong_order | ADL name (A6)
+kept app::weak_order | ADL name (A6)
+kept app::partial_order | ADL name (A6)
+removed unused | outside the retention closure

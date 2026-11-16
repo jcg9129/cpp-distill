@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# rendering-invariant must reject a shifted logical line.
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+milestone=D3c
+api=yes
+checker=rendering-invariant
+victim=chosen
+mutation=line
+keep=chosen
+model.chosen=int chosen(){return 7;}
+model.main=int main(){return 0;}
