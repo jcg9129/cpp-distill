@@ -375,8 +375,12 @@ those aliases, so `--judge codeforces` keeps working.
 **Judge probe** (J1-1…J1-12, J1-16). A diagnostic, never a source of facts.
 
 1. `distill --judge-probe <profile>` prints one self-contained C++ source,
-   deterministic per profile digest and distill version, with a probe-format
-   version, the profile name and digest in its output header.
+   deterministic per profile digest and probe-format version, with that
+   version, the profile name and digest in its output header. The distill
+   version is not part of it, so expected output from a CI build stays valid
+   for released binaries; any change to the generated facts or encoding bumps
+   the probe-format version, and a unit test checks every shipped expected
+   output against the current generator.
 2. Run in the judge's custom test (Codeforces "Custom Invocation", AtCoder
    "コードテスト") under the profile's option, it prints one line per checked
    fact and a trailer with the line count and a checksum, which detects

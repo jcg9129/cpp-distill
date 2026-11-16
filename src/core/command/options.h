@@ -9,6 +9,8 @@ namespace distill {
 struct CliOptions {
   bool help = false, version = false, strict = false, verbose = false, compilerExplicit = true;
   std::optional<std::string> output, judge, report;
+  std::optional<std::string> judgeProbe, judgeCheck, part, record;
+  std::vector<std::string> judgeOutputs;
   bool noPrune = false, stripComments = false;
   std::vector<std::string> compile, keep, verifyRun;
 };

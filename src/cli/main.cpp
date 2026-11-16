@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/command/options.h"
+#include "cli/judge.h"
 #include "core/pipeline/pipeline.h"
 #include "core/path.h"
 #include "core/temporary.h"
@@ -108,6 +109,7 @@ int run(const std::vector<std::string>& args) {
   auto parsed = take(parseDistillOptions({args.begin() + 1, args.end()}));
   if (parsed.help) { std::cout << distillHelp(); return 0; }
   if (parsed.version) { std::cout << distillVersion(); return 0; }
+  if (parsed.judgeProbe || parsed.judgeCheck) return runJudgeDiagnostic(parsed);
   std::optional<Profile> profile;
   if (parsed.judge) {
     ProfileLookup lookup;

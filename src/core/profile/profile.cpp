@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/profile/profile.h"
+#include "core/profile/probe.h"
 #include "core/profile/toml.h"
 #include "core/profile/sha256.h"
 #include "core/path.h"
@@ -88,9 +89,14 @@ struct Schema {
   Profile parse(const std::filesystem::path& path, const SnapshotReader& reader) const {
     for (const auto& [key, entry] : doc) {
       (void)entry;
-      if (key != "name" && key != "alias" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "snapshot_compiler" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
+      if (key != "name" && key != "alias" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "snapshot_compiler" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources" && key != "probe_source_bytes" && key != "probe_output_bytes") fail(key, "unknown key");
     }
     Profile p;
+    for (const auto* key : {"probe_source_bytes", "probe_output_bytes"}) if (doc.contains(key)) {
+      auto value = get<std::int64_t>(key);
+      if (value < 1024 || value > 16777216) fail(key, "expected integer in [1024, 16777216]");
+      (std::string_view(key) == "probe_source_bytes" ? p.probeSourceBytes : p.probeOutputBytes) = static_cast<std::size_t>(value);
+    }
     p.name = string("name");
     if (!matches(p.name, "[a-z0-9]+(-[a-z0-9]+)*-gcc[1-9][0-9]*-(cpp|gnupp)[0-9]{2}(-[a-z0-9]+)*") || pathToUtf8(path.filename()) != p.name + ".toml")
       fail("name", "must have shape <judge>-gcc<major>-<cppNN|gnuppNN>[-<variant>], use [a-z0-9-], and match the .toml file name");
@@ -212,6 +218,10 @@ Result<Profile> parseProfile(std::string_view text, const std::filesystem::path&
         return bytes;
       });
     profile.provenance.contentDigest = detail::sha256(digestInput);
+    if (reader) {
+      auto expected = reader(file.parent_path() / pathFromUtf8(profile.name + "-probe-expected.txt"));
+      if (expected.ok()) profile.probeExpected = std::move(expected.value());
+    }
     return profile;
   }
   catch (const Error& error) { return error; }
@@ -269,6 +279,7 @@ Result<ProfileCatalog> listProfiles(const ProfileLookup& lookup, const ProfileFi
       for (const auto& file : files) {
         auto p = loadProfile(std::filesystem::absolute(file));
         if (!p.ok()) return p.error(); // Invalid user files never silently fall through.
+        p.value().latestObservation = latestJudgeObservation(p.value(), embedded);
         users.push_back(std::move(p.value()));
       }
     }
@@ -297,6 +308,7 @@ Result<ProfileCatalog> listProfiles(const ProfileLookup& lookup, const ProfileFi
       if (!parsed.ok()) return parsed.error();
       auto p = std::move(parsed.value());
       p.provenance.origin = "bundled";
+      p.latestObservation = latestJudgeObservation(p, embedded);
       for (const auto& id : identify(p)) {
         if (!bundledIdentifiers.insert(id).second) return Error{"bundled profile identifier collision '" + id + "' (name or alias)"};
         if (const auto user = userIdentifiers.find(id); user != userIdentifiers.end())
@@ -325,7 +337,7 @@ std::string renderProfileList(const ProfileCatalog& catalog) {
       else description += ch;
     }
     out << '\t' << (p.reproduced ? "reproduced" : "approximate") << '\t' << p.provenance.updated
-        << '\t' << std::quoted(description) << '\n';
+        << '\t' << std::quoted(description) << '\t' << p.latestObservation << '\n';
   }
   return out.str();
 }

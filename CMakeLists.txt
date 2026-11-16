@@ -34,6 +34,7 @@ add_library(distill_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/embedded_profiles.cpp"
   src/core/profile/toml.cpp
   src/core/profile/profile.cpp
+  src/core/profile/probe.cpp
   src/core/profile/facts.cpp
   src/core/validate/preprocess.cpp
   src/core/validate/configuration.cpp
@@ -71,8 +72,13 @@ endif()
 if(WIN32)
   target_compile_definitions(distill_core PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601)
 endif()
+option(DISTILL_PROFILE_ONLY "Build LLVM-free diagnostic-only distill for profile CI" OFF)
+if(DISTILL_PROFILE_ONLY)
+  add_executable(distill src/cli/judge_main.cpp src/cli/judge.cpp)
+  target_link_libraries(distill PRIVATE distill_core)
+endif()
 set(DISTILL_LLVM_DIR "" CACHE PATH "Pinned SDK lib/cmake/llvm directory")
-if(DISTILL_LLVM_DIR)
+if(DISTILL_LLVM_DIR AND NOT DISTILL_PROFILE_ONLY)
   # LLVM's package dependency checks (e.g. libffi) can compile C probes.
   enable_language(C)
   set(LLVM_DIR "${DISTILL_LLVM_DIR}" CACHE PATH "" FORCE)
@@ -118,7 +124,7 @@ if(DISTILL_LLVM_DIR)
   target_link_libraries(distill_clang PUBLIC distill_core PRIVATE distill_resources clangFrontend clangParse clangSema clangAST clangLex clangBasic)
   add_executable(distill_prune_worker src/clang/prune_worker.cpp)
   target_link_libraries(distill_prune_worker PRIVATE distill_clang)
-  add_executable(distill src/cli/main.cpp)
+  add_executable(distill src/cli/main.cpp src/cli/judge.cpp)
   target_link_libraries(distill PRIVATE distill_clang)
   file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/distill-toolchain.txt" CONTENT
 "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} (${CMAKE_CXX_COMPILER})
