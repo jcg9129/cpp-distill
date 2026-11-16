@@ -53,7 +53,7 @@ TEST(process_signal_death) {
 }
 TEST(process_stdin_file_and_null) {
   test::TempDirectory temp;
-  const std::string text("hello\nworld\0binary", 18);
+  const std::string text = std::string("hello\nworld\r\n") + '\0' + '\x1a' + "binary";
   temp.write("input.txt", text);
   auto process = spec({"cat-stdin"});
   process.cwd = temp.path;

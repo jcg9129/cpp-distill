@@ -6,6 +6,7 @@
 using namespace distill;
 TEST(validate_preprocess_markers_flags_blanks_escapes) {
   CHECK(comparePreprocessed("# 3 \"a\\\\b\\\"c\" 1 3 4\n\nint x;\n", "# 4 \"a\\\\b\\\"c\" 2\nint x;\n").ok());
+  CHECK(comparePreprocessed("# 3 \"a.cpp\" 1\r\n\r\nint x;\r\n", "# 4 \"a.cpp\" 2\nint x;\n").ok());
   SourceLocation at;
   CHECK(!parseLineMarker("# 9999999999999999999999999 \"a\"", at).ok());
   CHECK(!parseLineMarker("# 1 \"a\" 8", at).ok());
@@ -52,6 +53,50 @@ TEST(validate_cli_options) {
 #include "core/pipeline/pipeline.h"
 #include "evaluate.h"
 #include "profile.h"
+TEST(validate_capture_profile_crlf_compiler_output) {
+  const auto gcc = testing::testGcc(); if (!gcc) throw test::Skip{"GCC unavailable"};
+  test::TempDirectory temp;
+  auto crlf = [](std::string_view text) {
+    std::string result;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+      if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+      if (text[i] == '\n') result += '\r';
+      result += text[i];
+    }
+    return result;
+  };
+  auto captured = testing::captureProfile(*gcc, temp.path, [&](const ProcessSpec& spec) -> Result<ProcessResult> {
+    auto r = runProcess(spec);
+    if (r.ok()) {
+      // Exercise every captured stream, including -dM, -dD, -v and --version.
+      if (spec.argv.back() == "--version") r.value().stdoutText = "g++ (fixture)\nCopyright fixture\n";
+      r.value().stdoutText = crlf(r.value().stdoutText);
+      r.value().stderrText = crlf(r.value().stderrText);
+    }
+    return r;
+  });
+  if (!captured.ok()) throw std::runtime_error(captured.error().message);
+  const auto& p = captured.value();
+  CHECK_EQ(p.snapshotMetadata.versionOutput, "g++ (fixture)\\nCopyright fixture\\n");
+  CHECK_EQ(p.predefined.at("__GNUC__").replacement, std::to_string(p.compiler.major));
+  CHECK_EQ(p.predefined.at("DISTILL_FIXTURE_JUDGE").replacement, "1");
+  const auto snapshot = test::read(temp.path / "fixture-predefined.txt");
+  CHECK(snapshot.find('\r') == snapshot.npos);
+  // CRLF record separators remain valid; an embedded bare CR remains invalid.
+  temp.write("fixture-predefined.txt", crlf(snapshot));
+  auto loaded = loadProfile(temp.path / "fixture.toml");
+  CHECK(loaded.ok());
+  if (loaded.ok()) {
+    CHECK_EQ(loaded.value().snapshotMetadata.versionOutput, p.snapshotMetadata.versionOutput);
+    CHECK_EQ(loaded.value().predefined, p.predefined);
+  }
+  auto malformed = snapshot;
+  malformed.insert(malformed.find("\\nCopyright"), 1, '\r');
+  temp.write("fixture-predefined.txt", malformed);
+  auto rejected = loadProfile(temp.path / "fixture.toml");
+  CHECK(!rejected.ok());
+  if (!rejected.ok()) CHECK(rejected.error().message.find("fixture-predefined.txt:4: invalid UTF-8 or control character") != std::string::npos);
+}
 TEST(validate_configuration_exact_flags_specials_and_target) {
   const auto gcc = testing::testGcc(); if (!gcc) throw test::Skip{"GCC unavailable"};
   test::TempDirectory temp;

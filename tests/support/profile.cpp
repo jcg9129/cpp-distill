@@ -19,10 +19,11 @@ void definition(std::ostream& out, const std::string& name, const Macro& m) {
   out << ' ' << m.replacement << '\n';
 }
 }
-Result<Profile> captureProfile(const std::filesystem::path& compiler, const std::filesystem::path& directory) {
+Result<Profile> captureProfile(const std::filesystem::path& compiler, const std::filesystem::path& directory,
+                               ProcessRunner runner) {
   try {
     auto cmd = take(parseCompileCommand({pathToUtf8(compiler), "main.cpp", "-std=gnu++20", "-O0", "-fsigned-char", "-DDISTILL_FIXTURE_JUDGE=1"}, directory));
-    ProbeOptions po; po.temporaryRoot = directory;
+    ProbeOptions po; po.temporaryRoot = directory; po.runner = runner;
     auto c = take(probeConfiguration(cmd, "local", po));
     const auto& p = c.probe;
     const auto version = std::to_string(p.identity.major) + '.' + std::to_string(p.identity.minor) + '.' + std::to_string(p.identity.patch);
@@ -30,10 +31,17 @@ Result<Profile> captureProfile(const std::filesystem::path& compiler, const std:
     const bool complete = !builtins.empty();
     ProcessSpec versionSpec; versionSpec.cwd = directory;
     versionSpec.argv = {pathToUtf8(compiler), "--version"};
-    const auto versionRun = take(runProcess(versionSpec));
+    const auto versionRun = take(runner(versionSpec));
     if (versionRun.exitCode || versionRun.timedOut || versionRun.stdoutTruncated || versionRun.stderrTruncated) throw Error{"fixture version probe failed"};
     std::string versionOutput;
-    for (char ch : versionRun.stdoutText) versionOutput += ch == '\n' ? "\\n" : std::string(1, ch);
+    // Snapshot records accept CRLF, but this header stores the banner on ONE
+    // line with escaped newlines. Normalize CRLF before escaping LF, otherwise
+    // a Windows compiler leaves bare CR bytes inside the metadata value.
+    for (std::size_t i = 0; i < versionRun.stdoutText.size(); ++i) {
+      const char ch = versionRun.stdoutText[i];
+      if (ch == '\r' && i + 1 < versionRun.stdoutText.size() && versionRun.stdoutText[i + 1] == '\n') continue;
+      versionOutput += ch == '\n' ? "\\n" : std::string(1, ch);
+    }
     const auto file = directory / "fixture.toml";
     {
       std::ofstream out(file, std::ios::binary);

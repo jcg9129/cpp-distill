@@ -30,6 +30,29 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         assert message in result.stdout + result.stderr, (args, result.stdout, result.stderr)
         assert set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir())
         passed += 1
+    # Do not use text=True here: universal newline conversion would hide a
+    # Windows text-mode write in stdout, the published artifact or the report.
+    source = (root / 'main.cpp').read_bytes()
+    (root / 'main.cpp').write_bytes(b'// SPDX-License-Identifier: GPL-3.0-or-later\r\n#if 1\r\nint main(){}\r\n#endif\r\n')
+    outputs = []
+    for output_args in ([], ['-o', 'submit.cpp']):
+        result = subprocess.run([binary, '--no-prune', '--report', 'report.txt', *output_args, 'main.cpp'],
+                                cwd=root, capture_output=True, timeout=120)
+        assert result.returncode == 0, result.stderr
+        assert b'distill: wrote flat (local)' in result.stderr, result.stderr
+        output = (root / 'submit.cpp').read_bytes() if output_args else result.stdout
+        assert b'int main(){}\r\n' in output, output
+        assert b'#if' not in output and b'\r\r\n' not in output, output
+        assert b'\r' not in (root / 'report.txt').read_bytes()
+        assert b'\r' not in result.stderr, result.stderr
+        if output_args:
+            assert result.stdout == b'', result.stdout
+            (root / 'submit.cpp').unlink()
+        (root / 'report.txt').unlink()
+        outputs.append(output)
+        passed += 1
+    assert outputs[0] == outputs[1], outputs
+    (root / 'main.cpp').write_bytes(source)
     if os.name != 'nt':
         farm = root / 'symlink-farm'
         farm.mkdir()

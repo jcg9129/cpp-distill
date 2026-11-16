@@ -508,7 +508,13 @@ SPDX/comment metadata lines begin `#`. `profile=fixture` captures a valid TOML
 profile and sibling snapshot from the actual test GCC under gnu++20, `-O0`,
 `-fsigned-char`, `-DDISTILL_FIXTURE_JUDGE=1`. It exercises `target` for supported
 registry versions, otherwise conservatively expects `local`. It is test
-provenance about this compiler only. `check=present` tests a found check compiler;
+provenance about this compiler only. Captured compiler banners normalize CRLF to
+LF before escaping newlines in the snapshot's single-line `compiler-version`
+header; snapshot record separators accept both LF and CRLF. Pipeline fixtures
+are checked out byte-exact, including the CRLF source case. Work files, reports,
+published artifacts and worker input files use binary I/O; Windows CLI stdout
+and stderr are binary too, preserving both artifact bytes and the worker's exact
+`true\n`/`false\n` replies. `check=present` tests a found check compiler;
 the default fixture lists an absent check compiler and tests fallback.
 `check=wrong-target` puts a compiler shim on PATH that reports a MinGW triple
 for a Linux fixture. It must be skipped and reported before the local fallback
