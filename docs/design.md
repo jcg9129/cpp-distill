@@ -1,6 +1,8 @@
 # cpp-distill design
 
-Status: **approved v8**, 2026-11-16 (user): v7 plus the D3 pruning amendment
+Status: **approved v9**, 2026-11-16 (user): v8 plus §4.3.1 (profile names,
+aliases and the diagnostic judge probe) after Codex round J1
+(`docs/reviews/2026-11-16-codex-judges-r1.md`, cited as *J1-n*). v8 was v7 plus the D3 pruning amendment
 (A6, §4.7, §4.8, §4.9, §6, §7), after Codex's two rounds on the pruning rules
 against v7 and D2 (`docs/reviews/2026-11-16-codex-pruning-r1.md`, `-r2.md`,
 cited as *D3-1-n*, *D3-2-n*). v7 (2026-11-15) was v6 plus the §4.3 amendment
@@ -341,6 +343,88 @@ not its proof.
 - every profile: an unlisted non-reserved name is *undefined* (A5); an
   unlisted reserved name is *undefined* for a reproduced build (A4) and
   *unknown* for an approximate one.
+
+### 4.3.1 Profile names, aliases and the judge probe
+
+Added in v9 (2026-11-16, user), after Codex round J1
+(`docs/reviews/2026-11-16-codex-judges-r1.md`, cited as *J1-n*).
+
+**Names** (J1-14). One profile per judge compiler option, named
+`<judge>-<family><major>-<std>`: `codeforces-gcc14-cpp23`,
+`atcoder-gcc15-gnupp23` (charset `[a-z0-9-]`; `c++23` is spelled `cpp23`,
+`gnu++23` `gnupp23`). A further `-<variant>` suffix (`-32bit`, `-msvcrt`, …)
+appears only when two options of one judge would otherwise collide. Full names
+never change meaning; a judge change that alters a profile's facts beyond a
+re-research of the same option gets a new name. Clang and MSVC options are out
+of scope (the checks need GCC).
+
+**Aliases** (J1-13). Optional `alias = "<judge>"`, at most one profile per
+alias, pointing at the judge's newest GCC option (user: "most recent compiler,
+most features"). Aliases move between releases; full names are the way to pin.
+Every run prints `judge: <selector> -> <resolved name>` on stderr, the report
+records it, and release notes list alias moves. Resolution is deterministic:
+a user profile whose file name or alias equals a bundled identifier shadows
+the bundled one, with a warning on every run; two user profiles claiming one
+alias, or a name equal to another profile's alias, is an error. The report
+records selector, resolved name, origin (bundled, or user with path) and the
+profile content digest (J1-15). `--judge list` prints names, aliases,
+descriptions, `updated`, reproduced/approximate and the latest stored
+observation. The shipped `codeforces` and `atcoder` profiles are renamed with
+those aliases, so `--judge codeforces` keeps working.
+
+**Judge probe** (J1-1…J1-12, J1-16). A diagnostic, never a source of facts.
+
+1. `distill --judge-probe <profile>` prints one self-contained C++ source,
+   deterministic per profile digest and distill version, with a probe-format
+   version, the profile name and digest in its output header.
+2. Run in the judge's custom test (Codeforces "Custom Invocation", AtCoder
+   "コードテスト") under the profile's option, it prints one line per checked
+   fact and a trailer with the line count and a checksum, which detects
+   truncation and accidental edits (not fabrication):
+   - presence (`#ifdef`) of every snapshot name, every registry special
+     builtin, and a fixed list of judge-style names the profile treats as
+     undefined (`ONLINE_JUDGE` when not set, `EVAL`, `LOCAL`, `_DEBUG`, …);
+     presence is captured before the probe defines anything;
+   - then, with helpers under reserved generated names
+     (`__distill_probe_…`), the stringized expansion of each object-like
+     snapshot macro in an audited subset: its replacement, transitively per
+     the snapshot, contains no contextual builtin (`__LINE__`, `__COUNTER__`,
+     `__FILE__`, `__BASE_FILE__`, `__INCLUDE_LEVEL__`, `__DATE__`, `__TIME__`,
+     `__TIMESTAMP__`), no `_Pragma` and only balanced parentheses (J1-5…J1-7).
+     Function-like macros and all others are presence-only and reported so;
+   - then `__has_include` for the headers the A1 lists rely on and library
+     version macros, each read after the library header that defines it; these
+     lines are diagnostics and never validate A1 inventories (J1-9).
+3. The expected output is produced in CI by compiling and running the probe
+   with the snapshot compiler under the profile's command, in the job that
+   produces the snapshot, and ships as `<name>-probe-expected.txt`, so both
+   sides stringize with a real GCC.
+4. Native-dependent names (`-march=native`) are compared against the states
+   the native dependency model permits; names it holds invariant are compared
+   normally; samples never narrow the model (J1-8).
+5. The probe has source and output budgets per profile (from the judge's
+   published limits). Above them, `--part N/M` emits parts whose output
+   carries a manifest (part id, fact-set hash, profile digest); the check
+   rejects missing, duplicate or mixed parts (J1-11).
+6. `distill --judge-check <profile> <output-file>…` validates header,
+   trailer and manifest, then reports per fact: match, mismatch (expected vs
+   judge), missing, extra, unsupported, with checked/skipped counts. Failures
+   are classified: format error, wrong compiler or option selected,
+   contextual field, probe failure, fact mismatch, contradicted assumption (a
+   name the profile treats as undefined was found defined). Exit status 0 only
+   when nothing failed. `--record <dir>` writes the observation as
+   `<name>-<YYYY-MM-DD>-<n>.txt` for a PR to `data/judges/observations/`.
+
+**Meaning of an observation** (J1-1…J1-4, J1-10, J1-12). It is evidence,
+scoped to "custom test of that option, that date", and is labelled
+*user-reported match*, never *verified*. It never changes the facts of §4.3:
+equal stringized expansions do not imply equal definitions (`X` = `Y`, `Y` = 1
+versus `X` = 1), presence says nothing about a function-like macro's
+definition or a builtin's activity, pasted output is not authenticated, and a
+custom test need not equal the grading configuration. A passing check claims
+nothing about unlisted names: A4 and A5 remain assumptions. A fact mismatch or
+contradicted assumption on a shipped profile blocks the next release until it
+is investigated; there is no automatic downgrade.
 
 ### 4.4 Inliner (text level)
 
@@ -1039,6 +1123,7 @@ C++20, CMake ≥ 3.24, exactly one pinned LLVM version, no compatibility layer.
 | D3 | Pruning: data model, keep rules, ADL registry, rendering, static and rendering invariants, report; the D3 pruning cases and checker-limit tests of §6, with execution comparisons in the test runner (D3-2-6); corpus measurement of kept bytes per rule |
 | D4 | `--verify-run` in the CLI, the remaining checker tests, caide case port, compatibility matrix |
 | D5 | Fixes from the corpus; release workflow, README, licenses, first tagged release |
+| D6 | §4.3.1: profile names and aliases, judge probe and check; new profiles for Library Checker, yukicoder, Luogu, Kattis, CSES, QOJ and Timus |
 | later | Repair loop; macro pruning; record member pruning; finer name matching; removing more operator families once a rule is proven |
 
 ## 8. Carried over and rejected

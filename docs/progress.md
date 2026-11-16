@@ -32,6 +32,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
 | D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
 | D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
+| D6 judge profiles v2 | design v9 §4.3.1 approved 2026-11-16: D6a names/aliases, D6b probe/check, D6c profiles for Library Checker, yukicoder, Luogu, Kattis, CSES, QOJ, Timus (user excluded Yandex; research notes in the D6 section) |
 
 ## D1 findings (2026-11-15)
 
@@ -362,4 +363,19 @@ SDK linkage and every platform observation remain for the first CI run.
 - The previous session crashed the shared VM after local binary runs plus a
   Codex job that built and tested locally. Builds and tests now run in CI only;
   Codex briefs must not ask for local suites while anything else runs.
+
+## D6 judge profiles v2 (planned 2026-11-16)
+
+- User chose (2026-11-16) all researched judges with published GCC flags except
+  Yandex Contest: Library Checker (GCC 15.2, c++23, `-DONLINE_JUDGE
+  -march=native`, open repo/Docker -> can be reproduced), yukicoder (gcc
+  15.3.0, c++23, `-DONLINE_JUDGE`), Luogu (GCC 15.3.0, Nix flake
+  `luogu-dev/judge-env` -> can be reproduced), Kattis (g++-15 15.2.0,
+  `-std=gnu++23`, static), CSES (g++ 13.3.0), QOJ (GCC 15.2.0, Ubuntu 26.04
+  judgehosts), Timus (MinGW GCC 13.2.0 WinLibs, Windows, `-std=c++23`).
+  Each must be re-researched from official pages when its profile is written.
+- Order: D6a names/aliases (rename shipped profiles, keep `--judge codeforces`),
+  D6b probe/check (diagnostic only, J1), D6c one PR per new profile.
+- Builds/tests run in CI only (VM crash 2026-11-16); Codex jobs do not run
+  local suites.
 
