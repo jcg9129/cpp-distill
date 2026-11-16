@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 overload/template-family aggregation retains f1<int>; all f1/f2 families remain.
+exit=0
+artifact=pruned
+contains=void f1()
+contains.1=void f1<int>()
+contains.2=void f2()
+contains.3=void f2<int>()
+contains.4=f1<double>()
+contains.5=f2<int>()

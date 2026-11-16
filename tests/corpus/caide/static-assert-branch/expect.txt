@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 preserves kept function bodies whole, including the braceless else static_assert.
+exit=0
+artifact=pruned
+contains=T pick()
+contains.1=else static_assert(sizeof(T) == 4
+contains.2=return pick<int>()

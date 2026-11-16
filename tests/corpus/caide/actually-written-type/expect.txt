@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 template-family aggregation retains every E specialization and hence Traits2 (caide removes the unused E<int> specialization).
+exit=0
+artifact=pruned
+contains=UsedTypeAlias
+contains.1=usedTypedef
+contains.2=UsedTemplateAlias
+contains.3=Traits
+contains.4=Traits2
+contains.5=E<typename Traits2<int>::type>
+contains.6=func<int>()
+contains.7=int main

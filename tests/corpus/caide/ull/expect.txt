@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; spelled ull alias remains (§4.7 rule 2).
+exit=0
+artifact=pruned
+contains=using ull = unsigned long long
+contains.1=ull i = 0
+contains.2=int main()

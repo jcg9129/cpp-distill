@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 keeps A whole, including static i and its out-of-line shared definition.
+exit=0
+artifact=pruned
+contains=struct A
+contains.1=int a, b, c, d
+contains.2=bool e, f, g
+contains.3=static long h, i
+contains.4=long A::h = 1, A::i = 2
+contains.5=x.b = x.c = A::h

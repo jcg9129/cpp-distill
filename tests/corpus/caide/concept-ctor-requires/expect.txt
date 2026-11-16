@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains value_range with index_range and the constrained constructor.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=concept index_range
+contains.1=concept value_range
+contains.2=requires index_range<R>
+contains.3=explicit collector
+contains.4=collector<26>

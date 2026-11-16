@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; A forward declaration/definition and member template stay together (§4.7 whole records).
+exit=0
+artifact=pruned
+contains=template<class T> class A
+contains.1=class A {
+contains.2=template<typename U>
+contains.3=a.f(1)

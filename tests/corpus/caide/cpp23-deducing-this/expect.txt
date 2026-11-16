@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains Unused and the Counter record.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=struct Counter
+contains.1=incr(this Counter& self)
+contains.2=struct Unused
+contains.3=c.incr().incr()

@@ -28,7 +28,8 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
 | D3 pruning | D3a–D3d implemented: analysis, rendering, adversarial/checker cases, corpus measurement harness and first-measurement fixes; complete except user corpus measurement, pending SDK CI verification |
-| D4–D5 | see design §7 |
+| D4a runtime CLI and caide port | implemented: repeated `--verify-run`, individual assertions/reviews for all 81 caide cases; real CLI/extraction execution requires SDK CI |
+| D4 remainder–D5 | compatibility matrix, remaining checker/release work; see design §7 |
 
 ## D1 findings (2026-11-15)
 
@@ -260,3 +261,30 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 - Normal/fork local suites and arm64 SDK syntax-only results, memory measurements,
   CI-only extraction limits and proposed design wording are in root
   `D3D-SUMMARY.md`. Approved design v8 is unchanged; no CI run was requested.
+
+
+## D4a runtime CLI and caide assertion port (2026-11-16)
+
+- `--verify-run` accepts repeated files/directories, immediate sorted `*.in`
+  selections, and rejects missing/empty inputs before pipeline work. The shared
+  D3b API compares baseline/raw, original/flat in flat's configuration, and
+  flat/pruned stdout and exit codes. Each sample has a bounded deadline within
+  its phase budget; stderr is ignored for equality. Verbose output names every comparison.
+- Result/report runtime status tracks comparisons, cross-target skips and no
+  request. Runtime rejection falls back to checked raw/flat; raw differences
+  keep work files and publish no source. Core tests cover selection, repeats,
+  stderr/nonzero exits, cross skips, limits, diagnostics and fallbacks. SDK CLI
+  cases cover files/directories/errors, nondeterministic pointer output and the
+  existing test-only pruning fault with fallback to flat.
+- All 81 caide cases have individual token-sequence assertions and per-case
+  classification in `tests/corpus/caide/PORT.md`, reviewed against original
+  numbered inputs and `etalon.cpp`. Copied hashes/adapters remain unchanged.
+  Whole-record/root/name/static-assert/macro over-retention and unsupported
+  input/legacy harness controls are explicit; errors require exit and message.
+- Resolver CI registers each caide case separately with a 120-second timeout;
+  worker/parse failures cannot pass as expected flat results. The measurement
+  pass remains independent. Corpus-format/provenance tests guard all entries.
+- Local normal/fork verification, CLI syntax checks, CI-only limitations and
+  proposed design wording are in root `D4A-SUMMARY.md`. No LLVM is linked here;
+  approved design v8 is unchanged. D4's compatibility matrix and further checker
+  work remain outside D4a.

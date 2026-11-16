@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# unsupported because this is a caide error fixture with undefined NoSuchType; baseline failure is exit 1 (§1.2).
+exit=1
+artifact=
+reason=baseline failed:
+report.1=NoSuchType

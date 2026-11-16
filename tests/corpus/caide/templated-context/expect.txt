@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 keeps Outer records whole (MoreInnerUnused), and template-family aggregation retains Outer<double>.
+exit=0
+artifact=pruned
+contains=struct Outer
+contains.1=using Type = T
+contains.2=struct Inner
+contains.3=struct MoreInner
+contains.4=struct MoreInnerUnused
+contains.5=struct Outer<double>
+contains.6=int another
+contains.7=MoreInner<void>

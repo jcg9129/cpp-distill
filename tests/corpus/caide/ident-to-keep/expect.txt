@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 keeps C whole (method2 too); legacy member roots ns::C::C/method1 are explicitly mapped to indexed owner C.
+exit=0
+artifact=pruned
+keep=C
+contains=void f1()
+contains.1=void f2()
+contains.2=class C
+contains.3=void method1()
+contains.4=void method2()
+absent=void f3()

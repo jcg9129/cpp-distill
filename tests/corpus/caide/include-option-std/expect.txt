@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# unsupported because §4.1 rejects -include, even for a system header (exit 1).
+exit=1
+artifact=
+reason=rejected option: -include

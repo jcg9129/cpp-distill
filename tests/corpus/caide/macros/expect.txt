@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.5 cannot resolve integer comparisons without a target model, so flat retains unused_func and all macro directives (§4.7).
+exit=0
+artifact=flat
+reason=unknown
+contains=#define MACRO_TO_KEEP
+contains.1=#define foo 1
+contains.2=#if 123 < foo
+contains.3=#if __cplusplus > 1
+contains.4=#define bar 1
+contains.5=int unused_func()
+contains.6=#define UNUSED 1
+contains.7=#undef UNUSED

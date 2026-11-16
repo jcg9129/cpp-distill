@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 refuses non-standard system header myvector; flat retains unused declarations and record members.
+exit=0
+artifact=flat
+reason=non-standard system header
+contains=#include <myvector>
+contains.1=void unused()
+contains.2=struct Unused
+contains.3=UnusedTypedef
+contains.4=unused_global_func
+contains.5=struct S2
+contains.6=struct S5
+contains.7=void unused()
+contains.8=operator +

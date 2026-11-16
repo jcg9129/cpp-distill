@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 A6 has no c++2c audit: flat retains geometry/twice and geo, so the alias does not dangle.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=namespace geometry
+contains.1=constexpr T twice
+contains.2=namespace io = lib::io
+contains.3=namespace geo = lib::geometry
+contains.4=io::put(21)

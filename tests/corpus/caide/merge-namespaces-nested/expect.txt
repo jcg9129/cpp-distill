@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; all four called functions retain their nested/plain namespace ownership (§4.7).
+exit=0
+artifact=pruned
+contains=namespace a::b
+contains.1=void used1()
+contains.2=void used2()
+contains.3=void used3()
+contains.4=void used4()
+contains.5=a::b::used4()

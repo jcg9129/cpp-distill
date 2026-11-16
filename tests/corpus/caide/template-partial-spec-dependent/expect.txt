@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; rank partial specialization, rank_v and scalar_t remain through dependent constraints/types (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=struct rank :
+contains.1=struct rank<R>
+contains.2=rank_v =
+contains.3=using scalar_t
+contains.4=requires(rank_v<Range> == 1)
+contains.5=scalar_t<Range> first_scalar
+contains.6=lib::first_scalar(v)

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 refuses non-standard system header mystd.h, preserving both namespace using-directives (including the local one).
+exit=0
+artifact=flat
+reason=non-standard system header
+contains=#include <mystd.h>
+contains.1=using namespace mystd
+contains.2=int main() { using namespace mystd
+contains.3=void f(vector& v)

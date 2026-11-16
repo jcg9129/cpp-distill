@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; §4.7 refuses non-standard system headers, retaining both includes and user declarations in place.
+exit=0
+artifact=flat
+reason=non-standard system header
+contains=#include <myvector.h>
+contains.1=#include <mymap.h>
+contains.2=void f(mystd::vector& v)
+contains.3=mystd::map map
+contains.4=mystd::vector v

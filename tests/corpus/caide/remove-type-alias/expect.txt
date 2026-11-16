@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: TypeAlias and AliasTemplate go; only main remains (§4.7 retention closure).
+exit=0
+artifact=pruned
+contains=int main()
+absent=TypeAlias
+absent.1=AliasTemplate

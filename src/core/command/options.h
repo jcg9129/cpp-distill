@@ -10,7 +10,7 @@ struct CliOptions {
   bool help = false, strict = false, verbose = false, compilerExplicit = true;
   std::optional<std::string> output, judge, report;
   bool noPrune = false, stripComments = false;
-  std::vector<std::string> compile, keep;
+  std::vector<std::string> compile, keep, verifyRun;
 };
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>&);
 std::string distillHelp();

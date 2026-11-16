@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; greeting is already a class-type root (§4.7 rule 1), so unmodified output matches its sample; caide forceRemove is not applied (fault checks live in pipeline/).
+exit=0
+artifact=pruned
+sample.1=sample.in
+runtime=compared 1 samples
+contains=struct Greeting
+contains.1=Greeting greeting
+contains.2="hello from the constructor"
+contains.3="main"

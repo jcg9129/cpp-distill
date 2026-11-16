@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: Subtract goes; Add/Add2/Add3/Concept4 and both AlwaysTrue constraints remain (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=concept Add
+contains.1=concept Add2
+contains.2=concept Add3
+contains.3=concept Concept4
+contains.4=AlwaysTrue
+contains.5=requires Add<T>
+contains.6=requires AlwaysTrue<T>
+contains.7=add3(Add3 auto
+absent=concept Subtract

@@ -11,11 +11,10 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     if (a == "--no-prune") o.noPrune = true;
     else if (a == "--strict") o.strict = true;
     else if (a == "-v") o.verbose = true;
-    else if (a == "--verify-run") return Error{a + ": not supported yet (D4)"};
     else if (a == "--strip-comments") o.stripComments = true;
-    else if (a == "--keep") {
-      if (++i == args.size() || args[i].empty() || args[i].starts_with('-')) return Error{"missing value for --keep"};
-      o.keep.push_back(args[i]);
+    else if (a == "--keep" || a == "--verify-run") {
+      if (++i == args.size() || args[i].empty() || args[i].starts_with('-')) return Error{"missing value for " + a};
+      (a == "--keep" ? o.keep : o.verifyRun).push_back(args[i]);
     }
     else if (a == "-o" || a == "--judge" || a == "--report") {
       if (++i == args.size() || args[i].empty()) return Error{"missing value for " + a};
@@ -38,10 +37,10 @@ std::string distillHelp() {
       "  --no-prune         inline and resolve only\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
       "  --strip-comments   remove comments during checked rendering\n"
+      "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"
       "  --help             show this help\n"
-      "  --verify-run: not supported yet (D4)\n"
       "distill main.cpp means distill g++ main.cpp\n";
 }
 } // namespace distill

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: all comments go under explicit --strip-comments; the URL literal and url/main remain (§4.8).
+exit=0
+artifact=pruned
+strip=yes
+contains=#include <string>
+contains.1=const char* url()
+contains.2="scheme://not-a-comment"
+contains.3=return url()[0]

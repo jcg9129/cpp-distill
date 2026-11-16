@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; inherited A(int) and using A::A stay in whole records (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=struct A
+contains.1=A(int)
+contains.2=struct B : A
+contains.3=using A::A
+contains.4=B(52)

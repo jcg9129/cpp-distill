@@ -97,9 +97,16 @@ void inject(const ProcessSpec& spec, const std::string& fault) {
   }
 }
 #include "checker_cases.h"
+#include "caide_cases.h"
 int run(int argc, char** argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--caide-assertions") return caideAssertionModels();
   const auto gcc = testing::testGcc();
+  if (!gcc && argc == 4 && std::string_view(argv[1]) == "--caide")
+    throw std::runtime_error("caide assertions require GCC");
   if (!gcc) { std::cout << "SKIP pipeline cases: GCC unavailable\n"; return 0; }
+  if (argc == 4 && std::string_view(argv[1]) == "--caide")
+    return caideCase(std::filesystem::absolute(pathFromUtf8(argv[3])),
+                     std::filesystem::absolute(pathFromUtf8(argv[2])),*gcc);
   const bool models = argc == 2 && std::string_view(argv[1]) == "--checker-models";
   const bool d3c = argc == 4 && std::string_view(argv[3]) == "--d3c";
   const bool d3d = argc == 4 && std::string_view(argv[3]) == "--d3d";
@@ -149,8 +156,8 @@ int run(int argc, char** argv) {
       if (value("prune") == "yes" && !cli && !worker && !models) {
         std::cout << "SKIP " << name << ": requires SDK pruning worker\n"; continue;
       }
-      if (cli && value("api") == "yes") {
-        std::cout << "SKIP " << name << ": internal sample comparison API (D4 CLI pending)\n"; continue;
+      if (cli && !value("checker").empty()) {
+        std::cout << "SKIP " << name << ": requires direct analysis mutation\n"; continue;
       }
       auto command = words(uncomment(read(cwd / "cmd.txt")));
       check(!command.empty(), "empty cmd.txt"); command[0] = pathToUtf8(*gcc);
@@ -194,6 +201,9 @@ int run(int argc, char** argv) {
           py << "#!/usr/bin/env python3\n# SPDX-License-Identifier: GPL-3.0-or-later\nimport os, pathlib, sys\n";
           py << "fault = " << std::quoted(value("fault")) << "\n";
           py << "for arg in sys.argv[1:]:\n p = pathlib.Path(arg)\n if p.name == 'raw.cpp' and fault == 'missed-inline':\n  p.write_text('#line 1 \"main.cpp\"\\n#include \"only.h\"\\nint main(){return only;}\\n')\n if p.name == 'flat.cpp' and fault == 'resolver':\n  p.write_text(p.read_text().replace('return 0', 'return 1', 1))\n if p.name == 'pruned.cpp' and fault == 'prune-build':\n  p.write_text(p.read_text().replace('int chosen(){return 7;}', '', 1))\n";
+          // The same test-only compiler boundary hook exercises CLI runtime
+          // fallback; no fault controls are exposed by the product.
+          py << "for arg in sys.argv[1:]:\n p = pathlib.Path(arg)\n if p.name == 'pruned.cpp' and fault == 'prune-run':\n  p.write_text(p.read_text().replace('int chosen(int){return 7;}', '', 1))\n";
           py << "os.execv(" << std::quoted(pathToUtf8(*gcc)) << ", [" << std::quoted(pathToUtf8(*gcc)) << "] + sys.argv[1:])\n";
           write(shim, py.str()); std::filesystem::permissions(shim, std::filesystem::perms::owner_all);
           command[0] = pathToUtf8(shim);
@@ -205,6 +215,11 @@ int run(int argc, char** argv) {
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? "fixture.toml" : value("profile")); }
+        const bool samples = value("prune") == "yes" || value("samples") == "yes";
+        if (samples) {
+          write(cwd / "sample.in",value("sample"));
+          s.argv.insert(s.argv.end(),{"--verify-run","sample.in"});
+        }
         s.argv.insert(s.argv.end(), command.begin(), command.end());
         s.timeout = std::chrono::seconds(30);
         const auto r = take(runProcess(s)); caseDiagnostics += r.stderrText;
@@ -219,7 +234,7 @@ int run(int argc, char** argv) {
         }
         if (code != 1) bytes = read(cwd / "submit.cpp");
         else check(!std::filesystem::exists(cwd / "submit.cpp"), "failed CLI wrote output");
-        const auto line = "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime not requested";
+        const auto line = "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime " + (samples ? "compared 1 samples" : "not requested");
         if (code != 1) {
           std::istringstream lines(diagnostic); std::string actual; bool found = false;
           while (std::getline(lines,actual)) {
@@ -229,9 +244,7 @@ int run(int argc, char** argv) {
           check(found, "wrong result line: " + diagnostic);
         }
         if (code != 1 && value("prune") == "yes") {
-          // The public CLI still reports runtime not requested. The SDK runner
-          // independently compares its exact published bytes against a second
-          // real-CLI flat artifact under the same selected local configuration.
+          // Independently compare exact published bytes with checked flat bytes.
           auto referenceSpec = s;
           referenceSpec.argv.insert(referenceSpec.argv.begin()+1,"--no-prune");
           for (auto& arg : referenceSpec.argv) if (arg == "submit.cpp") arg = "flat-reference.cpp";

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# keeps more because §4.7 rule 1 roots non-inert static/thread/template variables and the enclosing unusedFunction; StaticOwner stays whole.
+exit=0
+artifact=pruned
+contains=dynamicGlobal
+contains.1=dynamicThread
+contains.2=StaticOwner::constantMember
+contains.3=finalizers
+contains.4=threadFinalizer
+contains.5=startup
+contains.6=shutdown
+contains.7=retainedConstant
+contains.8=retainedFunction
+contains.9=unusedVariableTemplate
+contains.10=UnusedTemplate
+contains.11=UsedTemplate
+contains.12=int unusedFunction()
+contains.13=static int local = initialize()
+absent=int constantGlobal
+absent.1=int zeroGlobal

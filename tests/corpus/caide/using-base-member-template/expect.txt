@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; §4.7 lacks a c++2c A6 audit, so flat retains storage_base members and every dependent using-declaration.
+exit=0
+artifact=flat
+reason=unsupported ADL dialect
+baseline-feature=-std=c++2c
+contains=struct storage_base
+contains.1=void reserve(std::size_t n)
+contains.2=class bag
+contains.3=using base::reserve
+contains.4=using base::fill
+contains.5=lib::bag<int>

@@ -2,6 +2,7 @@
 """Real-binary CLI surface checks; run only in the SDK job."""
 from pathlib import Path
 import os
+import shutil
 from contextlib import contextmanager
 import subprocess
 import sys
@@ -46,7 +47,8 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--no-prune', '--unknown'], 1, 'unknown distill option'),
         (['--keep', 'unknown_function', 'g++', '-std=gnu++20', 'main.cpp'], 1, '--keep unknown_function: no indexed declaration'),
         (['--keep'], 1, 'missing value for --keep'),
-        (['--no-prune', '--verify-run', 'sample.in', 'main.cpp'], 1, 'not supported yet'),
+        (['--verify-run'], 1, 'missing value for --verify-run'),
+        (['--verify-run', 'missing.in', 'main.cpp'], 1, 'not a sample file or directory'),
         (['--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--no-prune', 'g++', '-c', 'main.cpp'], 1, 'rejected option'),
         (['--no-prune', '-o', 'main.cpp', 'main.cpp'], 1, 'must differ'),
@@ -73,6 +75,59 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         check(output.read_bytes() == saved, output.read_bytes())
         output.unlink()
         check(set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir()))
+    with case('verify-run file, sorted directory, repetition, verbose report'):
+        saved_source = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('#include <cstdio>\nint main(){int x; if(std::scanf("%d", &x)!=1) return 2; std::printf("%d\\n",x*2); return x<0?7:0;}\n')
+        (root / 'single.txt').write_text('3')
+        samples = root / 'samples'; samples.mkdir()
+        (samples / 'z.in').write_text('-2')
+        (samples / 'a.in').write_text('5')
+        (samples / 'ignored.txt').write_text('not input')
+        (samples / 'nested').mkdir()
+        (samples / 'nested' / 'ignored.in').write_text('not input')
+        for selection, count in [(['--verify-run', 'single.txt'], 1),
+                                 (['--verify-run', 'samples'], 2),
+                                 (['--verify-run', 'single.txt', '--verify-run', 'samples', '--verify-run', 'single.txt'], 4)]:
+            result = subprocess.run([binary, '-v', '--report', 'report.txt', *selection,
+                                     'g++', '-std=gnu++20', 'main.cpp'], cwd=root,
+                                    capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0, result.stderr)
+            check(f'runtime compared {count} samples' in result.stderr, result.stderr)
+            check(f'runtime compared {count} samples' in (root / 'report.txt').read_text(), result.stderr)
+            check(result.stderr.count('raw checks: sample ') == count, result.stderr)
+            if 'samples' in selection:
+                a, z = str(Path('samples') / 'a.in'), str(Path('samples') / 'z.in')
+                check(result.stderr.index('sample ' + a) < result.stderr.index('sample ' + z), result.stderr)
+        empty = root / 'empty'; empty.mkdir()
+        for name in ['empty', 'samples/nested/missing.in']:
+            result = subprocess.run([binary, '--verify-run', name, '-o', 'submit.cpp', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 1 and result.stdout == '', result.stderr)
+            check('--verify-run' in result.stderr, result.stderr)
+            check(not (root / 'submit.cpp').exists(), result.stderr)
+        (root / 'main.cpp').write_bytes(saved_source)
+        (root / 'report.txt').unlink(); (root / 'single.txt').unlink()
+        shutil.rmtree(samples); empty.rmdir()
+    with case('verify-run rejects nondeterministic raw and keeps work'):
+        saved_source = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('#include <cstdio>\nint main(){int x=0; std::printf("%p\\n",static_cast<void*>(&x));}\n')
+        (root / 'sample.in').write_bytes(b'')
+        result = subprocess.run([binary, '--verify-run', 'sample.in', '--report', 'report.txt',
+                                 '-o', 'submit.cpp', 'g++', '-std=gnu++20', 'main.cpp'],
+                                cwd=root, capture_output=True, text=True, timeout=120)
+        check(result.returncode == 1 and result.stdout == '', result.stderr)
+        check('raw failed: differs on sample sample.in (distill bug or nondeterministic program)' in result.stderr, result.stderr)
+        check(not (root / 'submit.cpp').exists(), result.stderr)
+        marker = 'work files kept at '
+        if marker in result.stderr:
+            kept = Path(result.stderr.split(marker, 1)[1].splitlines()[0])
+            check((kept / 'raw.cpp').exists(), result.stderr)
+            shutil.rmtree(kept)
+        else:
+            check(False, result.stderr)
+        check('differs on sample sample.in' in (root / 'report.txt').read_text(), result.stderr)
+        (root / 'main.cpp').write_bytes(saved_source)
+        (root / 'sample.in').unlink(); (root / 'report.txt').unlink()
     # Do not use text=True here: universal newline conversion would hide a
     # Windows text-mode write in stdout, the published artifact or the report.
     source = (root / 'main.cpp').read_bytes()

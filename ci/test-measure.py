@@ -36,6 +36,31 @@ class MeasurementTests(unittest.TestCase):
         self.assertTrue(all(row[1] in {"pruned", "flat-with-reason", "error-with-reason", "raw-with-reason"}
                             and row[2].strip(" |") for row in rows))
 
+    def test_caide_port_has_individual_assertions_and_review_entries(self):
+        root = Path("tests/corpus/caide")
+        names = {source.parent.name for source in measure.solutions(root)}
+        reviews = [line for line in (root / "PORT.md").read_text().splitlines() if line.startswith('- `')]
+        self.assertEqual(len(reviews), 81)
+        self.assertEqual({line.split('`')[1] for line in reviews}, names)
+        for line in reviews:
+            self.assertTrue(any(kind in line for kind in ('same removal:', 'keeps more because', 'unsupported because')), line)
+        for name in names:
+            lines = [line for line in (root / name / "expect.txt").read_text().splitlines()
+                     if line and not line.startswith('#')]
+            fields = dict(line.split('=', 1) for line in lines)
+            self.assertEqual(len(fields), len(lines), name)
+            self.assertIn(fields['exit'], {'0', '1'}, name)
+            if fields['exit'] == '1':
+                self.assertTrue(fields['reason'], name)
+            else:
+                self.assertIn(fields['artifact'], {'raw', 'flat', 'pruned'}, name)
+                self.assertTrue(fields['contains'], name)
+            for key, value in fields.items():
+                self.assertTrue(key in {'exit', 'artifact', 'reason', 'prune', 'keep', 'strip', 'runtime'} or
+                                key.split('.')[0] in {'contains', 'absent', 'sample', 'report', 'baseline-feature'}, (name, key))
+                if key.startswith('sample.'):
+                    self.assertTrue((root / name / value).is_file(), (name, value))
+
     def test_adversarial_selection_avoids_faults_and_refusals(self):
         sources = list(measure.solutions(Path("tests/cases/prune")))
         sources += list(measure.solutions(Path("tests/cases/pipeline")))

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: no eligible removals; spelled aliases X/Y and template f/C remain (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=using X = int
+contains.1=using Y = int
+contains.2=void f()
+contains.3=class C
+contains.4=f<X>()
+contains.5=C<Y>

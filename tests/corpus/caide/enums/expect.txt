@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: Int1/UnusedEnum/UnusedEnumClass go; complete used enums, Int2 and f remain (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=using Int2
+contains.1=constexpr int f
+contains.2=enum UsedEnum
+contains.3=enum class UsedEnumClass
+contains.4=h = f()
+contains.5=UsedEnumClass::j
+absent=Int1
+absent.1=UnusedEnum
+absent.2=UnusedEnumClass

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# same removal: none; spelled and instantiated template arguments retain a/b/c and A/B/C (§4.7 rules 2/4).
+exit=0
+artifact=pruned
+contains=constexpr int a
+contains.1=constexpr int b
+contains.2=constexpr int c
+contains.3=void f<b+b>()
+contains.4=using A = int
+contains.5=struct B
+contains.6=struct C<c+c>
+contains.7=f<6>()
+contains.8=C<8>

@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# unsupported because the caide syntax-only fixture cannot link ns3::used3(); §1.2 requires an executable baseline (exit 1).
+exit=1
+artifact=
+reason=baseline failed:
+report.1=undefined reference
+report.2=ns3::used3()

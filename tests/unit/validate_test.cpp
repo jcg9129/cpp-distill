@@ -49,6 +49,8 @@ TEST(validate_cli_options) {
   auto defaults = parseDistillOptions({"--keep","first","--keep","second","--strip-comments","main.cpp"});
   CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(defaults.value().stripComments);
   CHECK_EQ(defaults.value().keep,(std::vector<std::string>{"first","second"}));
+  auto samples = parseDistillOptions({"--verify-run","one.in","--verify-run","dir","main.cpp"});
+  CHECK(samples.ok()); CHECK_EQ(samples.value().verifyRun,(std::vector<std::string>{"one.in","dir"}));
   CHECK(parseDistillOptions({"main.cpp"}).ok());
   for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}})
     CHECK(!parseDistillOptions(args).ok());
