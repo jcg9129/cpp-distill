@@ -193,7 +193,9 @@ main.cpp + headers ─► 4 inline (text) ─► raw.cpp ─► 5 resolve #if �
 ```
 
 Every step runs under limits: include depth (200), total inlined size
-(64 MiB), macro-expansion steps, wall clock per step and per run. Clang
+(64 MiB), macro-expansion steps, wall clock per step and per run.
+Captured process output is capped at 4 MiB per stream, except the `-E`
+output of preprocess checks, capped at 64 MiB (D3d). Clang
 parses, compilers and sample programs run in child processes, in a process
 group (POSIX) or Job Object (Windows) killed as a whole on timeout, with pipes
 drained concurrently, output capped and children reaped. A step that hits a
@@ -808,6 +810,26 @@ Clarifications from D3a (implementation, reviewed):
   parsing defaults explicitly (`-fgnuc-version=4.2.1`, exceptions, math
   errno, deprecated macros) and registers builtins before parsing.
 
+Clarifications from D3c and D3d (implementation and first measurement, reviewed):
+
+- **Registry editions:** the A6 registry audits C++11, C++14, C++17, C++20 and
+  C++23 (N3337, N4140, N4659, N4861, N4950), GNU spellings normalized to their
+  edition; other editions (e.g. `c++2c`) disable pruning until audited.
+- **Attribute roots:** an interpreted attribute (`constructor`, `destructor`,
+  `used`, `section`, `weak`, `visibility`, asm labels) roots its declaration's
+  family; `alias` also roots its resolved user target. `asm` operands and
+  symbols that resolve to user families are roots; uninterpretable forms or
+  unresolved symbols disable pruning.
+- **Parameters and expression-local declarations** (requires-expression and
+  lambda parameters, init-captures) belong to their lexically enclosing family
+  and add no indexed names.
+- **Checker tests** probe each named check independently; a case may be caught
+  by more than one. A `none` case passes both invariants, the build and the
+  requested sample runs, and documents a limit.
+- **Measurement** attributes unique family bytes to the immediate retaining
+  rule, structural bytes apart, and records attempted candidate sizes even
+  when the written artifact fell back.
+
 ### 4.8 Rendering
 
 - Edit ranges are byte ranges in the immutable `flat.cpp` buffer, covering
@@ -995,7 +1017,7 @@ C++20, CMake ≥ 3.24, exactly one pinned LLVM version, no compatibility layer.
   build fails the test.
 - **Checker tests:** a testing hook forces a bad removal; each case states
   which check must catch it, or that none can (a documented limit).
-- **Port of caide's 79 cases**, re-reviewed one by one.
+- **Port of caide's 81 cases** (the user's fork; measured since D3c), re-reviewed one by one.
 - **Compatibility matrix:** bundled Clang × GCC versions on Linux, macOS
   (Homebrew GCC) and MinGW, parsing `<bits/stdc++.h>` in each dialect.
 - **Corpus:** the user's library and solved problems, from D3 on.
