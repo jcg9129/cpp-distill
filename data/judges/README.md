@@ -14,7 +14,7 @@ track the newest GCC option; future alias moves belong in release notes. Require
 `name`, `description`, `compiler = { family = "gcc", version = "major.minor[.patch]" }`,
 `triple`, `std`, `flags`, `libraries`, `check`, `updated` and nonempty HTTP(S)
 `sources`. Optional fields are `link`, `inert`, `build`, `snapshot_compiler`,
-`predefined`, `alias`.
+`predefined`, `alias`, `probe_source_bytes`, `probe_output_bytes`.
 `defines`, `library` and `allowed` are obsolete and rejected.
 
 Selectors without a separator or `.toml` suffix resolve a full name or alias
@@ -251,3 +251,103 @@ record its actual argv and omissions, probe that exact configuration (ordinary
 and special macros), and use consistent build options. Matching facts used by a
 resolution is weaker than target verification; local native options never confer
 target equivalence. Resolver/validation orchestration remains the next D2 work.
+
+## Diagnostic judge probes (D6b)
+
+The optional strict-schema TOML integer keys `probe_source_bytes` and
+`probe_output_bytes` each accept 1024 through 16777216 inclusive. Both default
+to **60000 bytes**. Codeforces and AtCoder currently use this conservative
+fallback: no published source/output limit has been established here, and these
+values are not claims about either judge's limit. An override must cite the
+judge's published limit in a comment. Probe output has a conservative static
+bound: stringized values are limited to 256 bytes (larger expansions produce an
+explicit probe failure), hex encoded on output. The bound includes protocol
+lines and every fact, including unsupported records, with allowance for Windows
+CRLF output. Both budgets apply to each
+part; increase M in `--part N/M` until every part fits. There are no empty parts.
+Every part is required by the checker. Source generation is deterministic for
+the profile digest and distill build version; use that same version to check.
+
+`--judge-probe <selector>` emits presence captures before any helper macro or
+header include. It checks all snapshot/registry names and fixed judge-style
+names (`ONLINE_JUDGE`, `EVAL`, `LOCAL`, `_DEBUG`, `DEBUG`, `ATCODER`,
+`CODEFORCES`, `NDEBUG`, plus `__clang__` for compiler diagnostics). It next
+stringizes audited object-like definitions with guarded `__distill_probe_*`
+helpers. Transitive contextual builtins, `_Pragma`, unbalanced parentheses,
+recursive expansions and token construction (`#`/`##`) are excluded;
+function-like macros are presence-only. The latter exclusions conservatively
+narrow the supported subset, never broaden it. Finally it diagnoses all headers
+in the embedded standard-header inventory, the representative PBDS headers
+`ext/pb_ds/assoc_container.hpp` and `ext/pb_ds/tree_policy.hpp`, and explicit
+library version headers:
+libstdc++ `bits/c++config.h`, glibc `features.h`, MinGW `_mingw.h`, and macOS
+`Availability.h`. Version keys include the header stage. These diagnostics do
+not validate header contents or A1 lists. Builtin activity is untested.
+
+Native joined `unknown` permits either presence state, `defined-unknown`
+requires presence, and invariant known/undefined bindings compare normally.
+Expansion comparisons propagate dependencies transitively through the snapshot;
+a variable joined native state permits a variable expansion without narrowing
+the model. No native name is simply ignored because it appears in the model.
+
+The output protocol (format **1**) is LF-delimited ASCII; CRLF transport is
+accepted and normalized for the checksum. It has:
+
+- `DPROBE|1|<profile>|<digest>|<hex distill version>`
+- `PART|<N>|<M>|<part fact-set SHA-256>|<profile digest>|<full fact-set SHA-256>`
+- `<category>|<key>|<hex UTF-8 value>` for each fact. Categories are `presence`,
+  `expansion`, `builtin`, `header`, `version`, `assumption`. Unsupported values
+  begin `unsupported:`; runtime probe errors begin `!probe-failure:`.
+- `END|<number of preceding lines>|<decimal FNV-1a-32 checksum>`
+
+The checksum covers every preceding line including LF, starting at 2166136261,
+XORing each byte then multiplying by 16777619 modulo 2^32. Fact-set hashes cover
+ordered `category|key|unsupported-reason` records, each followed by LF (an empty
+reason has an empty last field). Complete manifests may use a different partition
+from the expected file, but may not mix partition totals or distill/profile
+versions. Missing, duplicate, misplaced or mixed parts are rejected. These
+checks detect accidents, not fabrication or mixing samples from machines whose
+identity is unobservable. The checker reports each selected fact and classifies
+failures as format error, wrong compiler or option selected, contextual field,
+probe failure, fact mismatch, or contradicted assumption. Unsupported comparable
+facts fail; intentionally presence-only/coverage records are skipped and counted.
+
+`<name>-probe-expected.txt` is an optional sibling of the TOML/snapshot,
+embedded by `cmake/EmbedProfiles.cmake`. It is **excluded from the v1 content
+digest**: its own output carries that digest, so including it would be circular.
+Observations are also excluded. The digest rule above remains unchanged, and
+expected headers still bind to the TOML and snapshot bytes exactly. Missing
+expectations are explicit failures: `no expected output shipped for <profile>;
+run profiles.yml`. Expectations will be committed from a reviewed CI artifact;
+none is fabricated from replacement lists. Fixture expectations only test the
+protocol.
+
+Immediately after each snapshot step, `profiles.yml` builds the LLVM-free
+`DISTILL_PROFILE_ONLY` diagnostic CLI and runs `ci/profiles/probe.py` with that
+job's snapshot compiler. This loads the freshly generated snapshot by explicit
+TOML path, finds a partition satisfying both budgets for every part, compiles
+and runs all probes, checks the complete result, and uploads the expected file
+alongside the snapshot. It uses the snapshot's exact `-x c++ -std=<std> <flags>`
+argv, retaining ordered macro operations and native options. Linker-only
+`link` options are excluded as in snapshot capture: no judge-installed external
+library is needed by this diagnostic. Both the AtCoder recipe build and the
+Codeforces exact MinGW package job follow this path. Do not substitute a local
+compiler's stringization for this output.
+
+`--judge-check <selector> <output-file>... [--record <dir>]` never changes
+`initialState()` or profile facts. Records are named
+`<name>-<YYYY-MM-DD>-<n>.txt`, starting with the next free positive number, and
+include selector, resolved profile, origin/path, digest, UTC date, scope,
+checked/skipped counts, result and original output. The scope is "custom test of
+that option, that date" and a pass is labelled **user-reported match**. A1/A4/A5
+remain assumptions. Any shipped-profile fact mismatch or contradicted assumption
+blocks the next release until investigated, with no automatic downgrade.
+
+Stored observations in `data/judges/observations/*.txt` are **embedded**, not
+read from a runtime checkout. `--judge list` shows the latest date and numeric
+sequence whose record names this exact profile and digest, with its status;
+otherwise it shows `-`. This works in relocated release binaries. Submit records
+for review; they are evidence, not authenticated execution. Updating observations
+or expectations does not change a profile digest. Rebuild to display newly
+stored observations. User profiles use the same embedded observations only when
+their name and digest match.

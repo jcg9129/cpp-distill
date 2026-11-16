@@ -466,7 +466,7 @@ TEST(profile_list_columns_and_order) {
   const auto list = renderProfileList(catalog.value());
   CHECK(list.starts_with("atcoder-gcc15-gnupp23\tatcoder\tbundled\treproduced\t2026-11-15\t\"AtCoder"));
   CHECK(list.find("codeforces-gcc14-cpp23\tcodeforces\tbundled\tapproximate\t2026-11-15\t\"Codeforces") != std::string::npos);
-  CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\n") != std::string::npos);
+  CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\t-\n") != std::string::npos);
   CHECK_EQ(std::count(list.begin(), list.end(), '\n'), 3);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());
@@ -506,4 +506,37 @@ TEST(profile_report_selection_origin_path_and_digest) {
   CHECK(report.find("judge selector: " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml")) != std::string::npos);
   CHECK(report.find("judge resolved name: mingw-gcc14-cpp23\njudge origin: user " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml")) != std::string::npos);
   CHECK(report.find("judge digest: sha256:" + user.value().provenance.contentDigest) != std::string::npos);
+}
+TEST(profile_probe_budgets_strict_schema_and_expected_excluded_from_digest) {
+  const auto base = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
+  auto good = synthetic(base + "\nprobe_source_bytes=70000\nprobe_output_bytes=80000\n");
+  CHECK(good.ok());
+  if (good.ok()) { CHECK_EQ(good.value().probeSourceBytes,70000u); CHECK_EQ(good.value().probeOutputBytes,80000u); }
+  for (const auto& value : {"'60000'", "true", "0", "-1", "1023", "16777217", "[]"})
+    badProfile(base + "\nprobe_source_bytes=" + value + "\n", "probe_source_bytes");
+  badProfile(base + "\nprobe_output_bytes=false\n", "probe_output_bytes");
+  auto load = [&](std::string expected) {
+    return parseProfile(base,"mingw-gcc14-cpp23.toml", [&](const auto& path) -> Result<std::string> {
+      if (path.filename() == "mingw-predefined.txt") return test::read(profileFixture("mingw-predefined.txt"));
+      return expected;
+    });
+  };
+  auto a=load("expected A"), b=load("expected B"); CHECK(a.ok()); CHECK(b.ok());
+  CHECK_EQ(a.value().provenance.contentDigest,b.value().provenance.contentDigest);
+  CHECK_EQ(a.value().probeExpected.value(),"expected A");
+}
+TEST(profile_list_embeds_observations_for_exact_digest) {
+  test::TempDirectory temp;
+  ProfileLookup lookup; lookup.userDirectory=temp.path;
+  const auto text=allowProfile();
+  auto parsed=parseProfile(text,"mingw-gcc14-cpp23.toml"); CHECK(parsed.ok());
+  ProfileFiles files{{"mingw-gcc14-cpp23.toml",text}};
+  auto record=[&](std::string digest, std::string status) {
+    return "distill-observation: 1\nprofile: mingw-gcc14-cpp23\ndigest: "+digest+"\nstatus: "+status+"\n";
+  };
+  files["observations/mingw-gcc14-cpp23-2026-11-16-2.txt"]=record(parsed.value().provenance.contentDigest,"user-reported match");
+  files["observations/mingw-gcc14-cpp23-2026-11-16-10.txt"]=record(parsed.value().provenance.contentDigest,"user-reported failure");
+  files["observations/mingw-gcc14-cpp23-2026-11-17-1.txt"]=record("other digest","user-reported match");
+  auto catalog=listProfiles(lookup,files); CHECK(catalog.ok());
+  CHECK(renderProfileList(catalog.value()).find("-2026-11-16-10.txt: user-reported failure")!=std::string::npos);
 }

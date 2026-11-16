@@ -185,3 +185,33 @@ This is a from-scratch successor to
 [caide-cpp-inliner by slycelote](https://github.com/slycelote/caide-cpp-inliner).
 Its design lessons and the user's GPL caide fork's test corpus informed this
 implementation. Thanks to the LLVM/Clang and GCC contributors.
+
+`distill --judge-probe <selector> [--part N/M]` prints a diagnostic C++ program
+for a judge's custom invocation/code test. Select the profile's exact compiler
+option there and save its stdout. If the source or bounded output exceeds the
+profile budgets, increase M and submit every part `1/M` through `M/M` separately.
+
+```sh
+distill --judge-probe codeforces --part 1/8 > probe.cpp
+# Run all eight parts on the judge, saving their stdout, then:
+distill --judge-check codeforces part*.txt --record observations
+```
+
+`--judge-check <selector> <output-file>...` validates the complete part manifest,
+headers, counts and checksums, then reports matches, mismatches, missing, extra
+and unsupported facts with checked/skipped counts. It exits 0 only if nothing
+failed. Expected output ships beside the snapshot; until CI artifacts are added,
+the command says `no expected output shipped for <profile>; run profiles.yml`.
+`--record <dir>` saves dated, numbered evidence for a PR to
+`data/judges/observations/`. `--judge list` shows the latest stored observation
+for each profile digest, or `-`.
+
+This is **diagnostic only**. A passing result is a **user-reported match** scoped
+to that custom test and date. Pasted output is unauthenticated; equal expanded
+strings do not establish equal macro definitions, and custom tests need not use
+the grading configuration. Presence does not check function-like definitions or
+builtin activity. Header/version diagnostics do not validate A1 inventories;
+unlisted names remain untested and A4/A5 remain assumptions. Observations never
+change distill's facts or narrow its native dependency model. A fact mismatch or
+contradicted assumption on a shipped profile blocks the next release until
+investigated; it does not automatically downgrade the profile.

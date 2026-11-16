@@ -28,6 +28,9 @@ struct SnapshotMetadata {
 struct Profile {
   std::string name, description, triple, compilerVersion;
   std::optional<std::string> alias;
+  std::size_t probeSourceBytes = 60000, probeOutputBytes = 60000;
+  std::optional<std::string> probeExpected;
+  std::string latestObservation = "-";
   std::vector<std::string> warnings;
   CompilerIdentity compiler;
   bool patchSpecified = false;

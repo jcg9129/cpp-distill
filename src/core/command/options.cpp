@@ -18,12 +18,29 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
       if (++i == args.size() || args[i].empty() || args[i].starts_with('-')) return Error{"missing value for " + a};
       (a == "--keep" ? o.keep : o.verifyRun).push_back(args[i]);
     }
+    else if (a == "--judge-probe" || a == "--judge-check" || a == "--part" || a == "--record") {
+      if (++i == args.size() || args[i].empty() || args[i].starts_with('-')) return Error{"missing value for " + a};
+      auto* target = a == "--judge-probe" ? &o.judgeProbe : a == "--judge-check" ? &o.judgeCheck : a == "--part" ? &o.part : &o.record;
+      if (*target) return Error{"duplicate option: " + a};
+      *target = args[i];
+    }
     else if (a == "-o" || a == "--judge" || a == "--report") {
       if (++i == args.size() || args[i].empty()) return Error{"missing value for " + a};
       (a == "-o" ? o.output : a == "--judge" ? o.judge : o.report) = args[i];
     } else if (a.starts_with('-')) return Error{"unknown distill option: " + a + " (compiler options must follow the compiler name)"};
+    else if (o.judgeCheck) o.judgeOutputs.push_back(a);
     else { o.compile.assign(args.begin() + i, args.end()); break; }
   }
+  if (o.judgeProbe || o.judgeCheck) {
+    if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
+        o.noPrune || o.stripComments || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+      return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
+    if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
+    if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
+    if (o.judgeCheck && o.judgeOutputs.empty()) return Error{"--judge-check requires output files"};
+    return o;
+  }
+  if (o.part || o.record) return Error{"--part/--record require a judge diagnostic command"};
   if (o.compile.empty() && o.judge == "list") return o;
   if (o.compile.empty()) return Error{"missing compile command or source file"};
   const auto ext = pathToUtf8(pathFromUtf8(o.compile.front()).extension());
@@ -36,6 +53,8 @@ std::string distillHelp() {
   return "Usage: distill [distill options] [<compile command>]\n"
       "  -o <file>          output (default stdout)\n"
       "  --judge <selector>  profile name, alias or TOML path; list shows profiles\n"
+      "  --judge-probe <selector> [--part N/M] print diagnostic source\n"
+      "  --judge-check <selector> <output-file>... [--record <dir>] compare diagnostics\n"
       "  --report <file>    validation, conditional and pruning report\n"
       "  --no-prune         inline and resolve only\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"

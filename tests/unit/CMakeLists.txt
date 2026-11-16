@@ -4,7 +4,7 @@ target_link_libraries(distill_test_helper PRIVATE distill_core)
 if(WIN32)
   target_compile_definitions(distill_test_helper PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
-add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp resolve_test.cpp validate_test.cpp prune_test.cpp render_test.cpp pipeline_test.cpp)
+add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp judge_probe_test.cpp resolve_test.cpp validate_test.cpp prune_test.cpp render_test.cpp pipeline_test.cpp)
 target_link_libraries(distill_unit_tests PRIVATE distill_core distill_test_evaluate)
 target_compile_definitions(distill_unit_tests PRIVATE
   DISTILL_EXPECTED_VERSION="${DISTILL_VERSION}"
@@ -19,4 +19,12 @@ if(TARGET distill_clang)
   set_tests_properties(resolver_clang PROPERTIES TIMEOUT 120 ENVIRONMENT "DISTILL_TEST_EVALUATOR=clang")
   add_test(NAME resolver_differential COMMAND distill_unit_tests --filter resolve_)
   set_tests_properties(resolver_differential PROPERTIES TIMEOUT 120 ENVIRONMENT "DISTILL_TEST_EVALUATOR=differential")
+endif()
+
+if(TARGET distill)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME judge_diagnostic_cli COMMAND "${Python3_EXECUTABLE}"
+    "${PROJECT_SOURCE_DIR}/ci/profiles/test_probe_cli.py" "$<TARGET_FILE:distill>"
+    "${PROJECT_SOURCE_DIR}/tests/unit/fixtures/profile")
+  set_tests_properties(judge_diagnostic_cli PROPERTIES TIMEOUT 60)
 endif()

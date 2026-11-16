@@ -8,6 +8,7 @@
 #include <string_view>
 
 namespace distill {
+std::vector<std::string> standardHeaders();
 bool isStandardHeader(std::string_view headerName);
 bool isStandardMacroName(std::string_view name);
 bool isReserved(std::string_view name);

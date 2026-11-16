@@ -14,6 +14,9 @@ extern const std::size_t macrosCount;
 const std::string_view* extensionData(std::size_t index);
 std::size_t extensionCount(std::size_t index);
 }
+std::vector<std::string> standardHeaders() {
+  return {embedded::headers, embedded::headers + embedded::headersCount};
+}
 bool isStandardHeader(std::string_view name) {
   if (name.starts_with('/')) return false;
 #ifdef _WIN32

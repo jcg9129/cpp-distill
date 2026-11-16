@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Embed full profile names (e.g. codeforces-gcc14-cpp23.toml) and their
 # snapshots; aliases are TOML metadata. Adding a snapshot reconfigures CMake.
-file(GLOB judge_inputs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/*.toml" "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/builtins/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/native/*.txt")
+file(GLOB judge_inputs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/*.toml" "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/observations/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/builtins/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/native/*.txt")
 set(profile_source "// SPDX-License-Identifier: GPL-3.0-or-later\n#include \"core/profile/profile.h\"\nnamespace distill {\nconst ProfileFiles& embeddedProfileFiles() {\nstatic const ProfileFiles files = {\n")
 foreach(input IN LISTS judge_inputs)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
   get_filename_component(name "${input}" NAME)
   if(NOT name MATCHES "^[A-Za-z0-9_.-]+\\.(toml|txt)$")
     message(FATAL_ERROR "Invalid embedded profile filename: ${name}")
+  endif()
+  if(input MATCHES "/data/judges/observations/")
+    set(name "observations/${name}")
   endif()
   if(input MATCHES "/data/(builtins|native)/")
     set(name "${CMAKE_MATCH_1}/${name}")
