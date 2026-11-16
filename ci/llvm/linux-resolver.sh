@@ -17,6 +17,6 @@ if ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1; then
 else
   status=$?
   # Preserve the original failure even if the diagnostic rerun passes.
-  ctest --test-dir build-resolver -R prune_extract --output-on-failure -V --timeout 120 -j1 || true
+  ctest --test-dir build-resolver -R 'prune_extract|pipeline|cli_options' --output-on-failure -V --timeout 120 -j1 || true
   exit "$status"
 fi

@@ -146,13 +146,30 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   };
   for (const auto& why : m.disabledReasons) disable(why);
   if (!registry.supports(m.dialect)) disable("unsupported ADL dialect: " + m.dialect);
-  if (m.unknownInUserCode) disable("unknown conditional in user code");
+  if (m.unknownInUserCode) {
+    std::string location = " in flat.cpp";
+    auto scan = scanDirectives(m.text);
+    if (scan.ok()) for (const auto& l : scan.value().lines) if (l.directive &&
+        (l.directive->name == "if" || l.directive->name == "ifdef" || l.directive->name == "ifndef")) {
+      if (l.firstLine <= m.lineMap.size() && m.lineMap[l.firstLine-1]) {
+        const auto& at = *m.lineMap[l.firstLine-1]; location = " at " + at.file + ':' + std::to_string(at.line);
+      } else location = " at flat.cpp:" + std::to_string(l.firstLine);
+      location += " (#" + l.directive->name + ")"; break;
+    }
+    disable("unknown conditional in user code" + location);
+  }
   for (const auto& header : m.includes) {
     if (!isStandardHeader(header)) disable("non-standard system header: " + header);
     else if (!extensionPruningCovered(header)) disable("unaudited GNU extension header: " + header);
   }
   for (const auto& e : m.expansions) if (e.user && !e.condition) {
-    if (e.predefined && !equalMacro(e.parse, e.judge)) disable("predefined macro differs or unknown: " + e.name);
+    // These two intrinsic replacements are certified by D3b's independent
+    // location invariant. Explicit source/command definitions are ordinary
+    // macros, and external pasting remains forbidden below.
+    const bool locationIntrinsic = (e.name == "__LINE__" || e.name == "__FILE__") &&
+        e.parse.state == MacroState::definedUnknown && !e.parse.definition &&
+        (e.judge.activeSpecialBuiltin() || (!m.judgeProfile && e.judge.state == MacroState::unknown && !e.judge.definition));
+    if (e.predefined && !locationIntrinsic && !equalMacro(e.parse, e.judge)) disable("predefined macro differs or unknown: " + e.name);
     if (e.paste && (!e.pasteOperandsKnown || e.externalPasteOperand)) disable("external or unknown token-paste operand: " + e.name);
   }
   const auto n = m.families.size(); out.families.resize(n);
@@ -246,7 +263,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
       out.transitiveBytes[out.families[r.initialCause].reason] += bytes;
     } else out.removedBytes += bytes;
   }
-  if (out.removedBytes) out.assumptions.insert("A6");
+  if (std::any_of(out.families.begin(),out.families.end(),[](const auto& f) { return !f.kept; })) out.assumptions.insert("A6");
   return out;
 }
 Result<bool> staticNameInvariant(const PruningModel& m, const PruningResult& r, std::string_view rendered) {

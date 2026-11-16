@@ -28,7 +28,10 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
   m.disabledReasons = flat.disabledReasons; m.unknownInUserCode = flat.unknownInUserCode;
   m.keepNames.insert(keep.begin(),keep.end());
   auto annotations = captureKeepOffsets(m.text); if (!annotations.ok()) return annotations.error();
-  m.keepOffsets = std::move(annotations.value());
+  m.keepOffsets = flat.keepOffsets;
+  m.keepOffsets.insert(m.keepOffsets.end(),annotations.value().begin(),annotations.value().end());
+  std::sort(m.keepOffsets.begin(),m.keepOffsets.end());
+  m.keepOffsets.erase(std::unique(m.keepOffsets.begin(),m.keepOffsets.end()),m.keepOffsets.end());
   for (const auto& why : c.command.pruningAllowed().reasons) m.disabledReasons.push_back(why);
   m.judgeProfile = judge != nullptr; m.judgeComplete = judge && judge->reproduced;
   if (judge) {
@@ -60,21 +63,36 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
     add(d.framework ? "-iframework" : d.kind == IncludeKind::quote ? "-iquote" : "-isystem", pathToUtf8(c.command.cwd / d.path));
   }
   if (!resource) add("-isystem",std::string(pruningResourceDirectory) + "/include");
+  // LLVM 23 cc1's CharIsSigned default is true even on unsigned-char
+  // targets. Its driver supplies -fno-signed-char for those target defaults;
+  // explicit signed char needs no option. Use the selected probe for defaults
+  // and the last explicit flag for overrides; never leave a stale negative.
+  bool unsignedChar = c.probe.macros.contains("__CHAR_UNSIGNED__");
   for (const auto& a : c.command.args) {
     if (a.option == "-D" || a.option == "-U") { m.parseArgv.push_back(a.option + a.value); continue; }
     if (a.option == "-std=" || a.classification == Class::input || a.classification == Class::controlled ||
         a.option == "-I" || a.option == "-iquote" || a.option == "-isystem" || a.option == "-m32" || a.option == "-m64") continue;
-    if (a.option == "-funsigned-char") m.parseArgv.push_back("-fno-signed-char");
-    else if (a.option == "-fsigned-char") m.parseArgv.push_back("-fsigned-char");
-    else if (a.option == "-fshort-wchar" || a.option == "-fno-rtti" || a.option == "-pthread") m.parseArgv.push_back(a.option);
+    if (a.option == "-funsigned-char") unsignedChar = true;
+    else if (a.option == "-fsigned-char") unsignedChar = false;
+    else if (a.option == "-fshort-wchar") {
+      m.parseArgv.push_back("-fwchar-type=short"); m.parseArgv.push_back("-fno-signed-wchar");
+    }
+    // -pthread really is a cc1 option in LLVM 23 (LangOpts.POSIXThreads);
+    // it supplies the target's thread predefines before ordered -D/-U ops.
+    else if (a.option == "-fno-rtti" || a.option == "-pthread" ||
+             a.option == "-O0" || a.option == "-O1" || a.option == "-O2" || a.option == "-O3" || a.option == "-Os" || a.option == "-Og")
+      m.parseArgv.push_back(a.option);
     else if (a.option == "-fno-exceptions") { /* Leave both cc1 exception flags off; set defaults below. */ }
     else {
       std::string spelling; for (const auto& word : a.spelling) { if (!spelling.empty()) spelling += ' '; spelling += word; }
       m.untranslatedOptions.push_back(spelling);
-      const bool inert = a.classification == Class::harmless;
+      // cc1 accepts -Ofast as an optimization level, but it does not supply
+      // the driver's implied fast-math language options. Fail closed.
+      const bool inert = a.classification == Class::harmless && a.option != "-Ofast";
       if (!inert) m.disabledReasons.push_back("untranslated semantic option: " + spelling);
     }
   }
+  if (unsignedChar) m.parseArgv.push_back("-fno-signed-char");
   if (std::none_of(c.command.args.begin(),c.command.args.end(),[](const auto& a) { return a.option == "-fno-exceptions"; })) {
     m.parseArgv.push_back("-fcxx-exceptions"); m.parseArgv.push_back("-fexceptions");
   }
@@ -84,10 +102,10 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
     const auto& d = *l.directive;
     if (d.name == "line" && l.firstLine <= m.lineMap.size() && !m.lineMap[l.firstLine-1]) m.generatedMarkers.push_back({l.begin,l.end});
     else m.sourceDirectives.push_back({l.begin,l.end});
-    if (d.name == "pragma" && !supportedPragma(d)) m.disabledReasons.push_back("unsupported user pragma");
+    if (d.name == "pragma" && !supportedPragma(d)) m.disabledReasons.push_back("unsupported user pragma at line " + std::to_string(l.firstLine) + ": " + l.text);
     if (d.name == "include" && !d.tokens.empty()) {
       const auto& token = d.tokens.front();
-      if (token.kind != TokenKind::header) m.disabledReasons.push_back("computed system include");
+      if (token.kind != TokenKind::header) m.disabledReasons.push_back("computed system include at line " + std::to_string(l.firstLine) + ": " + token.text);
       else m.includes.push_back(token.text.substr(1,token.text.size()-2));
     }
   }

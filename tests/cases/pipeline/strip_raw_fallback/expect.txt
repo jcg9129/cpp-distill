@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=raw
+verification=local
+exit=0
+configuration=local
+strip=yes
+samples=yes
+contains=#define VALUE 1   + 2
+absent=first
+reason=__COUNTER__

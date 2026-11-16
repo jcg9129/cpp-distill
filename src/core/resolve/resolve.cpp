@@ -347,6 +347,9 @@ struct Engine {
         auto end = raw.text.find('\n', start); end = end == raw.text.npos ? l.end : std::min(end + 1, l.end);
         std::optional<SourceLocation> at;
         if (physical <= raw.lineMap.size()) at = raw.lineMap[physical - 1];
+        auto keepOffset = std::lower_bound(raw.keepOffsets.begin(),raw.keepOffsets.end(),start);
+        for (; keepOffset != raw.keepOffsets.end() && *keepOffset < end; ++keepOffset)
+          result.keepOffsets.push_back(result.text.size() + *keepOffset - start);
         append(std::string_view(raw.text).substr(start, end - start), at);
         start = end; ++physical;
       }
@@ -361,7 +364,7 @@ struct Engine {
   ResolveResult run() {
     prepare();
     if (!result.disabledReasons.empty()) {
-      result.text = raw.text; result.lineMap = raw.lineMap;
+      result.text = raw.text; result.lineMap = raw.lineMap; result.keepOffsets = raw.keepOffsets;
       for (auto& d : result.decisions) { d.decision = Decision::unknown; d.reason = "resolution disabled"; }
     } else {
       States state;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/pipeline/pipeline.h"
 #include "core/report/report.h"
+#include "core/render/render.h"
 #include "core/validate/preprocess.h"
 #include "core/path.h"
 #include "core/temporary.h"
@@ -11,6 +12,25 @@ namespace distill {
 namespace {
 template<class T> T take(Result<T> r) { if (!r.ok()) throw r.error(); return std::move(r.value()); }
 using Clock = std::chrono::steady_clock;
+bool runnable(const Configuration& c) {
+  const auto& t = c.probe.triple;
+#if defined(_WIN32)
+  const bool os = t.find("mingw") != t.npos || t.find("windows") != t.npos;
+#elif defined(__APPLE__)
+  const bool os = t.find("darwin") != t.npos || t.find("apple") != t.npos;
+#elif defined(__linux__)
+  const bool os = t.find("linux") != t.npos;
+#else
+  const bool os = false;
+#endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return os && (t.starts_with("aarch64-") || t.starts_with("arm64-"));
+#elif defined(__x86_64__) || defined(_M_X64)
+  return os && t.starts_with("x86_64-");
+#else
+  return false;
+#endif
+}
 void checkedBytes(const std::filesystem::path& p, std::string_view expected) {
   std::ifstream f(p, std::ios::binary);
   const std::string actual{std::istreambuf_iterator<char>(f), {}};
@@ -29,6 +49,8 @@ struct Pipeline {
   TemporaryDirectory work;
   Clock::time_point deadline;
   std::string currentStep;
+  std::optional<Configuration> flatConfiguration;
+  std::map<std::string,std::vector<ProcessResult>> runs;
   Pipeline(const CompileCommand& c, const DistillOptions& o, ConditionEvaluator& e, ProcessRunner r)
       : command(c), options(o), evaluator(e), runner(std::move(r)), work(".distill-work-", o.temporaryRoot) {}
   void step(std::string_view name) {
@@ -36,19 +58,19 @@ struct Pipeline {
     currentStep = name;
     if (options.progress) options.progress(name);
   }
-  Result<ProcessResult> limited(const ProcessSpec& input) {
+  Result<ProcessResult> limited(const ProcessSpec& input, bool compilation = true) {
     auto spec = input;
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
-    if (left.count() <= 0) return Error{"step deadline exceeded"};
+    if (left.count() <= 0) return Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
     spec.timeout = std::min(spec.timeout, left);
     spec.maxOutputBytes = std::min(spec.maxOutputBytes, options.maxProcessOutput);
     result.processes.push_back({currentStep, spec});
     auto run = runner(spec);
     if (!run.ok()) return run.error();
     const auto& r = run.value();
-    if (Clock::now() >= deadline || r.timedOut) return Error{"step deadline exceeded"};
-    if (r.stdoutTruncated || r.stderrTruncated) return Error{"process output cap exceeded"};
-    if (r.exitCode || r.signal) return Error{"compiler failed: " + r.stderrText};
+    if (Clock::now() >= deadline || r.timedOut) return Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
+    if (r.stdoutTruncated || r.stderrTruncated) return Error{currentStep + ": process output cap exceeded in " + pathToUtf8(spec.cwd)};
+    if (r.signal || (compilation && r.exitCode)) return Error{currentStep + ": process " + (spec.argv.empty() ? "<empty argv>" : spec.argv.front()) + " failed (exit " + std::to_string(r.exitCode) + ") in " + pathToUtf8(spec.cwd) + ": " + r.stderrText};
     return run;
   }
   ProbeOptions probeOptions() {
@@ -66,17 +88,101 @@ struct Pipeline {
   }
   std::vector<std::string> argv(const Configuration& c, const std::filesystem::path& file,
                                 const std::filesystem::path& output, bool generated) {
-    return c.command.buildArgv(file, output, true, {}, generated);
+    auto args = c.command.buildArgv(file, output, true, {}, generated);
+    if (!generated && c.command.userIncludePaths().empty())
+      for (const auto& a : command.args) if (a.option == "-I" || a.option == "-iquote")
+        args.insert(args.end(),a.spelling.begin(),a.spelling.end());
+    return args;
   }
-  void build(const Configuration& c, const std::filesystem::path& file, bool generated) {
+  std::filesystem::path build(const Configuration& c, const std::filesystem::path& file, bool generated, std::string_view name) {
     ProcessSpec spec;
-    const auto program = work.path / "program.exe";
+    const auto program = work.path / (std::string(name) + ".exe");
     std::filesystem::remove(program);
     spec.argv = argv(c, file, program, generated);
     spec.cwd = generated ? work.path : command.cwd;
     spec.timeout = options.stepTimeout;
     take(limited(spec));
-    if (!std::filesystem::is_regular_file(program)) throw Error{"compiler did not produce an executable"};
+    if (!std::filesystem::is_regular_file(program)) throw Error{"compiler did not produce an executable for " + pathToUtf8(file)};
+    return program;
+  }
+  std::vector<ProcessResult> execute(const Configuration& c, const std::filesystem::path& program) {
+    if (options.samples.empty()) return {};
+    if (!runnable(c)) {
+      result.runtime = "skipped: can't run target binaries here"; return {};
+    }
+    std::vector<ProcessResult> output;
+    for (const auto& sample : options.samples) {
+      ProcessSpec spec; spec.argv = {pathToUtf8(program)}; spec.cwd = work.path;
+      spec.stdinFile = command.cwd / sample.input; spec.timeout = options.stepTimeout;
+      auto r = limited(spec,false);
+      if (!r.ok()) throw Error{"sample " + sample.name + ": " + r.error().message};
+      output.push_back(std::move(r.value()));
+    }
+    result.runtime = "compared " + std::to_string(output.size()) + " samples";
+    return output;
+  }
+  void compareRuns(const std::vector<ProcessResult>& reference, const std::vector<ProcessResult>& candidate) {
+    if (reference.size() != candidate.size()) throw Error{"sample execution availability differs"};
+    for (std::size_t i = 0; i < reference.size(); ++i)
+      if (reference[i].exitCode != candidate[i].exitCode || reference[i].stdoutText != candidate[i].stdoutText)
+        throw Error{"differs on sample " + options.samples[i].name + " (distill bug or nondeterministic program)"};
+  }
+  PruningModel sourceModel(const std::string& text, const std::vector<std::optional<SourceLocation>>& lines,
+                           const std::vector<std::size_t>& keep) {
+    PruningModel m; m.text = text; m.lineMap = lines; m.keepOffsets = keep; return m;
+  }
+  PruningModel strip(const PruningModel& m) {
+    if (!options.stripComments) return m;
+    auto rendered = take(renderSource(m,nullptr,true));
+    take(renderingInvariant(m,nullptr,rendered.provenance.text));
+    return std::move(rendered.provenance);
+  }
+  void prune(const InlineResult& raw) {
+    if (options.noPrune && options.keep.empty()) {
+      result.diagnostic += "pruning disabled: --no-prune\n"; return;
+    }
+    const auto flatRuntime = result.runtime;
+    step("pruning analysis");
+    try {
+      auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
+      PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
+      worker.timeout = options.stepTimeout; worker.deadline = deadline;
+      worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
+        result.processes.push_back({currentStep,spec}); return runner(spec);
+      };
+      if (worker.executable.empty()) m.disabledReasons.push_back("pruning worker executable unavailable");
+      else m = take(extractPruning(m,worker));
+      result.pruningModel = std::move(m);
+      result.retention = take(computeRetention(*result.pruningModel));
+      for (const auto& name : options.keep) {
+        const auto& families = result.pruningModel->families;
+        if (std::none_of(families.begin(),families.end(),[&](const auto& f) { return f.names.contains(name); }))
+          throw Error{"--keep " + name + ": no indexed declaration in checked flat source"};
+      }
+      if (Clock::now() >= deadline) throw Error{"pruning analysis deadline exceeded for flat.cpp"};
+      for (const auto& why : result.retention->disabledReasons) result.diagnostic += "pruning disabled: " + why + '\n';
+      if (!result.retention->disabledReasons.empty()) return;
+      if (options.noPrune) { result.diagnostic += "pruning disabled: --no-prune\n"; return; }
+      step("render pruned");
+      auto rendered = take(renderSource(*result.pruningModel,&*result.retention,options.stripComments));
+      const auto& bytes = rendered.provenance.text;
+      take(renderingInvariant(*result.pruningModel,&*result.retention,bytes));
+      take(staticNameInvariant(*result.pruningModel,*result.retention,bytes));
+      if (Clock::now() >= deadline) throw Error{"pruned rendering deadline exceeded"};
+      const auto path = work.path / "pruned.cpp"; write(path,bytes);
+      step("pruned checks");
+      auto program = build(*flatConfiguration,path,true,"pruned");
+      compareRuns(runs["flat"],execute(*flatConfiguration,program));
+      checkedBytes(path,bytes);
+      result.checks.push_back({"pruned","passed",flatConfiguration,{}});
+      result.artifact = "pruned"; result.bytes = bytes;
+      result.assumptions.insert(result.retention->assumptions.begin(),result.retention->assumptions.end());
+    } catch (const Error& e) {
+      if (e.message.starts_with("--keep ")) throw;
+      result.runtime = flatRuntime;
+      result.checks.push_back({"pruned",e.message,flatConfiguration,{}});
+      result.diagnostic += "pruned rejected: " + e.message + "; using flat\n";
+    }
   }
   std::string preprocess(const Configuration& c, const std::filesystem::path& file, bool generated) {
     ProcessSpec spec; spec.argv = argv(c, file, "-", generated); spec.argv.push_back("-E");
@@ -110,7 +216,7 @@ struct Pipeline {
       if (options.profile && command.dialect() && *command.dialect() != options.profile->dialect.name)
         result.diagnostic += "warning: profile dialect " + options.profile->dialect.name + " overrides " + *command.dialect() + " for flat\n";
       step("baseline build");
-      try { build(local, command.source, false); }
+      try { runs["baseline"] = execute(local,build(local, command.source, false,"baseline")); }
       catch (const Error& e) {
         result.checks.push_back({"baseline", e.message, local, {}});
         throw Error{"baseline failed: " + e.message};
@@ -121,15 +227,18 @@ struct Pipeline {
       io.deadline = deadline;
       auto raw = take(inlineSources(command, take(buildIncludeSearch(command, local.probe.searchLists)), io));
       if (Clock::now() >= deadline) throw Error{"inline deadline exceeded"};
+      raw.keepOffsets = take(captureKeepOffsets(raw.text));
+      auto rawChecked = strip(sourceModel(raw.text,raw.lineMap,raw.keepOffsets));
+      if (Clock::now() >= deadline) throw Error{"raw rendering deadline exceeded"};
       const auto rawPath = work.path / "raw.cpp", flatPath = work.path / "flat.cpp";
-      write(rawPath, raw.text);
+      write(rawPath, rawChecked.text);
       step("raw checks");
       auto rawLocal = local;
       try {
         rawLocal = configuration(take(flatCommand(command, nullptr, command.compiler, false)), "local");
         compare(rawLocal, command.source, true, rawPath, raw, &local);
-        build(rawLocal, rawPath, true);
-        checkedBytes(rawPath, raw.text);
+        compareRuns(runs["baseline"],execute(rawLocal,build(rawLocal, rawPath, true,"raw")));
+        checkedBytes(rawPath, rawChecked.text);
         if (Clock::now() >= deadline) throw Error{"raw checks deadline exceeded"};
       } catch (const Error& e) {
         work.keep = true; result.keptWork = work.path;
@@ -137,8 +246,9 @@ struct Pipeline {
         throw Error{"raw failed: " + e.message + "; work files kept at " + pathToUtf8(work.path)};
       }
       result.checks.push_back({"raw", "passed", rawLocal, {}});
-      result.artifact = "raw"; result.bytes = raw.text; result.assumptions = raw.assumptions;
+      result.artifact = "raw"; result.bytes = rawChecked.text; result.assumptions = raw.assumptions;
       result.verification = targetEquivalent(rawLocal, options.profile, hostDependent(command)) ? "target" : "local";
+      const auto rawRuntime = result.runtime;
       try {
         step("resolve conditions");
         ResolveOptions ro; ro.profile = options.profile; ro.deadline = deadline;
@@ -151,6 +261,11 @@ struct Pipeline {
           for (const auto& r : result.resolution.disabledReasons) why += ": " + r;
           throw Error{why};
         }
+        auto flatChecked = strip(sourceModel(result.resolution.text,result.resolution.lineMap,result.resolution.keepOffsets));
+        result.resolution.text = std::move(flatChecked.text);
+        result.resolution.lineMap = std::move(flatChecked.lineMap);
+        result.resolution.keepOffsets = std::move(flatChecked.keepOffsets);
+        if (Clock::now() >= deadline) throw Error{"flat rendering deadline exceeded"};
         write(flatPath, result.resolution.text);
         step("select configuration");
         std::vector<std::pair<std::filesystem::path, bool>> candidates;
@@ -182,11 +297,15 @@ struct Pipeline {
             selected = true;
             step("flat checks");
             try {
-              compare(c, rawPath, false, flatPath, raw); build(c, flatPath, true);
-              checkedBytes(rawPath, raw.text); checkedBytes(flatPath, result.resolution.text);
+              compare(c, rawPath, false, flatPath, raw);
+              if (!options.samples.empty()) runs["original flat configuration"] = execute(c,build(c,command.source,false,"original-flat"));
+              const auto flatProgram = build(c,flatPath,true,"flat");
+              runs["flat"] = execute(c,flatProgram);
+              compareRuns(runs["original flat configuration"],runs["flat"]);
+              checkedBytes(rawPath, rawChecked.text); checkedBytes(flatPath, result.resolution.text);
               if (Clock::now() >= deadline) throw Error{"flat checks deadline exceeded"};
               result.checks.push_back({"flat", "passed", c, observed.decisions});
-              result.artifact = "flat"; result.bytes = result.resolution.text;
+              result.artifact = "flat"; result.bytes = result.resolution.text; flatConfiguration = c;
               for (const auto& d : result.resolution.decisions) if (d.decision == Decision::trueValue || d.decision == Decision::falseValue) {
                 if (options.profile && (d.requirements.integers || d.requirements.dialect)) result.assumptions.insert("A4");
                 for (const auto& u : d.external) {
@@ -210,8 +329,11 @@ struct Pipeline {
         }
         if (!selected) throw Error{"no configuration satisfies resolution; using raw"};
       } catch (const Error& e) { result.diagnostic += e.message + '\n'; }
+      if (result.artifact == "raw") result.runtime = rawRuntime;
+      if (result.artifact == "flat") prune(raw);
+      else if (!options.keep.empty()) throw Error{"--keep " + options.keep.front() + ": requires a checked flat configuration"};
       if (result.verification == "target") result.assumptions.insert("A4");
-      result.exitCode = options.strict ? 3 : 0;
+      result.exitCode = options.strict && (result.artifact != "pruned" || result.verification != "target") ? 3 : 0;
       result.resultLine = "distill: wrote " + result.artifact + " (" + result.verification + "), runtime " + result.runtime;
     } catch (const Error& e) {
       result.exitCode = 1; result.bytes.clear(); result.artifact.clear();
@@ -223,10 +345,15 @@ struct Pipeline {
   }
 };
 } // namespace
-Result<PipelineResult> distillNoPrune(const CompileCommand& command, const DistillOptions& options,
+Result<PipelineResult> distillProgram(const CompileCommand& command, const DistillOptions& options,
                                     ConditionEvaluator& evaluator, ProcessRunner runner) {
   try { return Pipeline(command, options, evaluator, std::move(runner)).run(); }
   catch (const Error& e) { return e; }
   catch (const std::exception& e) { return Error{std::string("pipeline: ") + e.what()}; }
+}
+Result<PipelineResult> distillNoPrune(const CompileCommand& command, const DistillOptions& options,
+                                    ConditionEvaluator& evaluator, ProcessRunner runner) {
+  auto o = options; o.noPrune = true;
+  return distillProgram(command,o,evaluator,std::move(runner));
 }
 } // namespace distill

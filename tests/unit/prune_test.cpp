@@ -192,7 +192,77 @@ TEST(prune_prepare_selected_configuration_and_provenance) {
   CHECK(std::find(args.begin(),args.end(),"-UU") < std::find(args.begin(),args.end(),"-DU=2"));
   CHECK(std::find(args.begin(),args.end(),"/gcc/internal") == args.end());
   CHECK(std::find(args.begin(),args.end(),"-undef") == args.end());
-  CHECK(!m.value().disabledReasons.empty()); CHECK_EQ(m.value().untranslatedOptions.size(),2u);
+  CHECK(!m.value().disabledReasons.empty()); CHECK_EQ(m.value().untranslatedOptions,(std::vector<std::string>{"-march=native"}));
+}
+TEST(prune_prepare_cc1_translation_table) {
+  struct Row {
+    std::vector<std::string> driver, cc1;
+    bool exceptions = true;
+    std::string triple = "x86_64-unknown-linux-gnu", disabled = {};
+  };
+  // These are complete argv deltas, not just presence checks: driver-only
+  // options must never sneak into CreateFromArgs beside the translated ones.
+  const std::vector<Row> rows = {
+    {{"-DX=1","-UX","-DX=2"},{"-DX=1","-UX","-DX=2"}},
+    {{"-Iinc","-iquote","quote","-isystem","sys"},{}}, // Probed search list is authoritative.
+    {{"-oout","-MD","-MFdep.d","-MTtarget"},{}},
+    {{"-fsigned-char"},{}},
+    {{"-funsigned-char"},{"-fno-signed-char"}},
+    {{"-funsigned-char","-fsigned-char"},{}},
+    {{"-fsigned-char","-funsigned-char"},{"-fno-signed-char"}},
+    {{"-fshort-wchar"},{"-fwchar-type=short","-fno-signed-wchar"}},
+    {{"-fwrapv"},{},true,"x86_64-unknown-linux-gnu","-fwrapv"},
+    {{"-fno-wrapv"},{},true,"x86_64-unknown-linux-gnu","-fno-wrapv"},
+    {{"-fno-exceptions"},{},false},
+    {{"-fno-rtti"},{"-fno-rtti"}},
+    {{"-pthread","-U_REENTRANT"},{"-pthread","-U_REENTRANT"}},
+    {{"-O0"},{"-O0"}}, {{"-O1"},{"-O1"}}, {{"-O2"},{"-O2"}},
+    {{"-O3"},{"-O3"}}, {{"-Os"},{"-Os"}}, {{"-Og"},{"-Og"}},
+    {{"-O2","-O0"},{"-O2","-O0"}},
+    {{"-m32"},{},true,"i386-unknown-linux-gnu"},
+    {{"-m32","-m64"},{},true},
+    {{"-g","-Wall","-pipe","-static","-lm"},{}},
+    {{"-march=haswell"},{},true,"x86_64-unknown-linux-gnu","-march=haswell"},
+    {{"-march=native"},{},true,"x86_64-unknown-linux-gnu","-march=native"},
+    {{"-mtune=generic"},{},true,"x86_64-unknown-linux-gnu","-mtune=generic"},
+    {{"-mcpu=native"},{},true,"x86_64-unknown-linux-gnu","-mcpu=native"},
+    {{"-fmodules"},{},true,"x86_64-unknown-linux-gnu","-fmodules"},
+    {{"-fopenmp"},{},true,"x86_64-unknown-linux-gnu","-fopenmp"},
+    {{"-Ofast"},{},true,"x86_64-unknown-linux-gnu","-Ofast"},
+  };
+  Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"gnu++20",true,202002};
+  auto defaults = preparePruning(c,{},{}).value().parseArgv;
+  defaults.resize(defaults.size()-3); // Default exception pair and flat.cpp.
+  for (const auto& row : rows) {
+    std::vector<std::string> argv{"g++"}; argv.insert(argv.end(),row.driver.begin(),row.driver.end()); argv.push_back("main.cpp");
+    c.command = parseCompileCommand(argv,std::filesystem::current_path()).value();
+    auto m = preparePruning(c,{},{}); CHECK(m.ok());
+    auto expected = defaults;
+    *std::next(std::find(expected.begin(),expected.end(),"-triple")) = row.triple;
+    expected.insert(expected.end(),row.cc1.begin(),row.cc1.end());
+    if (row.exceptions) expected.insert(expected.end(),{"-fcxx-exceptions","-fexceptions"});
+    expected.push_back("flat.cpp");
+    CHECK_EQ(m.value().parseArgv,expected);
+    auto reasons = c.command.pruningAllowed().reasons;
+    if (!row.disabled.empty()) reasons.push_back("untranslated semantic option: " + row.disabled);
+    CHECK_EQ(m.value().disabledReasons,reasons);
+  }
+}
+TEST(prune_prepare_unsigned_target_default_and_signed_override) {
+  // LLVM 23 cc1 is signed by default on ARM too. A signed selection is
+  // expressible by omitting the negative flag, independently of target default.
+  for (const auto* triple : {"aarch64-unknown-linux-gnu","x86_64-unknown-linux-gnu"}) {
+    for (const auto& flags : std::vector<std::vector<std::string>>{{},{"-fsigned-char"},{"-funsigned-char","-fsigned-char"},{"-fsigned-char","-funsigned-char"}}) {
+      Configuration c; c.probe.triple = triple; c.probe.dialect = {"gnu++20",true,202002};
+      c.probe.macros["__CHAR_UNSIGNED__"] = Macro{false,{},false,"1"};
+      std::vector<std::string> argv{"g++"}; argv.insert(argv.end(),flags.begin(),flags.end()); argv.push_back("main.cpp");
+      c.command = parseCompileCommand(argv,std::filesystem::current_path()).value();
+      auto m = preparePruning(c,{},{}).value(); CHECK(m.disabledReasons.empty());
+      CHECK_EQ(std::count(m.parseArgv.begin(),m.parseArgv.end(),"-fno-signed-char"),
+               flags.empty() || flags.back() == "-funsigned-char" ? 1 : 0);
+      CHECK(std::find(m.parseArgv.begin(),m.parseArgv.end(),"-fsigned-char") == m.parseArgv.end());
+    }
+  }
 }
 TEST(prune_prepare_cpp_defaults_and_explicit_disables) {
   for (int disables = 0; disables < 4; ++disables) {
@@ -227,7 +297,8 @@ TEST(prune_prepare_pragmas_allow_only_audited_effects_and_preserve_directives) {
        "clang attribute push", "omp parallel", "comment(linker,\"symbol\")", "once extra"}) {
     ResolveResult flat; flat.text = "#pragma " + std::string(pragma) + "\n";
     auto m = preparePruning(c,{},flat); CHECK(m.ok());
-    CHECK_EQ(m.value().disabledReasons,std::vector<std::string>{"unsupported user pragma"});
+    CHECK_EQ(m.value().disabledReasons.size(),1u);
+    CHECK(m.value().disabledReasons.front().starts_with("unsupported user pragma at line "));
   }
   ResolveResult flat; flat.text = "void crossed(){\n#pragma GCC diagnostic push\n}\n";
   auto m = preparePruning(c,{},flat).value();
@@ -304,4 +375,20 @@ TEST(prune_keep_metadata_before_comment_stripping) {
   CHECK_EQ(text.substr(offsets.value().front(),3),"int");
   Model b; auto id = b.add("keep","int keep();"); b.m.annotations.push_back({0,id});
   CHECK(b.run().families[id].kept);
+}
+
+TEST(prune_location_intrinsics_require_renderer_and_do_not_excuse_pasting) {
+  for (const auto* name : {"__LINE__","__FILE__"}) {
+    Model b; b.add("dead","int dead;");
+    PruneMacroExpansion e; e.name = name; e.predefined = true;
+    e.parse = {MacroState::definedUnknown,{}, {FactOrigin::compilerBuiltin}};
+    b.m.expansions = {e}; CHECK(b.run().disabledReasons.empty());
+    b.m.judgeProfile = true; CHECK(!b.run().disabledReasons.empty());
+    e.judge = {MacroState::definedUnknown,{}, {FactOrigin::specialBuiltin}};
+    b.m.expansions = {e}; CHECK(b.run().disabledReasons.empty());
+    e.paste = true; e.externalPasteOperand = true;
+    b.m.expansions = {e}; CHECK(!b.run().disabledReasons.empty());
+    e.paste = false; e.parse = known("42");
+    b.m.expansions = {e}; CHECK(!b.run().disabledReasons.empty());
+  }
 }

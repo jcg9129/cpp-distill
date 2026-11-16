@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+report=removed: outside the retention closure
+report.1=ADL registry:
+report.2=pruning assumption: A6
+absent=struct SparseTable
+contains=struct Mint
+contains.1=struct LazySegTree
+contains.2=struct Fenwick
+contains.3=struct DSU
+requires=linux

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=flat
+verification=local
+exit=0
+configuration=local
+reason=__GNUC__
+report=pruning disabled:

@@ -40,13 +40,14 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     (root / 'main.cpp').write_text('// SPDX-License-Identifier: GPL-3.0-or-later\n#if 1\nint main(){}\n#endif\n')
     for args, code, message in [
         (['--help'], 0, 'Usage: distill'),
-        (['main.cpp'], 1, 'pruning arrives in D3'),
+        (['g++', '-std=gnu++20', 'main.cpp'], 0, 'distill: wrote pruned (local)'),
         (['--no-prune'], 1, 'missing compile command'),
         (['--no-prune', '-o'], 1, 'missing value'),
         (['--no-prune', '--unknown'], 1, 'unknown distill option'),
-        (['--no-prune', '--keep', 'x', 'main.cpp'], 1, 'not supported yet'),
+        (['--keep', 'unknown_function', 'g++', '-std=gnu++20', 'main.cpp'], 1, '--keep unknown_function: no indexed declaration'),
+        (['--keep'], 1, 'missing value for --keep'),
         (['--no-prune', '--verify-run', 'sample.in', 'main.cpp'], 1, 'not supported yet'),
-        (['--no-prune', '--strip-comments', 'main.cpp'], 1, 'not supported yet'),
+        (['--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--no-prune', 'g++', '-c', 'main.cpp'], 1, 'rejected option'),
         (['--no-prune', '-o', 'main.cpp', 'main.cpp'], 1, 'must differ'),
         (['--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local), runtime not requested'),
@@ -57,6 +58,21 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(result.returncode == code, (args, result.returncode, result.stderr))
             check(message in result.stdout + result.stderr, (args, result.stdout, result.stderr))
             check(set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir()))
+    with case('atomic output replacement and failure preserves previous output'):
+        output = root / 'submit.cpp'
+        output.write_bytes(b'old checked artifact')
+        result = subprocess.run([binary, '-o', str(output), 'g++', '-std=gnu++20', 'main.cpp'],
+                                cwd=root, capture_output=True, timeout=120)
+        check(result.returncode == 0, result.stderr)
+        check(b'int main(){}' in output.read_bytes(), output.read_bytes())
+        saved = output.read_bytes()
+        result = subprocess.run([binary, '-o', str(output), '--keep', 'unknown_function',
+                                 'g++', '-std=gnu++20', 'main.cpp'], cwd=root, capture_output=True, timeout=120)
+        check(result.returncode == 1, result.stderr)
+        check(result.stdout == b'', result.stdout)
+        check(output.read_bytes() == saved, output.read_bytes())
+        output.unlink()
+        check(set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir()))
     # Do not use text=True here: universal newline conversion would hide a
     # Windows text-mode write in stdout, the published artifact or the report.
     source = (root / 'main.cpp').read_bytes()

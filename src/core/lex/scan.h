@@ -22,7 +22,8 @@ struct LogicalLine {
   std::vector<Token> tokens;
   std::optional<Directive> directive;
 };
-struct ScanResult { std::vector<LogicalLine> lines; std::vector<Token> identifiers; };
+struct Comment { std::size_t begin, end; };
+struct ScanResult { std::vector<Comment> comments; std::vector<LogicalLine> lines; std::vector<Token> identifiers; };
 // Lenient ordinary literals end at newline. Raw-token newlines stay inside their
 // logical line; block-comment newlines do too. Raw contents retain splices.
 // %: at directive position is deliberately unsupported (an error).
