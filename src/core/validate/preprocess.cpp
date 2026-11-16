@@ -53,12 +53,13 @@ Result<bool> parseLineMarker(std::string_view s, SourceLocation& at, bool* syste
 Result<std::vector<PreprocessedToken>> parsePreprocessed(std::string_view output, FileMapper map) {
   // Scan before interpreting markers: a marker-shaped line in a raw literal is text.
   std::set<std::size_t> directives;
-  {
-    auto scanned = scanDirectives(output);
-    if (!scanned.ok()) return scanned.error();
-    for (const auto& l : scanned.value().lines) if (l.directive) directives.insert(l.firstLine);
-  }
-  std::string content;
+  auto scanned = scanDirectives(output);
+  if (!scanned.ok()) return scanned.error();
+  for (const auto& l : scanned.value().lines) if (l.directive) directives.insert(l.firstLine);
+  // Reuse this scan instead of constructing and scanning a second full buffer.
+  // Identifier duplicates are unnecessary for preprocess comparison.
+  scanned.value().identifiers.clear();
+  std::set<std::size_t> markers;
   std::vector<SourceLocation> locations;
   SourceLocation at{"<initial>", 1};
   bool system = false;
@@ -73,18 +74,17 @@ Result<std::vector<PreprocessedToken>> parsePreprocessed(std::string_view output
       if (!parsed.ok()) return parsed.error();
       marker = parsed.value();
     }
-    if (!marker) { content.append(line); locations.push_back({map && !system ? map(at.file) : at.file, at.line++}); }
-    else locations.push_back({"<marker>", 0});
-    content += '\n'; begin = end + (end < output.size());
+    if (!marker) locations.push_back({map && !system ? map(at.file) : at.file, at.line++});
+    else { locations.push_back({"<marker>", 0}); markers.insert(physical); }
+    begin = end + (end < output.size());
   }
-  auto tokens = scanDirectives(content);
-  if (!tokens.ok()) return tokens.error();
   std::vector<PreprocessedToken> result;
-  for (const auto& l : tokens.value().lines) {
+  for (auto& l : scanned.value().lines) {
+    if (markers.contains(l.firstLine)) continue;
     if (l.directive && l.directive->name != "pragma") return Error{"unexpected directive in -E output: #" + l.directive->name};
     const bool pragma = l.directive.has_value();
     if (pragma) result.push_back({"<pragma-start>", locations.at(l.firstLine - 1), true});
-    for (const auto& t : l.tokens) result.push_back({t.text, locations.at(t.line - 1), false});
+    for (auto& t : l.tokens) result.push_back({std::move(t.text), locations.at(t.line - 1), false});
     if (pragma) result.push_back({"<pragma-end>", locations.at(l.lastLine - 1), true});
   }
   return result;

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+api=yes
+report=attribute: constructor
+report.1=attribute: destructor
+report.2=attribute: used
+contains=void startup
+contains.1=void shutdown
+contains.2=int retained
+contains.3=void retainedFunction
+absent=void unused
+milestone=D3d

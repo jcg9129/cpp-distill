@@ -58,12 +58,12 @@ struct Pipeline {
     currentStep = name;
     if (options.progress) options.progress(name);
   }
-  Result<ProcessResult> limited(const ProcessSpec& input, bool compilation = true) {
+  Result<ProcessResult> limited(const ProcessSpec& input, bool compilation = true, bool preprocessing = false) {
     auto spec = input;
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
     if (left.count() <= 0) return Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
     spec.timeout = std::min(spec.timeout, left);
-    spec.maxOutputBytes = std::min(spec.maxOutputBytes, options.maxProcessOutput);
+    spec.maxOutputBytes = std::min(spec.maxOutputBytes, preprocessing ? options.maxPreprocessOutput : options.maxProcessOutput);
     result.processes.push_back({currentStep, spec});
     auto run = runner(spec);
     if (!run.ok()) return run.error();
@@ -187,8 +187,8 @@ struct Pipeline {
   std::string preprocess(const Configuration& c, const std::filesystem::path& file, bool generated) {
     ProcessSpec spec; spec.argv = argv(c, file, "-", generated); spec.argv.push_back("-E");
     spec.cwd = generated ? work.path : command.cwd;
-    spec.timeout = options.stepTimeout; spec.maxOutputBytes = options.maxProcessOutput;
-    return take(limited(spec)).stdoutText;
+    spec.timeout = options.stepTimeout; spec.maxOutputBytes = options.maxPreprocessOutput;
+    return std::move(take(limited(spec,true,true)).stdoutText);
   }
   void compare(const Configuration& c, const std::filesystem::path& a, bool original,
                const std::filesystem::path& b, const InlineResult& raw, const Configuration* baseline = nullptr) {

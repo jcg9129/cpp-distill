@@ -27,7 +27,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
-| D3 pruning | D3a–D3c implemented: analysis, rendering, adversarial and checker-limit cases, measurement harness and 81-case caide corpus; complete except user corpus measurement, pending SDK CI verification |
+| D3 pruning | D3a–D3d implemented: analysis, rendering, adversarial/checker cases, corpus measurement harness and first-measurement fixes; complete except user corpus measurement, pending SDK CI verification |
 | D4–D5 | see design §7 |
 
 ## D1 findings (2026-11-15)
@@ -233,3 +233,30 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
   the existing refusal is retained, with no unsupported coverage claim.
 - Root `D3C-SUMMARY.md` records local checks, case counts, CI-only checks and
   proposed design wording. Approved design v8 is unchanged.
+
+## D3d first caide pruning measurement fixes (2026-11-16)
+
+- Extended A6 to C++11/14/17 and GNU spellings with edition-specific
+  N3337/N4140/N4659 clauses, exact per-dialect hook-set tests, and regenerated
+  embedded SHA-256 identity. Older error conversion hooks retain explicit
+  UNVERIFIED status; no pre-C++20 CPOs are claimed.
+- Policy D3d-1 roots constructor/destructor/used/section/weak/visibility/asm-label
+  and alias declarations. Alias/direct asm symbol references retain resolved
+  user families; unresolved or uninterpretable symbol-bearing forms fail closed.
+  Added extraction assertions and startup/shutdown stdout equality cases.
+- A lexical ownership pass binds requires-expression/prototype/lambda parameters,
+  init-captures and expression/type-local declarations before dependency traversal.
+  Regression coverage includes template-template parameters, template structured
+  bindings and range-for variables, with unrelated functions still removable.
+- Preprocess checks allow 64 MiB per stream, independently of 4 MiB probes/builds;
+  comparison reuses the initial scan and moves token text. A real standard-header
+  fixture passes raw/flat checks; unit checks distinguish probes from checks and
+  require oversized preprocessing to fail closed. Buffered memory costs are
+  documented rather than treating the byte cap as an RSS quota.
+- Added per-case caide outcome expectations and corpus-format/tooling checks.
+  The untouched corpus `stl` command's unmodelled `-v` means raw-only after its
+  output-cap error is fixed; this exception is documented explicitly. Expected
+  classes are forecasts, not a claimed SDK remeasurement.
+- Normal/fork local suites and arm64 SDK syntax-only results, memory measurements,
+  CI-only extraction limits and proposed design wording are in root
+  `D3D-SUMMARY.md`. Approved design v8 is unchanged; no CI run was requested.

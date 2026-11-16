@@ -102,6 +102,7 @@ int run(int argc, char** argv) {
   if (!gcc) { std::cout << "SKIP pipeline cases: GCC unavailable\n"; return 0; }
   const bool models = argc == 2 && std::string_view(argv[1]) == "--checker-models";
   const bool d3c = argc == 4 && std::string_view(argv[3]) == "--d3c";
+  const bool d3d = argc == 4 && std::string_view(argv[3]) == "--d3d";
   const bool cli = argc >= 3 && std::string_view(argv[1]) == "--cli";
   const bool worker = argc >= 3 && std::string_view(argv[1]) == "--worker";
   const auto workerPath = models ? std::filesystem::current_path() / "synthetic-worker" : worker ? std::filesystem::absolute(pathFromUtf8(argv[2])) : std::filesystem::path{};
@@ -126,7 +127,9 @@ int run(int argc, char** argv) {
       const auto expected = metadata(read(cwd / "expect.txt"));
       auto value = [&](const char* key) { const auto f = expected.find(key); return f == expected.end() ? std::string{} : f->second; };
       if (models && value("checker").empty()) continue;
-      if (!models && d3c != (value("milestone") == "D3c")) continue;
+      if (!models && (cli || worker)) {
+        if (d3c != (value("milestone") == "D3c") || d3d != (value("milestone") == "D3d")) continue;
+      } else if (!models && value("milestone") == "D3c") continue;
       if ((value("requires") == "formatter" || value("requires") == "chrono_parse") &&
           !take(testing::libraryFeature(value("requires"),*gcc,temp.path))) {
         std::cout << "SKIP " << name << ": local library lacks " << value("requires") << '\n'; continue;

@@ -8,6 +8,8 @@ namespace distill {
 namespace embedded { extern const std::string_view adl, extensionCoverage, adlDigest; }
 namespace {
 std::string normalized(std::string_view s) {
+  for (const auto* d : {"11", "14", "17"})
+    if (s == std::string("c++") + d || s == std::string("gnu++") + d) return std::string("c++") + d;
   if (s == "gnu++20" || s == "c++20") return "c++20";
   if (s == "gnu++23" || s == "c++23") return "c++23";
   return {};
@@ -39,7 +41,9 @@ Result<AdlRegistry> parseAdlRegistry(std::string_view text) {
       return Error{"invalid ADL registry row: " + line};
     r.entries.push_back(std::move(e));
   }
-  if (r.version.empty() || !r.supports("c++20") || !r.supports("c++23")) return Error{"incomplete ADL registry"};
+  if (r.version.empty()) return Error{"missing ADL registry version"};
+  for (const auto* d : {"c++11", "c++14", "c++17", "c++20", "c++23"})
+    if (!r.supports(d)) return Error{"incomplete ADL registry: " + std::string(d)};
   return r;
 }
 const AdlRegistry& embeddedAdlRegistry() {

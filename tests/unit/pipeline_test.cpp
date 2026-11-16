@@ -121,3 +121,29 @@ TEST(pipeline_pruned_core_forced_bad_removal_caught_by_run) {
   CHECK(r.diagnostic.find("differs on sample empty sample") != r.diagnostic.npos);
   CHECK(f.built.contains("pruned")); CHECK(f.built.at("pruned").find("int chosen") == std::string::npos);
 }
+
+TEST(pipeline_preprocess_cap_is_separate_and_overflow_fails_closed) {
+  Fixture f("int main(){return 0;}\n"); f.options.noPrune = true;
+  auto result = f.run(); CHECK_EQ(result.artifact,"flat");
+  std::size_t preprocesses = 0;
+  for (const auto& process : result.processes) {
+    const auto& spec = process.spec;
+    const bool check = (process.step == "raw checks" || process.step == "flat checks") &&
+        std::find(spec.argv.begin(),spec.argv.end(),"-E") != spec.argv.end() &&
+        std::find(spec.argv.begin(),spec.argv.end(),"-dM") == spec.argv.end() &&
+        std::find(spec.argv.begin(),spec.argv.end(),"-v") == spec.argv.end();
+    // Startup/special-macro probes also use -E, but write their own source.
+    bool source = false;
+    for (const auto& arg : spec.argv) {
+      auto name = pathFromUtf8(arg).filename();
+      source |= name == "main.cpp" || name == "raw.cpp" || name == "flat.cpp";
+    }
+    if (check && source) { ++preprocesses; CHECK_EQ(spec.maxOutputBytes,64u * 1024 * 1024); }
+    else CHECK(spec.maxOutputBytes <= 4u * 1024 * 1024);
+  }
+  CHECK_EQ(preprocesses,4u);
+  f.options.maxPreprocessOutput = 16;
+  result = f.run(); CHECK_EQ(result.exitCode,1);
+  CHECK(result.diagnostic.find("raw failed: raw checks: process output cap exceeded") != result.diagnostic.npos);
+  if (result.keptWork) std::filesystem::remove_all(*result.keptWork);
+}

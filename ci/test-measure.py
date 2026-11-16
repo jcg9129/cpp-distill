@@ -27,6 +27,15 @@ class MeasurementTests(unittest.TestCase):
             digest, file = line.split("  ", 1)
             self.assertEqual(hashlib.sha256((root / file).read_bytes()).hexdigest(), digest, file)
 
+    def test_caide_expectation_table_covers_the_adapter_cases(self):
+        root = Path("tests/corpus/caide")
+        rows = [line.split(" | ") for line in (root / "README.md").read_text().splitlines()
+                if line.startswith("| `")]
+        names = [row[0].removeprefix("| `").removesuffix("`") for row in rows]
+        self.assertEqual(sorted(names), sorted(source.parent.name for source in measure.solutions(root)))
+        self.assertTrue(all(row[1] in {"pruned", "flat-with-reason", "error-with-reason", "raw-with-reason"}
+                            and row[2].strip(" |") for row in rows))
+
     def test_adversarial_selection_avoids_faults_and_refusals(self):
         sources = list(measure.solutions(Path("tests/cases/prune")))
         sources += list(measure.solutions(Path("tests/cases/pipeline")))

@@ -14,6 +14,9 @@ struct DistillOptions {
   bool compilerExplicit = true, strict = false;
   std::chrono::milliseconds stepTimeout{30000};
   std::size_t maxProcessOutput = 4 * 1024 * 1024;
+  // -E can expand standard headers far beyond the inline source. Per stream;
+  // separate from probes/builds. Same bound as the §3 inline-size limit.
+  std::size_t maxPreprocessOutput = 64 * 1024 * 1024;
   // Defaults to the OS temporary directory; tests may redirect it.
   std::optional<std::filesystem::path> temporaryRoot;
   std::function<void(std::string_view)> progress;
