@@ -510,6 +510,48 @@ never as a proven bug. If `raw` differs from the baseline, nothing is written
 
 No repair loop in the first version: a failed candidate falls back to `flat`.
 
+Clarifications from D2e (implementation, reviewed):
+
+- **No profile.** Resolution uses source-derived facts, A3 and the command's
+  effective dialect (including the compiler's probed default); it never
+  acquires the local compiler's predefined macros or integer model. Only the
+  satisfaction rerun uses the local configuration's observed facts.
+- **Observed configurations** become resolver states by the same rules as
+  snapshots (§4.3 "Facts", §4.5): a complete probe of a GCC version in the
+  special-builtin registry is exhaustive *for that configuration*, which is
+  not judge build provenance; unregistered versions use the approximate
+  allow-list. A3 is checked against its effective definitions; A5's local
+  counterpart is absence from its macro dump and special probes.
+- **`flat` options.** Keep the other local compile options; remove local
+  macro operations, dialect and user include paths; append the profile's
+  `-std` and full `flags` in order. A `check` compiler gets the profile's
+  `link`; the local fallback keeps local link options and reports the profile
+  link options it omitted. Every probe, preprocess and build argument vector
+  and cwd is recorded.
+- **Check compilers** whose probed triple isn't compatible with the profile's
+  are skipped and reported.
+- **First satisfying configuration is authoritative:** if `flat`'s
+  preprocess check or build fails there, `raw` is written; no further
+  compiler is searched.
+- **`target`** requires exact equality of ordinary macros and of every
+  registered special probe, compatible identity, triple and dialect, the
+  profile's full `flags` in order in the configuration, and no host-dependent
+  option in the command or the configuration.
+- **File identities** in the preprocess check: user files compare by
+  filesystem identity (shown by one original spelling); system headers
+  (marker flag 3) by spelled path.
+- **Limits:** each step's deadline covers all of its child processes and
+  evaluations, including every candidate configuration; production Clang
+  evaluations run in a bounded worker process. Process output is capped at
+  4 MiB per stream by default; each input file is read with a 64 MiB ceiling.
+- **Work files** live in a private directory under the system temporary
+  directory, never next to the sources; they are deleted unless `raw` fails.
+- **Assumptions** reported are rule dependencies, conservatively, not a
+  minimal set: `raw` reports the once-guard/recursion ones; `flat` adds the
+  provenance of the external facts used (A3/A4/A5) and A1/A2 when standard
+  headers take part; `target` adds A4.
+- **`--strict`** exits 3 for every result until D3, since none is `pruned`.
+
 ### 4.7 Pruning
 
 Runs on `flat.cpp` with the Clang parse of §4.2, **only if no unknown
@@ -637,6 +679,12 @@ reachability, `#endif` whether its block was resolved or kept; generated
 (class type)`, `name "lcm" at main.cpp:12`, `associated with Mint`,
 `never removed: operator`, `referenced by …`, `pinned: …`, `unreachable`),
 kept bytes per rule, locations in the original files.
+
+D2e: the report keeps the resolution's own provenance separate from the
+facts each configuration's rerun observed (matching decisions need not use
+equal values); an unreachable `#else` may report `dead region`; a rejected
+`flat` keeps its decisions in the report beside the rejection, and they
+certify nothing about the `raw` that was written.
 
 ## 5. Build and release
 
