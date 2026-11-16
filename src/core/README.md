@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D4b)
+# Core library (D2a–D5a)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -1114,3 +1114,67 @@ with `python3 -m unittest discover -s ci/matrix -p 'test_*.py'`. Each CLI invoca
 a 120-second deadline and each job has a 90-minute deadline. This workflow must
 run in CI: local LLVM-free tests and script checks cannot establish SDK linkage,
 resource independence, GCC/Clang parsing or platform portability.
+
+## D5a releases and version identity
+
+[`release.yml`](../../.github/workflows/release.yml) builds on a `v*` tag or a
+manual dispatch. To exercise it from a branch without creating a release:
+
+```sh
+gh workflow run release.yml --ref YOUR_BRANCH -f dry_run=true
+```
+
+The workflow must first be registered on the default branch. Dry runs execute
+all five SDK builds, audits, moved-CLI GCC smoke checks, AlmaLinux 8 checks on
+both Linux architectures, archives, checksums and source-linked notes. The
+entire publishing job is skipped. A branch dry run uses
+`0.0.0-dev+<12-character-commit>`; a tag `v0.1.0` builds version `0.1.0`.
+A non-dry branch dispatch is rejected. Publishing alone has `contents: write`;
+HTTP error bodies are printed, including the previously observed release-API
+403. Publishing is a separate CI action and has not been exercised locally.
+
+`ci/matrix/build.py --release` reuses the existing matrix SDK, compiler,
+platform/runtime flags and two-worker limit. It injects the identity and records
+SDK acquisition checksums, checksum-verified SDK measurements/source identity,
+actual Ninja compile/link commands, compiler flags and UTC build date before
+isolation deletes the SDK/build/downloads. Normal matrix behavior is unchanged.
+Only `distill` is built/shipped for releases: its `--internal-condition` and
+`--internal-prune` modes re-invoke the same executable. The standalone
+`distill_prune_worker` remains a test/matrix target.
+
+Archives include that executable, `LICENSE`, `README.md`,
+`THIRD_PARTY_NOTICES.md`, `LLVM-LICENSE.txt` and `BUILDINFO.txt`. They use
+`distill-<version>-<platform>.tar.gz` (Windows `.zip`), with a same-named root
+directory. `SHA256SUMS` covers exactly the five archives. Source-linked release
+notes and platform JSON provenance are also retained in the CI bundle. A
+publisher verifies the existing tag's commit and archive checksums, creates a
+draft, uploads all assets, then makes it public; existing releases are never
+replaced. Dry runs upload workflow artifacts only.
+
+`--version` is parsed by LLVM-free core code and returns before compiler probes
+or input/output work. CMake cache strings `DISTILL_VERSION`, `DISTILL_COMMIT`,
+`DISTILL_LLVM_REVISION` default to `0.0.0-dev`, `unknown`, `unknown`:
+
+```sh
+cmake -S . -B build -G Ninja -DDISTILL_VERSION=0.1.0 \
+  -DDISTILL_COMMIT=0123456789abcdef -DDISTILL_LLVM_REVISION=llvmorg-23.1.5
+```
+
+With the pinned SDK additionally set `DISTILL_LLVM_DIR` as described above to
+build the actual CLI. It prints
+`distill 0.1.0 (commit 0123456789abcdef; LLVM llvmorg-23.1.5)`.
+The generated identity header is private to core; tests exercise option parsing
+without linking LLVM. Release packaging requires the moved executable's exact
+version output to match its provenance. License/notice hashes are recorded in
+`ci/release/licenses.json`; `LLVM-LICENSE.txt` is the byte-identical upstream
+`llvmorg-23.1.5/llvm/LICENSE.TXT`, including the LLVM exception and legacy text.
+
+Run release harness self-tests with:
+
+```sh
+python3 -m unittest discover -s ci/release -p 'test_*.py'
+```
+
+macOS 14.0 minos is audited on macos-15/macOS-15 Intel; no macOS 14 execution
+claim is made. Full SDK linking, portability gates and manual dispatch remain
+CI-only; the local editing environment must never link LLVM.

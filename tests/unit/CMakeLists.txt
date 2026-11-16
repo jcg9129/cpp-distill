@@ -6,6 +6,10 @@ if(WIN32)
 endif()
 add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp resolve_test.cpp validate_test.cpp prune_test.cpp render_test.cpp pipeline_test.cpp)
 target_link_libraries(distill_unit_tests PRIVATE distill_core distill_test_evaluate)
+target_compile_definitions(distill_unit_tests PRIVATE
+  DISTILL_EXPECTED_VERSION="${DISTILL_VERSION}"
+  DISTILL_EXPECTED_COMMIT="${DISTILL_COMMIT}"
+  DISTILL_EXPECTED_LLVM_REVISION="${DISTILL_LLVM_REVISION}")
 target_compile_definitions(distill_unit_tests PRIVATE DISTILL_EXTENSION_DATA="${PROJECT_SOURCE_DIR}/data/extensions" DISTILL_PROFILE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/profile" DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
 add_dependencies(distill_unit_tests distill_test_helper)
 add_test(NAME unit COMMAND distill_unit_tests)

@@ -30,7 +30,8 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D3 pruning | D3a–D3d implemented: analysis, rendering, adversarial/checker cases, corpus measurement harness and first-measurement fixes; complete except user corpus measurement, pending SDK CI verification |
 | D4a runtime CLI and caide port | implemented: repeated `--verify-run`, individual assertions/reviews for all 81 caide cases; real CLI/extraction execution requires SDK CI |
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
-| D4 remainder–D5 | remaining checker/release work; see design §7 |
+| D5a release packaging/docs | implemented: five-platform release/dry-run workflow, build identity, licenses/notices and user README; real dispatch and SDK validation remain CI-only |
+| D4/D5 remainder | remaining checker/corpus work and first tagged release; see design §7 |
 
 ## D1 findings (2026-11-15)
 
@@ -298,7 +299,8 @@ all five `llvm-23.1.5-1` SDK platforms. It follows the D1 build toolchains,
 statically linked runtimes and resource embedding already in CMake; it changes
 no required job or ruleset. PR path filters, weekly runs and manual dispatch
 exercise moved CLI binaries after deletion of SDK/build/downloads. macOS arm64
-runs on macos-14 to cover the actual deployment minimum. Linux x86_64 reuses
+runs on macos-15 and audits minos 14.0; macos-14 is unavailable, so actual
+execution at that minimum remains untested. Linux x86_64 reuses
 the AlmaLinux 8 entry point with its system GCC.
 
 `ci/matrix/` checks real CLI help, no-prune/default pruning, a typical library,
@@ -317,3 +319,31 @@ logs/reports are uploaded and summarized even on failures. See
 [`src/core/README.md`](../src/core/README.md#d4b-compatibility-matrix) for dispatch,
 coverage, adapter limits and acceptance rules. Local validation is LLVM-free;
 SDK linkage and every platform observation remain for the first CI run.
+
+
+## D5a release workflow, identity and distribution docs (2026-11-16)
+
+- `release.yml` builds all five matrix toolchains on `v*` tags or manual
+  dispatch. `dry_run=true` (default) runs build/audit/moved-binary GCC smoke,
+  AlmaLinux 8 on both Linux architectures, packaging, checksums and release-note
+  preparation; the publishing job and its write permission are skipped entirely.
+- `--version` is parsed in LLVM-free core code. CMake injects version, commit
+  and LLVM revision; local defaults are `0.0.0-dev` / `unknown`. The CLI returns
+  before any probes, and packaging checks its exact output.
+- Release mode reuses matrix scripts, static runtimes and the existing binary
+  dependency/minimum-OS gates. It preserves SDK/source checksums, verified SDK
+  dependency settings, compiler/flags, actual link commands and UTC build date
+  before deleting SDK/build/downloads. The CLI re-invokes itself, so archives
+  contain one executable plus the README, licenses/notices and BUILDINFO.
+- The user README documents implemented options/results, profiles and conservative
+  refusals, GCC/platform requirements, assumptions A1–A6 and corresponding source.
+  LLVM's complete upstream license and bundled support/runtime notices are shipped;
+  source links cover the distill tag and SDK's unmodified llvm-project archive.
+- Publishing alone has `contents: write`, validates the existing tag, uploads
+  checksummed assets to a draft then finalizes it, and prints HTTP failure bodies.
+  The earlier release-API 403 remains unresolved; dry runs never call that API.
+- Local normal/fork suites and release/script/workflow validation are recorded
+  in `D5A-SUMMARY.md`. No publishing, tags, PRs, commits or LLVM links were run.
+  First five-platform dispatch, dependency/link observations and actual release
+  remain CI-only. Approved design v8 is unchanged; proposed wording records that
+  macos-14 is unavailable and minos 14.0 is audited on macos-15 instead.

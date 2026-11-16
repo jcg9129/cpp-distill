@@ -1,6 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.24)
 project(cpp_distill LANGUAGES CXX)
+set(DISTILL_VERSION "0.0.0-dev" CACHE STRING "distill release version")
+set(DISTILL_COMMIT "unknown" CACHE STRING "distill source commit")
+set(DISTILL_LLVM_REVISION "unknown" CACHE STRING "LLVM source revision")
+foreach(IDENTITY DISTILL_VERSION DISTILL_COMMIT DISTILL_LLVM_REVISION)
+  if(NOT "${${IDENTITY}}" MATCHES "^[A-Za-z0-9._+-]+$")
+    message(FATAL_ERROR "Invalid ${IDENTITY}: use a version, revision or commit identifier")
+  endif()
+endforeach()
+configure_file(cmake/BuildVersion.h.in generated/distill_build_version.h @ONLY)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -54,6 +63,7 @@ if(MSVC)
     PROPERTIES COMPILE_OPTIONS /bigobj)
 endif()
 target_include_directories(distill_core PUBLIC src)
+target_include_directories(distill_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(distill_core PUBLIC Threads::Threads)
 if(DISTILL_HAVE_ADDCHDIR_NP AND NOT DISTILL_FORCE_FORK_SPAWN)
   target_compile_definitions(distill_core PRIVATE DISTILL_HAVE_ADDCHDIR_NP=1)
@@ -110,6 +120,14 @@ if(DISTILL_LLVM_DIR)
   target_link_libraries(distill_prune_worker PRIVATE distill_clang)
   add_executable(distill src/cli/main.cpp)
   target_link_libraries(distill PRIVATE distill_clang)
+  file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/distill-toolchain.txt" CONTENT
+"Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} (${CMAKE_CXX_COMPILER})
+Flags: ${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_RELEASE}
+Compile options: $<TARGET_PROPERTY:distill,COMPILE_OPTIONS>
+Link options: $<TARGET_PROPERTY:distill,LINK_OPTIONS>
+MSVC runtime: ${CMAKE_MSVC_RUNTIME_LIBRARY}
+macOS deployment target: ${CMAKE_OSX_DEPLOYMENT_TARGET}
+")
   if(UNIX AND NOT APPLE)
     target_link_options(distill PRIVATE -static-libstdc++ -static-libgcc)
     target_link_options(distill_prune_worker PRIVATE -static-libstdc++ -static-libgcc)

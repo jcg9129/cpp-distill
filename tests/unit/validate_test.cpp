@@ -46,6 +46,18 @@ TEST(validate_cli_options) {
   auto r = parseDistillOptions({"--no-prune", "-o", "out.cpp", "--strict", "main.cpp"}); CHECK(r.ok());
   CHECK(!r.value().compilerExplicit); CHECK(r.value().strict); CHECK_EQ(r.value().compile.front(), "g++");
   CHECK(parseDistillOptions({"--help"}).value().help);
+  CHECK(parseDistillOptions({"--version"}).value().version);
+  CHECK(parseDistillOptions({"-v", "--version"}).value().compile.empty());
+  CHECK(!parseDistillOptions({"--version=1"}).ok());
+  CHECK_EQ(parseDistillOptions({"g++", "--version"}).value().compile,
+           (std::vector<std::string>{"g++", "--version"}));
+  CHECK(distillHelp().find("--version") != std::string::npos);
+  CHECK(distillVersion().starts_with("distill "));
+  CHECK(distillVersion().find(" (commit ") != std::string::npos);
+  CHECK(distillVersion().find("; LLVM ") != std::string::npos);
+  CHECK(distillVersion().ends_with(")\n"));
+  CHECK_EQ(distillVersion(), std::string("distill ") + DISTILL_EXPECTED_VERSION +
+      " (commit " + DISTILL_EXPECTED_COMMIT + "; LLVM " + DISTILL_EXPECTED_LLVM_REVISION + ")\n");
   auto defaults = parseDistillOptions({"--keep","first","--keep","second","--strip-comments","main.cpp"});
   CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(defaults.value().stripComments);
   CHECK_EQ(defaults.value().keep,(std::vector<std::string>{"first","second"}));

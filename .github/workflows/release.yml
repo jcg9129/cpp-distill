@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, audit, smoke-test and package without creating a GitHub release
+        type: boolean
+        default: true
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    name: release (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+          # macos-14 is unavailable; audit minos 14.0 on macos-15.
+          - platform: macos-arm64
+            runner: macos-15
+          - platform: macos-x86_64
+            runner: macos-15-intel
+          - platform: windows-x86_64
+            runner: windows-2025
+    env:
+      SDK_PLATFORM: ${{ matrix.platform }}
+      SDK_CONTAINER: ${{ matrix.container }}
+      GITHUB_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - if: runner.os != 'Linux'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@a102174a2b586eec2ea151a69e6fd14404a8ce7c # v1.13.0
+        with:
+          arch: x64
+      - name: Prepare release identity (read-only)
+        shell: bash
+        run: python ci/release/release.py prepare
+      - name: Release harness self-tests (LLVM-free, no publishing)
+        shell: bash
+        run: python -m unittest discover -s ci/release -p 'test_*.py'
+      - name: Acquire SDK and build CLI (manylinux, matrix toolchain)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ci/llvm/in-container.sh "$SDK_CONTAINER" bash ci/matrix/linux.sh build-release
+      - name: Acquire SDK and build CLI (native, matrix toolchain)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check cmake==3.31.6 ninja==1.13.0
+          python ci/matrix/build.py --platform "$SDK_PLATFORM" --release
+      - name: Move CLI, delete SDK, downloads and build (manylinux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ci/llvm/in-container.sh "$SDK_CONTAINER" bash ci/matrix/linux.sh isolate-release
+      - name: Move CLI, delete SDK, downloads and build (native)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: python ci/matrix/build.py --platform "$SDK_PLATFORM" --isolate --release
+      - name: Dynamic-dependency and minimum-OS audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          suffix=''
+          if [[ $RUNNER_OS == Windows ]]; then suffix=.exe; fi
+          python ci/llvm/binary-audit.py "isolated/distill$suffix" --output results/cli-audit.json
+      - name: Ubuntu system GCC smoke (moved binary)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: python3 ci/matrix/smoke.py --platform "$SDK_PLATFORM" --label ubuntu --compiler /usr/bin/g++ --smoke-only
+      - name: AlmaLinux 8 system GCC and glibc 2.28 (both architectures)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash ci/llvm/alma-smoke.sh --cli
+      - name: Homebrew GCC smoke and Apple default refusal
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash ci/matrix/macos-gcc.sh --smoke-only
+      - name: MSYS2 MinGW GCC smoke including Unicode paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:\msys64\usr\bin\bash.exe -lc 'pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-gcc'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          python ci/matrix/smoke.py --platform $env:SDK_PLATFORM --label mingw-ucrt64 --compiler C:/msys64/ucrt64/bin/g++.exe --smoke-only
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Package the audited CLI, documents and build provenance
+        shell: bash
+        run: python ci/release/release.py package --platform "$SDK_PLATFORM"
+      - name: Platform archives and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-platform-${{ matrix.platform }}
+          path: release-assets/
+          compression-level: 0
+          if-no-files-found: error
+      - name: Preserve release evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d isolated/evidence ]]; then cp -R isolated/evidence results/alma; fi
+      - name: Build, audit and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence-${{ matrix.platform }}
+          path: results/
+          if-no-files-found: warn
+      - name: Delete CI builds and downloads
+        if: always()
+        shell: bash
+        run: |
+          if [[ $RUNNER_OS == Linux ]]; then
+            sudo rm -rf spike-work isolated
+          else
+            rm -rf spike-work isolated
+          fi
+  assemble:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          # Match archives only, never release-evidence-*.
+          pattern: release-platform-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify all five identities, write SHA256SUMS and source-linked notes
+        run: python3 ci/release/release.py collect
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-bundle
+          path: release-assets/
+          compression-level: 0
+          if-no-files-found: error
+  publish:
+    # Branch dry runs skip this entire job, including its write token.
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || !inputs.dry_run)
+    needs: assemble
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-bundle
+          path: release-assets
+      - name: Create release and upload assets (print HTTP error bodies)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci/release/publish.py

@@ -19,6 +19,6 @@ fi
 status=0
 for compiler in "${selected[@]}"; do
   python3 ci/matrix/smoke.py --platform "$SDK_PLATFORM" --compiler "$compiler" \
-    --label "homebrew-${compiler##*/}" --apple-default || status=1
+    --label "homebrew-${compiler##*/}" --apple-default "$@" || status=1
 done
 exit "$status"
