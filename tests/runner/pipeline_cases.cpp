@@ -3,6 +3,8 @@
 #include "core/path.h"
 #include "evaluate.h"
 #include "profile.h"
+#include "library_features.h"
+#include "core/render/render.h"
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -94,12 +96,15 @@ void inject(const ProcessSpec& spec, const std::string& fault) {
     }
   }
 }
+#include "checker_cases.h"
 int run(int argc, char** argv) {
   const auto gcc = testing::testGcc();
   if (!gcc) { std::cout << "SKIP pipeline cases: GCC unavailable\n"; return 0; }
-  const bool cli = argc == 3 && std::string_view(argv[1]) == "--cli";
-  const bool worker = argc == 3 && std::string_view(argv[1]) == "--worker";
-  const auto workerPath = worker ? std::filesystem::absolute(pathFromUtf8(argv[2])) : std::filesystem::path{};
+  const bool models = argc == 2 && std::string_view(argv[1]) == "--checker-models";
+  const bool d3c = argc == 4 && std::string_view(argv[3]) == "--d3c";
+  const bool cli = argc >= 3 && std::string_view(argv[1]) == "--cli";
+  const bool worker = argc >= 3 && std::string_view(argv[1]) == "--worker";
+  const auto workerPath = models ? std::filesystem::current_path() / "synthetic-worker" : worker ? std::filesystem::absolute(pathFromUtf8(argv[2])) : std::filesystem::path{};
   const auto binary = cli ? std::filesystem::absolute(pathFromUtf8(argv[2])) : std::filesystem::path{};
   Temp temp;
   auto evaluator = testing::testEvaluator(temp.path);
@@ -110,6 +115,7 @@ int run(int argc, char** argv) {
   std::sort(dirs.begin(), dirs.end());
   for (const auto& dir : dirs) {
     const auto name = pathToUtf8(dir.filename());
+    std::string caseDiagnostics, caseReport;
     try {
       const auto cwd = temp.path / dir.filename(); std::filesystem::create_directory(cwd);
       for (const auto& e : std::filesystem::recursive_directory_iterator(dir)) {
@@ -119,13 +125,25 @@ int run(int argc, char** argv) {
       }
       const auto expected = metadata(read(cwd / "expect.txt"));
       auto value = [&](const char* key) { const auto f = expected.find(key); return f == expected.end() ? std::string{} : f->second; };
+      if (models && value("checker").empty()) continue;
+      if (!models && d3c != (value("milestone") == "D3c")) continue;
+      if ((value("requires") == "formatter" || value("requires") == "chrono_parse") &&
+          !take(testing::libraryFeature(value("requires"),*gcc,temp.path))) {
+        std::cout << "SKIP " << name << ": local library lacks " << value("requires") << '\n'; continue;
+      }
+      if (value("requires") == "lp64" && !fixture.triple.starts_with("x86_64-") && !fixture.triple.starts_with("aarch64-")) {
+        std::cout << "SKIP " << name << ": requires LP64\n"; continue;
+      }
+      if (value("requires") == "lp64" && fixture.triple.find("mingw") != fixture.triple.npos) {
+        std::cout << "SKIP " << name << ": requires LP64\n"; continue;
+      }
       if (value("requires") == "linux" && fixture.triple.find("linux") == fixture.triple.npos) {
         std::cout << "SKIP " << name << ": requires Linux GCC\n"; continue;
       }
       if (value("requires") == "x86_64" && !fixture.triple.starts_with("x86_64-")) {
         std::cout << "SKIP " << name << ": requires x86_64 GCC\n"; continue;
       }
-      if (value("prune") == "yes" && !cli && !worker) {
+      if (value("prune") == "yes" && !cli && !worker && !models) {
         std::cout << "SKIP " << name << ": requires SDK pruning worker\n"; continue;
       }
       if (cli && value("api") == "yes") {
@@ -186,7 +204,8 @@ int run(int argc, char** argv) {
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? "fixture.toml" : value("profile")); }
         s.argv.insert(s.argv.end(), command.begin(), command.end());
         s.timeout = std::chrono::seconds(30);
-        const auto r = take(runProcess(s)); check(!r.timedOut && !r.stdoutTruncated && !r.stderrTruncated, "CLI limit");
+        const auto r = take(runProcess(s)); caseDiagnostics += r.stderrText;
+        check(!r.timedOut && !r.stdoutTruncated && !r.stderrTruncated, "CLI limit");
         code = r.exitCode; diagnostic = r.stderrText; report = read(cwd / "report.txt");
         if (value("kept") == "yes") {
           const std::string marker = "work files kept at ";
@@ -240,6 +259,7 @@ int run(int argc, char** argv) {
       } else {
         auto cmd = take(parseCompileCommand(command, cwd));
         DistillOptions o; o.noPrune = value("prune") != "yes"; o.pruningWorker = workerPath;
+        if (!value("checker").empty()) o.temporaryRoot = temp.path;
         o.stripComments = value("strip") == "yes";
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (value("prune") == "yes" || value("samples") == "yes") {
@@ -253,6 +273,27 @@ int run(int argc, char** argv) {
         const auto workRoot = o.temporaryRoot.value_or(std::filesystem::temp_directory_path());
         std::map<std::string, std::string> builtInputs;
         std::filesystem::path workPath;
+        ProcessRunner caseRunner = [&](const ProcessSpec& spec) -> Result<ProcessResult> {
+          if (models && spec.argv.size() == 3 && spec.argv[1] == "--internal-prune") {
+            auto m = take(parsePruningModel(read(pathFromUtf8(spec.argv[2]))));
+            for (const auto& [key,text] : expected) if (key.starts_with("model.")) {
+              const auto start = m.text.find(text); check(start != m.text.npos,"synthetic family text missing: " + key);
+              PruneFamily f; f.label = key.substr(6); f.names = {f.label.substr(f.label.rfind("::") == f.label.npos ? 0 : f.label.rfind("::")+2)};
+              f.ranges = {{start,start+text.size()}}; f.root = "test-only model root";
+              m.families.push_back(std::move(f));
+            }
+            ProcessResult r; r.exitCode = 0; r.stdoutText = take(serializePruningModel(m)); return r;
+          }
+          auto r = runProcess(spec);
+          if (!r.ok() || !r.value().stderrText.empty() || spec.argv.size() == 1) {
+            std::ostringstream detail; detail << "cwd=" << spec.cwd << " argv=";
+            for (const auto& a : spec.argv) detail << ' ' << std::quoted(a);
+            detail << '\n' << (r.ok() ? r.value().stderrText : r.error().message) << '\n';
+            if (r.ok() && spec.argv.size() == 1) detail << "exit=" << r.value().exitCode << " stdout:\n" << r.value().stdoutText << '\n';
+            caseDiagnostics += detail.str();
+          }
+          return r;
+        };
         auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
@@ -271,7 +312,7 @@ int run(int argc, char** argv) {
               if (p.filename() == "flat.cpp") builtInputs["flat"] = read(p);
               if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
             }
-          auto process = runProcess(spec);
+          auto process = caseRunner(spec);
           // Test-only bad analysis: remove a user-pasted callee's positive AST
           // and dependent-name edges. Raw tokens deliberately cannot name it.
           if ((value("fault") == "prune-build" || value("fault") == "prune-run") &&
@@ -289,6 +330,9 @@ int run(int argc, char** argv) {
           }
           return process;
         }));
+        caseReport = result.report;
+        if (!value("checker").empty())
+          checkerCase(result,value("victim"),value("checker"),value("mutation"),value("witness"),cmd,o,*evaluator,caseRunner);
         code = result.exitCode; artifact = result.artifact; level = result.verification; report = result.report;
         if (result.keptWork) kept.path = *result.keptWork;
         if (!workPath.empty() && !result.keptWork) check(!std::filesystem::exists(workPath), "successful work was not removed");
@@ -323,6 +367,7 @@ int run(int argc, char** argv) {
           }
         }
       }
+      caseReport = report;
       check(code == std::stoi(value("exit")), "wrong exit: " + std::to_string(code) + "\n" + diagnostic);
       for (const auto& [key, line] : expected) if (key == "report" || key.starts_with("report."))
         check(report.find(line) != report.npos, "missing report line: " + line + "\n" + report);
@@ -339,7 +384,7 @@ int run(int argc, char** argv) {
         check(std::filesystem::equivalent(kept.path.parent_path(), std::filesystem::temp_directory_path()), "kept work is outside OS temp root");
       }
       ++passed; std::cout << "PASS " << name << '\n';
-    } catch (const std::exception& e) { ++failed; std::cerr << "FAIL " << name << ": " << e.what() << '\n'; }
+    } catch (const std::exception& e) { ++failed; std::cerr << "FAIL " << name << ": " << e.what() << '\n' << caseReport << caseDiagnostics; }
   }
   std::cout << passed << " passed, " << failed << " failed\n"; return failed ? 1 : 0;
 }

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Known cost: an unused overload stays with its used name family.
+kept chosen |
+removed unused | outside the retention closure

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# No A1-A6 violation: on old libraries a test-only system header models
+# the specified interface. Actual library builds are separately feature-gated.
+kept app::from_stream | ADL name (A6)

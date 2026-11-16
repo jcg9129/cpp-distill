@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Extraction-only model of [time.parse]'s unqualified from_stream call.
+#pragma once
+#include <istream>
+namespace std::chrono {
+template<class T> struct __distill_parse { const char* __fmt; T& __value; };
+template<class T> __distill_parse<T> parse(const char* fmt,T& value){return {fmt,value};}
+template<class T> istream& operator>>(istream& in,__distill_parse<T> p){return from_stream(in,p.__fmt,p.__value);}
+}

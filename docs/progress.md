@@ -27,7 +27,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
-| D3 pruning | D3a analysis/model/A6 registry and D3b rendering/invariants/stripping/pruned pipeline/CLI implemented; LLVM linking and real extraction/CLI runs remain CI-only; D3c adversarial expansion remains |
+| D3 pruning | D3a–D3c implemented: analysis, rendering, adversarial and checker-limit cases, measurement harness and 81-case caide corpus; complete except user corpus measurement, pending SDK CI verification |
 | D4–D5 | see design §7 |
 
 ## D1 findings (2026-11-15)
@@ -204,3 +204,32 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 - Local normal/fork test counts, SDK-only syntax checks, design ambiguities with
   proposed wording, and CI-only limits are recorded in root `D3B-SUMMARY.md`.
   `docs/design.md` remains unchanged. D3c retains the broader adversarial suite.
+
+
+## D3c adversarial cases, checker limits and measurements (2026-11-16)
+
+- Added direct retention/removal assertions and pipeline samples for structured
+  bindings, comparison/error/chrono/valarray customization, formatter/tuple/range
+  specializations, trivia-only references, overload aggregation and shared-line
+  `__LINE__`. Specialization pairs assert removal with the unused user type.
+  Missing format/chrono library APIs skip real builds while explicitly labelled
+  extraction-only standard-interface models keep their extraction assertions.
+- The test runner forces a selected union family out after retention, probes
+  each invariant independently, and uses the internal pipeline sample API for
+  build/run checks. Cases demonstrate build, static-name, rendering and runtime
+  catches plus LP64/LLP64 and unsampled-branch limits; an `x` witness demonstrates
+  the latter's runtime difference. LLVM-free explicit models test the mechanism
+  locally; real extraction and CLI checks remain in the unchanged resolver job.
+- Added the SDK-only measurement runner and bounded per-solution driver, producing
+  raw/flat/pruned byte counts, primary-rule/structural attribution, disable reasons
+  and diagnostics. Resolver CI measures eligible adversarial fixtures and all 81
+  copied caide case directories, and uploads TSV/Markdown/log artifacts. Original
+  sources are hashed and licensed; expected-output assertions remain the D4 port.
+- `tests/corpus/user/` documents where the user will supply their library and
+  solutions. D3 is complete except this user corpus measurement, subject to SDK
+  CI checks; local verification cannot establish real extraction/CLI behavior.
+- PBDS remains not covered in both GCC releases. Full transitive call, macro and
+  inactive-branch classification for user-associated arguments is still needed;
+  the existing refusal is retained, with no unsupported coverage claim.
+- Root `D3C-SUMMARY.md` records local checks, case counts, CI-only checks and
+  proposed design wording. Approved design v8 is unchanged.

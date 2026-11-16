@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept app::make_error_code | ADL name (A6)
+kept app::make_error_condition | ADL name (A6)
+kept std::is_error_code_enum |
+kept std::is_error_condition_enum |
+removed unused | outside the retention closure

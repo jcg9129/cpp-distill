@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Extraction-only model of standard interfaces. No runtime implementation.
+#pragma once
+#include <string>
+namespace std {
+struct format_context;
+template<class T, class Char = char> struct formatter {
+  char* format(T,format_context&) const;
+};
+template<class... Args> string format(const char*,Args&&...);
+}

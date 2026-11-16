@@ -19,3 +19,11 @@ ext/* | not-covered | No standard-only A6 certificate for other extensions.
 # particular it did not prove which arguments can carry user-associated
 # namespaces. Therefore PBDS is explicitly NOT covered in either release;
 # inclusion disables pruning. No additional GNU hook names are certified.
+# D3c disposition (2026-11-16): no complete certificate was established.
+# Remaining work in EACH release: inventory all transitive PBDS includes and
+# inactive/macro-generated call sites; separate member/policy invocation from
+# free unqualified calls; trace arguments carrying comparators, hash functors,
+# key/mapped types and node-update policy namespaces; check whether every free
+# name is already a retained operator/A6 hook or needs an extension hook.
+# tree_order_statistics_node_update alone is not a certificate for other
+# policy combinations. Keep the ext/pb_ds/* refusal until that audit is complete.

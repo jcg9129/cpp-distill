@@ -1,0 +1,1 @@
+g++ -std=gnu++20 -O0 -fdelayed-template-parsing main.cpp

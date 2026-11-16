@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed std::tuple_size | outside the retention closure
+removed std::tuple_element | outside the retention closure
+removed std::ranges::enable_borrowed_range | outside the retention closure
+removed UserRange | outside the retention closure

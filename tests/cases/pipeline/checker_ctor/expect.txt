@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run must catch the missing constructor stdout on the empty sample.
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+milestone=D3c
+api=yes
+checker=run
+victim=announced
+model.Printer=struct Printer { Printer(){std::puts("constructor");} };
+model.announced=Printer announced;
+model.main=int main(){return 0;}

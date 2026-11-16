@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept std::tuple_size | associated with UserRange
+kept std::tuple_element | associated with UserRange
+kept std::ranges::enable_borrowed_range | associated with UserRange
+kept UserRange |

@@ -783,7 +783,7 @@ All required core jobs run the hand-built pruning unit models, including an
 exhaustive 4,096 graph/root closure table and worker-protocol failure cases.
 The unchanged `resolver (linux, clang)` job additionally builds the extraction
 worker and runs `prune_extract_models` (29 model/ownership cases) and
-`prune_extract_cases` (29 cases) under CTest's 120-second timeout. Cases
+`prune_extract_cases` (42 cases) under CTest's 120-second timeout. Cases
 live in `tests/cases/prune/<name>/`: `main.cpp` is the immutable extraction
 input, `expect.txt` contains `kept <qualified-label> | <reason substring>`,
 `removed <qualified-label> | <reason substring>`, or `disabled | <reason>`.
@@ -860,3 +860,75 @@ fault is API-only until D4. Fault hooks remain in the test runner, without a
 product flag. Every case continues after failures with its complete diagnostic.
 The unchanged resolver CI job runs these plus the existing extraction suites;
 its diagnostic rerun includes pipeline and CLI cases as well as extraction.
+
+D3c adds 13 extraction fixtures (42 total) and 22 pipeline fixtures (61 total),
+including seven checker fixtures. They cover structured-binding `get`, comparison
+and error-conversion hooks, chrono `from_stream`, valarray mathematics, formatter,
+tuple and range-variable specializations, trivia-only mentions, overload families
+and shared-line `__LINE__`. Both positive and negative specialization associations
+are asserted. An unused overload remains with a used overload: this is a known
+size cost of treating the overload set as one family. Extraction expectations
+apply their fate to **every** family with the requested label, so one retained
+overload cannot hide an incorrectly removed sibling.
+
+`library_features.h` probes `<format>` and chrono parsing independently of fixture
+sources. Missing local APIs skip only their pipeline builds. Extraction still
+parses the actual user customization code against minimal standard-interface
+headers in `tests/support/pruning/`, inserted as system headers only for that
+probe's missing feature. These models use specified/reserved names and the
+specified `from_stream` ADL mechanism, staying within A1–A6. Model results are
+labelled `MODEL`; they do not certify an implementation of the missing library.
+The measurement corpus always uses the real system headers.
+
+`tests/runner/checker_cases.h` is a test-runner-only hook. It copies the completed
+retention result, asserts the chosen family was retained, then forces its entire
+union component out. Independent probes run the rendering and static invariants,
+then compile forced bytes through a second pipeline run. The runner restores the
+source file immediately after that compiler invocation, leaving the forced
+executable for the pipeline's internal sample API to compare. This isolates the
+build/run probes from the separate checked-file tamper guard. No product flag,
+environment override or production pipeline callback was added.
+
+`checker=` in expect.txt names `build`, `static-invariant`,
+`rendering-invariant`, `run`, or `none`; the comment explains why. Checks are
+independent: the called-function fixture also fails the static invariant, while
+the unused macro's name must pass build/run and fail the static invariant.
+Rendering fixtures simulate an extra deleted token and a shifted logical line.
+The constructor fixture compares stdout on an empty sample. The LP64 iterator
+fixture demonstrates a local limit despite its A6 retention obligation; the
+pasted branch helper demonstrates a sample limit, with a separate `x` witness
+that must fail runtime comparison. Neither limit violates A1–A6.
+
+`distill_pipeline_cases --checker-models` runs these checker mechanisms without
+LLVM using explicit, fixture-owned `model.<label>=<source fragment>` family
+ranges. These synthetic models root their families before forced removal; they
+do not establish extraction correctness. SDK tests use actual extracted models
+and actual retention reasons. D3c SDK cases have `milestone=D3c` and run with
+`--d3c` in separate CTest entries to keep each test under 120 seconds. As before,
+every failing case is reported and the runners continue; full bounded worker
+and compiler stderr is retained for failure diagnostics.
+
+`distill_measure --measure <worker> <source-or-directory> <table.tsv>` runs the
+pipeline without sample execution and records one row per solution: selected
+artifact/verification, raw/flat/attempted-pruned bytes, unique family bytes by
+primary rule (1–5), separate structural bytes, pruning-disable reasons
+and diagnostics. An unreached stage is `-`, never an invented zero. Failed
+baselines and unsupported inputs remain error rows; worker/protocol failures
+also fail the harness. Family aggregation follows its immediate cause for primary rule attribution.
+Failed candidate attribution remains analysis, not
+certification of the selected fallback. There are no expected-output assertions.
+
+`ci/measure.py` drives this SDK-only mode with one `timeout 120` invocation per
+source, continues after failures, and writes TSV, Markdown and complete bounded
+diagnostic logs. The unchanged `resolver (linux, clang)` job measures eligible
+pruning/pipeline fixtures and `tests/corpus/caide/`, then uploads both tables and
+logs as `d3-pruning-measurements`. Fault, checker and explicit refusal fixtures
+are excluded from size measurements. Corpus rows may legitimately fail or fall
+back; their expected outputs belong to the D4 port.
+
+`tests/corpus/caide/` contains all 81 directories copied from the user's GPL-3.0
+caide fork, original-file hashes and documented compile/source adapters.
+`tests/corpus/user/` is a placeholder for the user's library and solved problems;
+its measurement remains the one outstanding D3 completion item. PBDS is still
+explicitly not covered: an exhaustive GCC 14.2/15.2 transitive lookup audit has
+not been completed, so inclusion continues to disable pruning.

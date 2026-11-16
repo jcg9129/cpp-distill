@@ -12,11 +12,20 @@ cmake --build build-resolver -j2
 # Includes the thin CLI, shared pipeline cases through its real binary, and
 # CLI help/option errors, and both pruning extraction model/case suites.
 # All subprocess/test deadlines remain bounded.
+status=0
 if ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1; then
-  exit 0
+  :
 else
   status=$?
   # Preserve the original failure even if the diagnostic rerun passes.
-  ctest --test-dir build-resolver -R 'prune_extract|pipeline|cli_options' --output-on-failure -V --timeout 120 -j1 || true
-  exit "$status"
+  ctest --test-dir build-resolver -R 'prune_extract|pipeline|checker|cli_options' --output-on-failure -V --timeout 120 -j1 || true
 fi
+# Each solution gets its own 120-second runner deadline. Keep the observations
+# outside build-resolver so the EXIT cleanup leaves workflow artifacts intact.
+python3 ci/measure.py --runner build-resolver/tests/runner/distill_measure \
+  --worker build-resolver/distill_prune_worker \
+  --root tests/cases/prune --root tests/cases/pipeline --output measurements/adversarial || status=1
+python3 ci/measure.py --runner build-resolver/tests/runner/distill_measure \
+  --worker build-resolver/distill_prune_worker \
+  --root tests/corpus/caide --output measurements/caide || status=1
+exit "$status"

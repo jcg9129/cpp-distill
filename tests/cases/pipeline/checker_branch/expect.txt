@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# none: sample a misses the x branch; user-only pasting hides the helper name from the static check. No A1-A6 violation.
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+milestone=D3c
+api=yes
+checker=none
+victim=branch_helper
+sample=a
+witness=x
+model.branch_helper=int branch_helper(int){return 1;}
+model.branch=template<class T> int branch(T x){if constexpr(requires{JOIN(branch_,helper)(x);}) return JOIN(branch_,helper)(x); else return 0;}
+model.main=int main(){return std::getchar()=='x' ? branch(0) : 0;}

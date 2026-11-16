@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept app::abs | ADL name (A6)
+kept app::sqrt | ADL name (A6)
+removed unused | outside the retention closure

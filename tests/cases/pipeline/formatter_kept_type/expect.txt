@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+milestone=D3c
+requires=formatter
+contains=struct formatter<Value>

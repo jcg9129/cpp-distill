@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept app::Pair | name: Pair
+kept app::get | ADL name (A6)
+kept std::tuple_size |
+kept std::tuple_element |
+removed unused | outside the retention closure
