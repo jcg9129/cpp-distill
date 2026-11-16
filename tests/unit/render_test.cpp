@@ -163,3 +163,57 @@ TEST(render_repeated_presumed_locations_stay_distinct) {
   CHECK_EQ(render(m,{{0,10}}).provenance.text,
            "#line 1 \"a.cpp\"\nint second;\n#line 1 \"a.cpp\"\nint third;\n");
 }
+TEST(render_removes_empty_namespace_shells_inside_out) {
+  for (const auto& text : {
+      "namespace outer { namespace inner { int dead; } }\n",
+      "namespace outer { inline namespace version { int dead; } }\n",
+      "namespace outer::inner { int dead; }\n",
+      "namespace outer::inline inner { int dead; }\n",
+      "namespace { namespace { int dead; } }\n"}) {
+    auto m = source(text);
+    const auto begin = m.text.find("int dead;");
+    CHECK_EQ(render(m,{{begin,begin+9}}).provenance.text,"");
+    // The flat rendering still owns every original token.
+    CHECK(take(renderSource(m)).provenance.text.find("namespace") != std::string::npos);
+  }
+  CHECK_EQ(render(source("namespace n {}\nnamespace n {}\n"),{}).provenance.text,"");
+}
+TEST(render_preserves_named_namespace_uses_and_live_contents) {
+  for (const auto& use : {"using namespace n;", "namespace alias = n;", "int x = n::x;"}) {
+    const auto text = std::string("namespace n { int dead; }\n") + use + '\n';
+    const auto begin = text.find("int dead;");
+    const auto out = render(source(text),{{begin,begin+9}}).provenance.text;
+    CHECK(out.find("namespace n {") != std::string::npos);
+    CHECK(out.find(use) != std::string::npos);
+    CHECK(out.find("dead") == std::string::npos);
+  }
+  const auto text = "namespace outer { namespace inner {} }\nusing namespace outer::inner;\n";
+  CHECK(render(source(text),{}).provenance.text.find("namespace inner") != std::string::npos);
+  CHECK(render(source("namespace { int live; }\n"),{}).provenance.text.find("namespace {") != std::string::npos);
+  CHECK(render(source("inline namespace n {}\nusing namespace n;\n"),{}).provenance.text.find("inline namespace n") != std::string::npos);
+  const std::string reopened = "namespace n { int x; }\nnamespace n { int dead; }\nint f(){return n::x;}\n";
+  const auto begin = reopened.find("int dead;");
+  const auto out = render(source(reopened),{{begin,begin+9}}).provenance.text;
+  const auto first = out.find("namespace n {");
+  CHECK(first != out.npos && out.find("namespace n {",first+1) != out.npos);
+}
+TEST(render_namespace_names_ignore_deleted_uses_comments_and_literals) {
+  const std::string text = "namespace n { int dead; }\nvoid gone(){using namespace n;}\nconst char* s=R\"(n namespace n {})\"; // n\n";
+  const auto dead = text.find("int dead;"), gone = text.find("void gone"), end = text.find("const char");
+  const auto out = render(source(text),{{dead,dead+9},{gone,end}}).provenance.text;
+  const auto identifiers = take(pruningIdentifiers(out));
+  CHECK(std::none_of(identifiers.begin(),identifiers.end(),[](const auto& t) { return t.text == "n"; }));
+  CHECK(out.find("const char* s=R\"(n namespace n {})\";") != std::string::npos);
+  CHECK(out.find("// n") != std::string::npos);
+}
+TEST(render_namespace_directives_and_provenance) {
+  const std::string directive = "namespace n {\n#define X 1\n}\n";
+  CHECK(render(source(directive),{}).provenance.text.find(directive) != std::string::npos);
+  auto m = source("namespace n {\n#line 40 \"a.cpp\"\nint dead;\n}\nint live=__LINE__;\n");
+  m.lineMap[1].reset(); m.lineMap[2] = SourceLocation{"a.cpp",40};
+  m.lineMap[3] = SourceLocation{"a.cpp",41}; m.lineMap[4] = SourceLocation{"a.cpp",42};
+  const auto begin = m.text.find("int dead;");
+  const auto out = render(m,{{begin,begin+9}});
+  CHECK_EQ(out.provenance.text,"#line 42 \"a.cpp\"\nint live=__LINE__;\n");
+  CHECK_EQ(out.provenance.lineMap.back()->line,42u);
+}

@@ -21,17 +21,11 @@ struct Input {
       for (FamilyId id = 0; id < m.families.size(); ++id) if (!r->families[id].kept)
         deletions.insert(deletions.end(),m.families[id].ranges.begin(),m.families[id].ranges.end());
     }
-    std::sort(deletions.begin(),deletions.end(),[](auto a,auto b) { return a.begin < b.begin; });
-    // Adjacent ownership partitions may together own a single syntactic token.
-    std::vector<EditRange> joined;
-    for (auto d : deletions) {
-      if (!joined.empty() && joined.back().end == d.begin) joined.back().end = d.end;
-      else joined.push_back(d);
-    }
-    deletions = std::move(joined);
+    joinDeletions();
+    if (r) removeEmptyNamespaces();
+    joinDeletions();
     for (const auto& l : scan.lines) {
-      const bool generated = l.directive && l.directive->name == "line" &&
-          l.firstLine <= m.lineMap.size() && !m.lineMap[l.firstLine-1];
+      const bool generated = generatedMarker(l);
       if (generated) markers.push_back({l.begin,l.end});
       for (const auto& t : l.tokens) for (auto d : touching({t.begin,t.end}))
         if (!contains(d,{t.begin,t.end})) throw Error{"deletion splits token '" + t.text + "' at byte " + std::to_string(t.begin)};
@@ -53,6 +47,80 @@ struct Input {
           throw Error{"invalid generated marker at line " + std::to_string(physical)};
       } else ++at.line;
       begin = end + (end < m.text.size());
+    }
+  }
+  bool generatedMarker(const LogicalLine& l) const {
+    return l.directive && l.directive->name == "line" &&
+        l.firstLine <= model.lineMap.size() && !model.lineMap[l.firstLine-1];
+  }
+  void joinDeletions() {
+    std::sort(deletions.begin(),deletions.end(),[](auto a,auto b) { return a.begin < b.begin; });
+    // Adjacent ownership partitions may together own a single syntactic token.
+    std::vector<EditRange> joined;
+    for (auto d : deletions) {
+      if (!joined.empty() && joined.back().end >= d.begin) joined.back().end = std::max(joined.back().end,d.end);
+      else joined.push_back(d);
+    }
+    deletions = std::move(joined);
+  }
+  void removeEmptyNamespaces() {
+    // Shells do not participate in retention. Work on lexer tokens after family
+    // deletion, ignoring comments/literals as names and generated line markers
+    // as contents. Source directives always keep their enclosing shell.
+    struct Lexeme { const Token* token; bool directive; };
+    std::vector<Lexeme> ts;
+    for (const auto& l : scan.lines) if (!generatedMarker(l))
+      for (const auto& t : l.tokens) ts.push_back({&t,bool(l.directive)});
+    const auto n = ts.size();
+    std::vector<std::size_t> close(n,n), stack;
+    for (std::size_t i = 0; i < n; ++i) if (!ts[i].directive) {
+      if (ts[i].token->text == "{") stack.push_back(i);
+      else if (ts[i].token->text == "}" && !stack.empty()) { close[stack.back()] = i; stack.pop_back(); }
+    }
+    struct Shell { std::size_t begin, open, end; std::vector<std::string> names; };
+    std::vector<Shell> shells;
+    std::vector<bool> headerName(n), live(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      if (ts[i].directive || ts[i].token->text != "namespace") continue;
+      auto j = i+1;
+      std::vector<std::size_t> names;
+      if (j < n && ts[j].token->kind == TokenKind::identifier && ts[j].token->text != "{") {
+        names.push_back(j++);
+        while (j < n && ts[j].token->text == "::") {
+          ++j;
+          if (j < n && ts[j].token->text == "inline") ++j;
+          if (j == n || ts[j].token->kind != TokenKind::identifier) break;
+          names.push_back(j++);
+        }
+      }
+      if (j == n || ts[j].directive || ts[j].token->text != "{" || close[j] == n) continue;
+      auto begin = i;
+      if (i && !ts[i-1].directive && ts[i-1].token->text == "inline") --begin;
+      Shell shell{begin,j,close[j],{}};
+      for (auto k : names) { headerName[k] = true; shell.names.push_back(ts[k].token->text); }
+      shells.push_back(std::move(shell));
+    }
+    std::map<std::string,std::size_t,std::less<>> uses;
+    for (std::size_t i = 0; i < n; ++i) {
+      const auto& t = *ts[i].token;
+      live[i] = !deleted({t.begin,t.end});
+      if (live[i] && !headerName[i] && t.kind == TokenKind::identifier) ++uses[t.text];
+    }
+    // Reverse source order visits inner shells first. A prefix count of live
+    // tokens plus the removed child sizes avoids rescanning namespace bodies.
+    std::vector<std::size_t> prefix(n+1);
+    for (std::size_t i = 0; i < n; ++i) prefix[i+1] = prefix[i] + live[i];
+    std::map<std::size_t,std::size_t> removed;
+    for (auto it = shells.rbegin(); it != shells.rend(); ++it) {
+      const auto& s = *it;
+      auto contents = prefix[s.end] - prefix[s.open+1];
+      for (auto child = removed.lower_bound(s.open+1); child != removed.end() && child->first < s.end; ++child)
+        contents -= child->second;
+      if (contents || std::any_of(s.names.begin(),s.names.end(),[&](const auto& name) { return uses[name] != 0; })) continue;
+      auto first = removed.lower_bound(s.begin), last = removed.upper_bound(s.end);
+      removed.erase(first,last);
+      removed.emplace(s.begin,prefix[s.end+1]-prefix[s.begin]);
+      deletions.push_back({ts[s.begin].token->begin,ts[s.end].token->end});
     }
   }
   std::vector<EditRange> touching(EditRange range) const {
