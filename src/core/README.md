@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D3a)
+# Core library (D2a–D3b)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -452,9 +452,11 @@ their spelled paths, identified by marker flag 3. `comparePreprocessed` reports
 the first differing token or boundary with both locations. Parser fixtures test
 line shifts, spelling/boundary differences, aliases, system paths and raw strings.
 
-`pipeline/distillNoPrune` is the core entry point: command/probe, original build,
+`pipeline/distillProgram` is the core entry point (`distillNoPrune` remains an
+inline/resolve-only wrapper): command/probe, original build,
 inlining, raw preprocessing/build, resolution, configuration selection, flat
-preprocessing/build, then selection of the checked bytes. It accepts the
+preprocessing/build, pruning analysis/rendering/invariants/build, then selection
+of the checked bytes. It accepts the
 command, `DistillOptions`, evaluator and process runner. It returns a
 `PipelineResult`; the caller publishes `bytes` without rendering them again.
 Generated files are binary writes, and their bytes are checked again after the
@@ -468,13 +470,26 @@ source. Flat failure, unavailable satisfying configurations,
 resolution limits or disabled resolution fall back to the already checked raw.
 Each phase shares a 30-second deadline across its child processes/evaluations;
 process output is capped. Inline/resolve also enforce their structural limits.
-Runtime is always `not requested` in D2e; strict success returns 3.
+`DistillOptions::samples` is the internal D3 runtime API: named stdin paths,
+resolved against the original command cwd. Baseline runs are compared with raw;
+flat is compared with the original built in flat's configuration (restoring user
+include paths for that original build); pruned is compared with flat's saved
+runs. Each artifact has its own executable in the private work directory. Runs
+compare stdout and exit code, allow nonzero exits, ignore stderr and fail on
+signals, deadlines or output caps. Unsupported host OS/architecture combinations
+report a runtime skip. Empty samples give `not requested`. CLI sample selection
+remains D4. Strict returns 3 unless the selected bytes are pruned/target.
 
 `report/` renders the result header, profile/date, option classes, assumption
 dependencies, configurations and their satisfied macro/arithmetic facts, exact
 process argv/cwd, omissions and failures, then every conditional directive at
-its original location (generated guards use `<generated>`). D3a adds a separate analysis-only pruning report; the pipeline still
-emits no family lines. A failed flat resolution's decisions remain visible alongside
+its original location (generated guards use `<generated>`). D3b merges the analysis report into the main header: parse argv/omissions,
+disable reasons, policy/ADL-registry digest and coverage, family fates/locations,
+and unique primary/transitive family bytes. Structural input bytes (shells,
+directives, trivia and generated provenance markers) have separate attribution;
+these source-accounting totals are not a claim about final serialized size.
+A failed candidate's analysis remains labelled as analysis and adds no A6
+dependency to the checked flat fallback. A failed flat resolution's decisions remain visible alongside
 its rejection, and do not certify the selected raw artifact.
 
 `src/cli/main.cpp` is built only with `DISTILL_LLVM_DIR`; it links the static
@@ -491,12 +506,20 @@ The executable path comes from `/proc/self/exe` on Linux,
 OS lookup falls back to resolving `argv[0]`. Workers are launched by
 D2a's process runner in a process group/Job Object with the remaining deadline
 and bounded output. No LLVM resource headers are needed for isolated conditions.
-`--no-prune` is mandatory; `--keep`, `--verify-run`, `--strip-comments` are rejected
-as not supported yet. Output defaults to stdout; progress/result go to stderr.
+Pruning is the default; `--no-prune` requests inline/resolve only. Repeatable
+`--keep <name>` requests namespace-indexed names; an unknown name exits 1 with
+no artifact. Keep names are validated even alongside `--no-prune`; if no checked
+flat configuration/index is available they cannot be bound and exit 1.
+`--strip-comments` runs before every artifact's checks. `--verify-run` is still
+rejected as D4. The CLI uses its own `--internal-prune` mode for extraction, so
+its deployed binary needs no sibling worker executable. Output defaults to
+stdout; progress/result go to stderr. File output is staged in a private sibling
+directory, then atomically renamed over the destination after checks (Windows
+uses MoveFileExW replacement). Stdout receives bytes only after all checks.
 
 ```sh
 # SDK builds only (link/run on CI, not the small development VM):
-build/distill --no-prune --judge codeforces --report report.txt -o submit.cpp g++ main.cpp
+build/distill --judge codeforces --report report.txt -o submit.cpp g++ main.cpp
 # Core pipeline cases, without LLVM:
 timeout 120 build/tests/runner/distill_pipeline_cases
 ```
@@ -554,7 +577,7 @@ are errors; failed preconditions keep every family and return every disable
 reason. Names in shells and directives participate independently of AST edges.
 `staticNameInvariant` checks supplied rendered text against removed indexed
 names, excluding comments/strings and including literal-operator suffixes.
-Rendering and its location invariant remain D3b.
+D3b runs this invariant on the final rendered candidate before its build.
 
 `names/adl` loads embedded `data/names/adl.txt`, with an explicit policy version,
 per-dialect rows and a build-time SHA-256 digest. Only C++20/23 and their GNU
@@ -581,7 +604,7 @@ Generated markers are identified from D2's null line-map entries, never by
 spelling alone. Keep comments are captured as physical declaration-token offsets by
 `captureKeepOffsets` before any D3b comment stripping, then bound to families
 in the child. `keepOffsets`/`annotations` survive independently of the comment.
-D3b must map the declaration offsets when its rendering changes byte positions.
+D3b maps the declaration offsets through resolution and rendering before extraction.
 
 The cc1 argument audit compares `clang++ -### -std=gnu++20 --target=<triple>
 -fsyntax-only` (also strict `c++20` and the MinGW target) with LLVM 23.1.5's
@@ -739,14 +762,14 @@ locals have no independent root. PP callbacks observe synthesized/rescanned
 predefined names and source overrides; token watching also detects a judge
 predefinition absent from Clang. Pasting is refused if an enclosing invocation
 contains external macro expansion; this intentionally overapproximates operands.
-`report/prune` emits a separate analysis report with policy/registry identity,
-coverage, parse argv/omissions, reasons and byte attribution. It certifies no
-artifact and is not connected to the no-prune pipeline/CLI in D3a.
+`report/prune` supplies the analysis section merged by D3b into the pipeline
+report. It retains policy/registry identity, coverage, parse argv/omissions,
+reasons and byte attribution independently of whether the candidate passed.
 
 All required core jobs run the hand-built pruning unit models, including an
 exhaustive 4,096 graph/root closure table and worker-protocol failure cases.
 The unchanged `resolver (linux, clang)` job additionally builds the extraction
-worker and runs `prune_extract_models` (14 model/ownership checks) and
+worker and runs `prune_extract_models` (29 model/ownership cases) and
 `prune_extract_cases` (29 cases) under CTest's 120-second timeout. Cases
 live in `tests/cases/prune/<name>/`: `main.cpp` is the immutable extraction
 input, `expect.txt` contains `kept <qualified-label> | <reason substring>`,
@@ -766,3 +789,61 @@ TMPDIR="$PWD/build/tmp" ctest --test-dir build --output-on-failure --timeout 120
 # CI SDK build only:
 ctest --test-dir build-resolver -R prune_extract_cases --output-on-failure --timeout 120
 ```
+
+`render/` is LLVM-free. `renderSource` consumes the immutable checked flat model
+and the retention result, validates deletion boundaries, and copies retained
+spans in source order. A whole logical line disappears only when all tokens are
+deleted and no outside comment survives; partial lines retain separators and
+physical newlines. Adjacent physical ownership partitions are considered
+together, while a split token/comment or source-directive intersection rejects
+the candidate. Comments outside deletions remain unless stripping was requested.
+Generated markers inside a removable family do not pin it: pruning reconstructs
+markers from D2 provenance at lexer-certified logical-line starts, outside raw
+strings, comments, splices and directives. Untouched CRLF bytes and missing final
+newlines remain untouched. Physical offset mappings cover retained family
+ranges, keep offsets/annotations, macro expansions and directive/marker ranges;
+removed occurrences disappear and ranges may split around new markers.
+
+The rendering invariant re-lexes actual output independently of that mapping.
+It compares every surviving token's spelling/kind and logical file/line, and
+source-directive start/end boundaries and order. Directive tokens share their
+logical start for this comparison: multiline directive comments may contract,
+but the replacement token list and the following source line remain intact.
+The first discrepancy names both tokens/locations. The static name invariant
+then checks the final text against removed namespace-indexed names. Neither
+invariant is a runtime-equivalence proof or expands pasted identifiers.
+
+Stripping uses comment spans recorded during the D2 lexer's phase-2 scan, so
+strings, raw contents and header names cannot impersonate comments, including
+spliced delimiters. Outside directives, a comment becomes one space or its
+physical newlines. Inside an unconditional directive it becomes one space and
+the next logical line is resynchronized. Multiline comments in conditional
+directives stay: the following marker may be skipped and cannot repair a later
+`#elif __LINE__` expression. A comment also stays when exposing its newlines
+could introduce a directive. Raw/flat stripping preserves existing generated
+markers; pruning reconstructs them. Keep comments are captured before stripping,
+carried by physical declaration occurrence through resolution (dead occurrences
+are dropped), and supplied to extraction from checked flat provenance.
+
+`DistillOptions::pruningWorker` identifies the bounded extraction worker; the
+CLI supplies itself. Analysis uses exactly the selected satisfying flat parse
+configuration. Disabled analysis leaves checked flat intact and reports every
+reason. Otherwise rendering, both invariants, build and optional sample comparison
+must pass. A rejection returns the already checked flat bytes without rendering
+again. Policy D3b-1 includes a narrow location-intrinsic exception: intrinsic
+`__LINE__`/`__FILE__` rely on the independent location invariant rather than
+constant macro-definition equality. Explicit definitions still undergo the
+ordinary macro check; external token-paste operands still disable pruning.
+
+Required core jobs run byte-exact rendering/stripping tests, 506 separator pairs,
+and synthetic-worker pipeline regressions exercising publication bytes, keep
+mapping, strict status, disabled/render/build/run fallback and unknown names.
+SDK-only cases in `tests/cases/pipeline` use `prune=yes`, `strip=yes`, `keep`,
+`contains`/`absent` and test-only `fault` metadata. `--worker <path>` enables the
+real extraction path and internal sample comparisons. `--cli <binary>` uses the
+real CLI and independently builds/runs its exact output against a real-CLI flat
+artifact; runtime still says `not requested` in the product. The forced runtime
+fault is API-only until D4. Fault hooks remain in the test runner, without a
+product flag. Every case continues after failures with its complete diagnostic.
+The unchanged resolver CI job runs these plus the existing extraction suites;
+its diagnostic rerun includes pipeline and CLI cases as well as extraction.

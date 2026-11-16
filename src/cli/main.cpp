@@ -4,6 +4,7 @@
 #include "core/path.h"
 #include "core/temporary.h"
 #include "clang/evaluate.h"
+#include "clang/prune_extract.h"
 #include <atomic>
 #include <algorithm>
 #include <cstdlib>
@@ -13,6 +14,9 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #endif
 
 namespace {
@@ -56,6 +60,20 @@ public:
     return Error{"invalid Clang worker result"};
   }
 };
+int pruneWorker(const std::string& file) {
+  std::ifstream f(pathFromUtf8(file),std::ios::binary);
+  if (!f) throw Error{"cannot open pruning input: " + file};
+  std::string bytes; char buffer[16384];
+  while (f.read(buffer,sizeof(buffer)) || f.gcount()) {
+    if (bytes.size() + static_cast<std::size_t>(f.gcount()) > 256 * 1024 * 1024)
+      throw Error{"pruning input exceeds protocol limit: " + file};
+    bytes.append(buffer,static_cast<std::size_t>(f.gcount()));
+  }
+  if (!f.eof()) throw Error{"cannot read pruning input: " + file};
+  auto m = take(extractPruningInWorker(take(parsePruningModel(bytes))));
+  std::cout << take(serializePruningModel(m));
+  return std::cout ? 0 : 1;
+}
 int worker(const std::string& file) {
   std::ifstream f(pathFromUtf8(file), std::ios::binary);
   ConditionInput in; IntegerModel m; bool integers = false; std::string dialect;
@@ -69,10 +87,23 @@ int worker(const std::string& file) {
   std::cout << (r.value() ? "true\n" : "false\n"); return 0;
 }
 void publish(const std::filesystem::path& file, std::string_view bytes) {
-  std::ofstream out(file, std::ios::binary); out << bytes; out.close();
+  // A private sibling directory guarantees a same-filesystem rename, without
+  // truncating a previous output if writing the checked bytes fails.
+  const auto absolute = std::filesystem::absolute(file);
+  TemporaryDirectory staging(".distill-publish-",absolute.parent_path());
+  const auto temp = staging.path / "output";
+  std::ofstream out(temp, std::ios::binary); out << bytes; out.close();
   if (!out) throw Error{"cannot write " + pathToUtf8(file)};
+#ifdef _WIN32
+  // std::filesystem::rename cannot replace an existing destination on Windows.
+  if (!MoveFileExW(temp.c_str(),absolute.c_str(),MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    throw Error{"cannot rename checked output to " + pathToUtf8(file) + ": Windows error " + std::to_string(GetLastError())};
+#else
+  std::filesystem::rename(temp,absolute);
+#endif
 }
 int run(const std::vector<std::string>& args) {
+  if (args.size() == 3 && args[1] == "--internal-prune") return pruneWorker(args[2]);
   if (args.size() == 3 && args[1] == "--internal-condition") return worker(args[2]);
   auto parsed = take(parseDistillOptions({args.begin() + 1, args.end()}));
   if (parsed.help) { std::cout << distillHelp(); return 0; }
@@ -94,11 +125,13 @@ int run(const std::vector<std::string>& args) {
   }
   DistillOptions options; options.profile = profile ? &*profile : nullptr;
   options.compilerExplicit = parsed.compilerExplicit; options.strict = parsed.strict;
+  options.noPrune = parsed.noPrune; options.stripComments = parsed.stripComments; options.keep = parsed.keep;
   if (parsed.verbose) options.progress = [](std::string_view step) { std::cerr << "distill: " << step << '\n'; };
   auto executable = runningExecutable();
   if (!executable.ok()) executable = resolveExecutable(pathFromUtf8(args[0]), cwd);
-  WorkerEvaluator evaluator(take(std::move(executable)));
-  auto result = take(distillNoPrune(command, options, evaluator));
+  options.pruningWorker = take(std::move(executable));
+  WorkerEvaluator evaluator(options.pruningWorker);
+  auto result = take(distillProgram(command, options, evaluator));
   if (parsed.report) publish(pathFromUtf8(*parsed.report), result.report);
   std::cerr << result.diagnostic;
   if (result.exitCode != 1) {

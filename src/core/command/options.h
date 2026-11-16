@@ -9,7 +9,8 @@ namespace distill {
 struct CliOptions {
   bool help = false, strict = false, verbose = false, compilerExplicit = true;
   std::optional<std::string> output, judge, report;
-  std::vector<std::string> compile;
+  bool noPrune = false, stripComments = false;
+  std::vector<std::string> compile, keep;
 };
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>&);
 std::string distillHelp();

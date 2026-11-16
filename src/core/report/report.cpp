@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/report/report.h"
+#include "core/report/prune.h"
 #include "core/path.h"
 #include <algorithm>
 #include <iomanip>
@@ -65,6 +66,11 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
   if (r.assumptions.empty()) out << " none";
   for (const auto& a : r.assumptions) out << ' ' << a;
   out << '\n';
+  if (r.pruningModel && r.retention) {
+    auto pruning = renderPruningReport(*r.pruningModel,*r.retention);
+    if (pruning.ok()) out << pruning.value();
+    else out << "pruning report error: " << pruning.error().message << '\n';
+  }
   for (const auto& a : command.args) {
     out << "option " << className(a.classification) << ':';
     for (const auto& word : a.spelling) out << ' ' << std::quoted(word);

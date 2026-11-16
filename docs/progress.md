@@ -27,7 +27,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
-| D3 pruning | D3a analysis/model/A6 registry implemented; extraction link/run remains CI-only; rendering and pipeline integration are D3b/D3c |
+| D3 pruning | D3a analysis/model/A6 registry and D3b rendering/invariants/stripping/pruned pipeline/CLI implemented; LLVM linking and real extraction/CLI runs remain CI-only; D3c adversarial expansion remains |
 | D4–D5 | see design §7 |
 
 ## D1 findings (2026-11-15)
@@ -171,3 +171,36 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
   are recorded in temporary root D3A-SUMMARY.md. No design changes were made.
   LLVM linking/extraction execution require CI. D3b/D3c still own rendering,
   comment stripping, pruned CLI/pipeline integration and the adversarial suite.
+
+## D3b rendering, checked pruning pipeline and CLI (2026-11-16)
+
+- Added LLVM-free rendering from immutable byte ranges, safe separators and
+  generated-marker reconstruction. Independent re-lexing checks retained token
+  spellings/locations and source-directive boundaries/order; the static name
+  invariant checks final candidate bytes. Rendering maps physical provenance.
+- `--strip-comments` transforms raw, flat and pruned before their checks. It
+  preserves multiline directive semantics, resynchronizes following lines and
+  keeps comments where a skipped marker cannot restore a later `#elif` location.
+  Keep annotations bind to physical declaration occurrences before stripping and
+  survive resolution/edit mapping separately from their comments.
+- The pipeline derives pruning from the selected checked flat configuration,
+  merges analysis/coverage/attribution into the report, builds pruned without user
+  include paths, and falls back to exact checked flat bytes on rejection.
+  Its internal sample API compares baseline/raw, same-configuration original/flat,
+  and flat/pruned stdout and exit codes under bounded processes.
+- The CLI prunes by default, supports repeated indexed `--keep` and stripping,
+  rejects unknown keep names with exit 1 and retains D4's `--verify-run` rejection.
+  Strict requires pruned/target. Its own private extraction mode preserves the
+  single-binary distribution, and output uses a staged same-filesystem rename.
+- Policy D3b-1 explicitly treats intrinsic `__LINE__`/`__FILE__` as location facts
+  certified by rendering; definitions and external pasting retain their checks.
+  Reports separate family-owned and structural source bytes and retain rejected
+  analysis without certifying the selected fallback.
+- Required core jobs cover byte-exact rendering and separator pairs plus synthetic
+  pruning-worker pipeline faults. The unchanged resolver job adds real-worker
+  and real-CLI pruning cases, including typical_library, target fixture, refusals,
+  line markers, keep/strip combinations and deliberately bad removals. The CLI
+  runner independently compares its published bytes with checked flat execution.
+- Local normal/fork test counts, SDK-only syntax checks, design ambiguities with
+  proposed wording, and CI-only limits are recorded in root `D3B-SUMMARY.md`.
+  `docs/design.md` remains unchanged. D3c retains the broader adversarial suite.

@@ -53,11 +53,14 @@ Result<ScanResult> scan(std::string_view bytes) {
     if (i == 0 && s.starts_with("\xef\xbb\xbf")) { i += 3; continue; }
     if (std::isspace(static_cast<unsigned char>(s[i]))) { ++i; continue; }
     if (s.compare(i, 2, "//") == 0) {
-      const auto end = s.find('\n', i + 2); i = end == s.npos ? s.size() : end; continue;
+      const auto a = i;
+      const auto end = s.find('\n', i + 2); i = end == s.npos ? s.size() : end;
+      result.comments.push_back({offsets[a], i < offsets.size() ? offsets[i] : bytes.size()}); continue;
     }
     if (s.compare(i, 2, "/*") == 0) {
       const auto a = i;
       const auto end = s.find("*/", i + 2); i = end == s.npos ? s.size() : end + 2;
+      result.comments.push_back({offsets[a], offsets[i - 1] + 1});
       join(a, i); continue;
     }
     const auto a = i;

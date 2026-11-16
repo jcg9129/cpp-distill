@@ -98,6 +98,8 @@ int run(int argc, char** argv) {
   const auto gcc = testing::testGcc();
   if (!gcc) { std::cout << "SKIP pipeline cases: GCC unavailable\n"; return 0; }
   const bool cli = argc == 3 && std::string_view(argv[1]) == "--cli";
+  const bool worker = argc == 3 && std::string_view(argv[1]) == "--worker";
+  const auto workerPath = worker ? std::filesystem::absolute(pathFromUtf8(argv[2])) : std::filesystem::path{};
   const auto binary = cli ? std::filesystem::absolute(pathFromUtf8(argv[2])) : std::filesystem::path{};
   Temp temp;
   auto evaluator = testing::testEvaluator(temp.path);
@@ -119,6 +121,12 @@ int run(int argc, char** argv) {
       auto value = [&](const char* key) { const auto f = expected.find(key); return f == expected.end() ? std::string{} : f->second; };
       if (value("requires") == "linux" && fixture.triple.find("linux") == fixture.triple.npos) {
         std::cout << "SKIP " << name << ": requires Linux GCC\n"; continue;
+      }
+      if (value("prune") == "yes" && !cli && !worker) {
+        std::cout << "SKIP " << name << ": requires SDK pruning worker\n"; continue;
+      }
+      if (cli && value("api") == "yes") {
+        std::cout << "SKIP " << name << ": internal sample comparison API (D4 CLI pending)\n"; continue;
       }
       auto command = words(uncomment(read(cwd / "cmd.txt")));
       check(!command.empty(), "empty cmd.txt"); command[0] = pathToUtf8(*gcc);
@@ -161,13 +169,16 @@ int run(int argc, char** argv) {
           std::ostringstream py;
           py << "#!/usr/bin/env python3\n# SPDX-License-Identifier: GPL-3.0-or-later\nimport os, pathlib, sys\n";
           py << "fault = " << std::quoted(value("fault")) << "\n";
-          py << "for arg in sys.argv[1:]:\n p = pathlib.Path(arg)\n if p.name == 'raw.cpp' and fault == 'missed-inline':\n  p.write_text('#line 1 \"main.cpp\"\\n#include \"only.h\"\\nint main(){return only;}\\n')\n if p.name == 'flat.cpp' and fault == 'resolver':\n  p.write_text(p.read_text().replace('return 0', 'return 1', 1))\n";
+          py << "for arg in sys.argv[1:]:\n p = pathlib.Path(arg)\n if p.name == 'raw.cpp' and fault == 'missed-inline':\n  p.write_text('#line 1 \"main.cpp\"\\n#include \"only.h\"\\nint main(){return only;}\\n')\n if p.name == 'flat.cpp' and fault == 'resolver':\n  p.write_text(p.read_text().replace('return 0', 'return 1', 1))\n if p.name == 'pruned.cpp' and fault == 'prune-build':\n  p.write_text(p.read_text().replace('int chosen(){return 7;}', '', 1))\n";
           py << "os.execv(" << std::quoted(pathToUtf8(*gcc)) << ", [" << std::quoted(pathToUtf8(*gcc)) << "] + sys.argv[1:])\n";
           write(shim, py.str()); std::filesystem::permissions(shim, std::filesystem::perms::owner_all);
           command[0] = pathToUtf8(shim);
         }
         ProcessSpec s; s.cwd = cwd;
-        s.argv = {pathToUtf8(binary), "--no-prune", "--report", "report.txt", "-o", "submit.cpp"};
+        s.argv = {pathToUtf8(binary), "--report", "report.txt", "-o", "submit.cpp"};
+        if (value("prune") != "yes") s.argv.push_back("--no-prune");
+        if (value("strip") == "yes") s.argv.push_back("--strip-comments");
+        if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? "fixture.toml" : value("profile")); }
         s.argv.insert(s.argv.end(), command.begin(), command.end());
@@ -185,9 +196,46 @@ int run(int argc, char** argv) {
         else check(!std::filesystem::exists(cwd / "submit.cpp"), "failed CLI wrote output");
         const auto line = "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime not requested";
         if (code != 1) check(diagnostic.find(line) != diagnostic.npos, "wrong result line: " + diagnostic);
+        if (code != 1 && value("prune") == "yes") {
+          // The public CLI still reports runtime not requested. The SDK runner
+          // independently compares its exact published bytes against a second
+          // real-CLI flat artifact under the same selected local configuration.
+          auto referenceSpec = s;
+          referenceSpec.argv.insert(referenceSpec.argv.begin()+1,"--no-prune");
+          for (auto& arg : referenceSpec.argv) if (arg == "submit.cpp") arg = "flat-reference.cpp";
+          const auto flatRun = take(runProcess(referenceSpec));
+          check(!flatRun.timedOut && (flatRun.exitCode == 0 || flatRun.exitCode == 3),
+                "flat CLI reference failed: " + flatRun.stderrText);
+          write(cwd / "sample.in",value("sample"));
+          auto compile = take(flatCommand(take(parseCompileCommand(command,cwd)),profile ? &*profile : nullptr,
+                                          pathFromUtf8(command.front()),false));
+          const auto runDir = temp.path / ("cli-runs-" + name); std::filesystem::create_directory(runDir);
+          std::vector<ProcessResult> compared;
+          for (const auto* source : {"flat-reference.cpp","submit.cpp"}) {
+            ProcessSpec build; build.cwd = runDir; build.timeout = std::chrono::seconds(20);
+            const auto program = runDir / (std::string(source)+".exe");
+            build.argv = compile.buildArgv(cwd / source,program,true,{},true);
+            const auto built = take(runProcess(build));
+            check(!built.timedOut && !built.exitCode && !built.signal,"published CLI artifact build failed: " + built.stderrText);
+            ProcessSpec run; run.cwd = runDir; run.argv = {pathToUtf8(program)};
+            run.stdinFile = cwd / "sample.in"; run.timeout = std::chrono::seconds(10);
+            auto output = take(runProcess(run));
+            check(!output.timedOut && !output.signal && !output.stdoutTruncated && !output.stderrTruncated,
+                  "published CLI artifact run failed: " + output.stderrText);
+            compared.push_back(std::move(output));
+          }
+          check(compared[0].exitCode == compared[1].exitCode && compared[0].stdoutText == compared[1].stdoutText,
+                "published CLI artifact differs from flat on sample.in");
+        }
       } else {
         auto cmd = take(parseCompileCommand(command, cwd));
-        DistillOptions o; o.profile = profile ? &*profile : nullptr; o.strict = value("strict") == "yes";
+        DistillOptions o; o.noPrune = value("prune") != "yes"; o.pruningWorker = workerPath;
+        o.stripComments = value("strip") == "yes";
+        if (!value("keep").empty()) o.keep = {value("keep")};
+        if (value("prune") == "yes" || value("samples") == "yes") {
+          write(cwd / "sample.in",value("sample")); o.samples = {{"sample.in",cwd / "sample.in"}};
+        }
+        o.profile = profile ? &*profile : nullptr; o.strict = value("strict") == "yes";
         if (value("temporary") == "override") {
           o.temporaryRoot = temp.path / ("work-" + name);
           std::filesystem::create_directory(*o.temporaryRoot);
@@ -195,10 +243,10 @@ int run(int argc, char** argv) {
         const auto workRoot = o.temporaryRoot.value_or(std::filesystem::temp_directory_path());
         std::map<std::string, std::string> builtInputs;
         std::filesystem::path workPath;
-        auto result = take(distillNoPrune(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
+        auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
-            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp") continue;
+            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp") continue;
             workPath = p.parent_path();
             check(std::filesystem::equivalent(workPath.parent_path(), workRoot), "work is outside requested temp root");
             check(spec.cwd == workPath, "generated check uses user cwd");
@@ -211,8 +259,25 @@ int run(int argc, char** argv) {
               const auto p = pathFromUtf8(arg);
               if (p.filename() == "raw.cpp") builtInputs["raw"] = read(p);
               if (p.filename() == "flat.cpp") builtInputs["flat"] = read(p);
+              if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
             }
-          return runProcess(spec);
+          auto process = runProcess(spec);
+          // Test-only bad analysis: remove a user-pasted callee's positive AST
+          // and dependent-name edges. Raw tokens deliberately cannot name it.
+          if ((value("fault") == "prune-build" || value("fault") == "prune-run") &&
+              spec.argv.size() == 3 && spec.argv[1] == "--internal-prune" && process.ok()) {
+            auto model = take(parsePruningModel(process.value().stdoutText));
+            FamilyId victim = noFamily;
+            for (FamilyId i = 0; i < model.families.size(); ++i) if (model.families[i].names.contains("chosen")) victim = i;
+            check(victim != noFamily,"test fault could not find chosen declaration");
+            for (auto& f : model.families) {
+              std::erase(f.edges,victim); std::erase(f.associatedTypes,victim); f.dependentNames.erase("chosen");
+            }
+            std::erase_if(model.unions,[&](auto u) { return u.first == victim || u.second == victim; });
+            auto& f = model.families[victim]; f.root.clear(); f.pinned.clear(); f.neverRemoved.clear();
+            process.value().stdoutText = take(serializePruningModel(model));
+          }
+          return process;
         }));
         code = result.exitCode; artifact = result.artifact; level = result.verification; report = result.report;
         if (result.keptWork) kept.path = *result.keptWork;
@@ -226,10 +291,12 @@ int run(int argc, char** argv) {
           check(skipped, "incompatible check compiler was not recorded as skipped");
         }
         diagnostic = result.diagnostic; bytes = result.bytes;
+        if (value("prune") == "yes" && code != 1)
+          check(result.runtime == "compared 1 samples", "missing internal runtime comparison: " + result.runtime + "\n" + report);
         if (code != 1) {
           check(artifact == value("artifact"), "wrong artifact: " + artifact + "\n" + report);
           check(level == wantedLevel, "wrong verification: " + level + "\n" + report);
-          if (artifact == "flat") for (const auto& c : result.checks) if (c.artifact == "flat" && c.status == "passed") kind = c.configuration->kind;
+          if (artifact == "flat" || artifact == "pruned") for (const auto& c : result.checks) if (c.artifact == artifact && c.status == "passed") kind = c.configuration->kind;
           if (artifact == "raw") kind = "local";
           check(kind == value("configuration"), "wrong configuration kind: " + kind);
           // The returned bytes are exactly the checked output; no renderer runs afterwards.
@@ -246,6 +313,10 @@ int run(int argc, char** argv) {
       check(code == std::stoi(value("exit")), "wrong exit: " + std::to_string(code) + "\n" + diagnostic);
       for (const auto& [key, line] : expected) if (key == "report" || key.starts_with("report."))
         check(report.find(line) != report.npos, "missing report line: " + line + "\n" + report);
+      for (const auto& [key,text] : expected) {
+        if (key == "contains" || key.starts_with("contains.")) check(bytes.find(text) != bytes.npos,"missing output: " + text + "\n" + bytes);
+        if (key == "absent" || key.starts_with("absent.")) check(bytes.find(text) == bytes.npos,"unexpected output: " + text + "\n" + bytes);
+      }
       if (!value("reason").empty()) check((report + diagnostic).find(value("reason")) != std::string::npos, "missing reason: " + value("reason"));
       for (const auto& e : std::filesystem::directory_iterator(cwd))
         check(!pathToUtf8(e.path().filename()).starts_with(".distill-"), "work files appeared in user cwd");

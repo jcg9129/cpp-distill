@@ -28,7 +28,10 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
   m.disabledReasons = flat.disabledReasons; m.unknownInUserCode = flat.unknownInUserCode;
   m.keepNames.insert(keep.begin(),keep.end());
   auto annotations = captureKeepOffsets(m.text); if (!annotations.ok()) return annotations.error();
-  m.keepOffsets = std::move(annotations.value());
+  m.keepOffsets = flat.keepOffsets;
+  m.keepOffsets.insert(m.keepOffsets.end(),annotations.value().begin(),annotations.value().end());
+  std::sort(m.keepOffsets.begin(),m.keepOffsets.end());
+  m.keepOffsets.erase(std::unique(m.keepOffsets.begin(),m.keepOffsets.end()),m.keepOffsets.end());
   for (const auto& why : c.command.pruningAllowed().reasons) m.disabledReasons.push_back(why);
   m.judgeProfile = judge != nullptr; m.judgeComplete = judge && judge->reproduced;
   if (judge) {
@@ -84,10 +87,10 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
     const auto& d = *l.directive;
     if (d.name == "line" && l.firstLine <= m.lineMap.size() && !m.lineMap[l.firstLine-1]) m.generatedMarkers.push_back({l.begin,l.end});
     else m.sourceDirectives.push_back({l.begin,l.end});
-    if (d.name == "pragma" && !supportedPragma(d)) m.disabledReasons.push_back("unsupported user pragma");
+    if (d.name == "pragma" && !supportedPragma(d)) m.disabledReasons.push_back("unsupported user pragma at line " + std::to_string(l.firstLine) + ": " + l.text);
     if (d.name == "include" && !d.tokens.empty()) {
       const auto& token = d.tokens.front();
-      if (token.kind != TokenKind::header) m.disabledReasons.push_back("computed system include");
+      if (token.kind != TokenKind::header) m.disabledReasons.push_back("computed system include at line " + std::to_string(l.firstLine) + ": " + token.text);
       else m.includes.push_back(token.text.substr(1,token.text.size()-2));
     }
   }

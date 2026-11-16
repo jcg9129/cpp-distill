@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=fixture
+exit=0
+configuration=local
+profile=fixture
+absent=int unused
+report=pruned: passed
+report.1=policy: D3b-1

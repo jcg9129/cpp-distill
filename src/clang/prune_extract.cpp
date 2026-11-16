@@ -62,7 +62,7 @@ struct Extraction {
   std::map<std::size_t,std::set<std::string>> systemMacros;
   explicit Extraction(PruningModel m, CompilerInstance& c) : model(std::move(m)), compiler(c), sm(c.getSourceManager()) {
     auto scan = scanDirectives(model.text);
-    if (!scan.ok()) { disable("directive scan failure"); return; }
+    if (!scan.ok()) { disable("directive scan failure in flat.cpp: " + scan.error().message); return; }
     for (const auto& l : scan.value().lines) if (!l.directive) tokens.insert(tokens.end(),l.tokens.begin(),l.tokens.end());
     for (const auto& l : scan.value().lines) if (l.directive &&
         (l.directive->name == "if" || l.directive->name == "elif" || l.directive->name == "ifdef" || l.directive->name == "ifndef")) conditionRanges.push_back({l.begin,l.end});
@@ -199,7 +199,7 @@ struct Extraction {
     else if (isa<UsingDecl>(base) || isa<UsingDirectiveDecl>(base) || isa<UsingEnumDecl>(base)) { f.kind = FamilyKind::usingDecl; f.namespaceUsing = true; }
     else if (isa<StaticAssertDecl>(base)) { f.kind = FamilyKind::assertion; f.root = "namespace static_assert"; }
     else if (isa<EmptyDecl>(base)) { /* Complete, inert declaration. */ }
-    else if (isa<FileScopeAsmDecl>(base)) disable("unsupported file-scope asm");
+    else if (isa<FileScopeAsmDecl>(base)) disable("unsupported file-scope asm: " + describe(d));
     else f.pinned = std::string("unsupported declaration: ") + base->getDeclKindName();
     if (const auto* s = dyn_cast<ClassTemplateSpecializationDecl>(base)) {
       auto* primary = s->getSpecializedTemplate();
@@ -244,14 +244,14 @@ struct Extraction {
       if (loc.isMacroID()) f.pinned = "macro invocation";
       else {
         auto token = std::lower_bound(tokens.begin(),tokens.end(),begin,[](const auto& t,auto p) { return t.begin < p; });
-        if (token == tokens.end() || token->begin != begin) { disable("unbounded leading attribute"); continue; }
+        if (token == tokens.end() || token->begin != begin) { disable("unbounded leading attribute: " + describe(d)); continue; }
         if (token->text != "alignas" && token->text != "__attribute__") {
           // Attr ranges start at the name/scope inside the [[ delimiter.
           while (token != tokens.begin() && token->text != ";" && token->text != "{" && token->text != "}") {
             --token;
             if (token->text == "[" && token != tokens.begin() && std::prev(token)->text == "[") { --token; break; }
           }
-          if (token->text != "[") { disable("unbounded leading attribute"); continue; }
+          if (token->text != "[") { disable("unbounded leading attribute: " + describe(d)); continue; }
         }
         begin = token->begin;
       }
@@ -300,7 +300,7 @@ public:
   void PragmaDirective(clang::SourceLocation loc, PragmaIntroducerKind kind) override {
     // The core audits literal #pragma directives. An operator-generated pragma
     // has no such source directive/range, so it needs a separate future audit.
-    if (e.user(loc) && kind != PIK_HashPragma) e.disable("unsupported generated user pragma");
+    if (e.user(loc) && kind != PIK_HashPragma) e.disable("unsupported generated user pragma at " + loc.printToString(e.sm));
   }
   void finalToken(const clang::Token& token) {
     if (!token.is(tok::identifier) || !e.user(token.getLocation())) return;
@@ -323,7 +323,7 @@ public:
   }
   void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs*) override {
     if (!e.user(range.getBegin())) return;
-    const auto* mi = definition.getMacroInfo(); if (!mi) { e.disable("missing macro expansion definition"); return; }
+    const auto* mi = definition.getMacroInfo(); if (!mi) { e.disable("missing macro expansion definition at " + range.getBegin().printToString(e.sm)); return; }
     const auto offset = e.offset(range.getBegin()); const auto name = token.getIdentifierInfo()->getName().str();
     bool condition = false;
     for (auto d : e.conditionRanges) if (d.begin <= offset && offset < d.end) condition = true;
@@ -366,7 +366,7 @@ public:
   bool shouldVisitImplicitCode() const { return true; }
   bool TraverseDecl(Decl* d) {
     if (!d) return true;
-    if (++visits > 2000000) { e.disable("AST traversal limit"); return false; }
+    if (++visits > 2000000) { e.disable("AST traversal limit: " + e.describe(d)); return false; }
     const auto saved = current;
     if (const auto id = e.owner(d); id != noFamily) current = id;
     const bool result = RecursiveASTVisitor::TraverseDecl(d); current = saved; return result;
@@ -407,7 +407,7 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
   }
   void type(QualType q, std::vector<FamilyId>* associated = nullptr, unsigned depth = 0) {
     if (q.isNull()) return;
-    if (depth > 100) { e.disable("type traversal limit"); return; }
+    if (depth > 100) { e.disable("type traversal limit for " + q.getAsString()); return; }
     const Type* t = q.getTypePtr();
     if (auto* r = t->getAs<RecordType>()) {
       if (associated) { auto id = e.owner(r->getDecl()); if (id != noFamily) associated->push_back(id); }
@@ -502,32 +502,32 @@ public:
   bool shouldVisitImplicitCode() const { return true; }
   bool TraverseDecl(Decl* d) {
     if (!d) return true;
-    if (++visits > 2000000) { e.disable("AST traversal limit"); return false; }
+    if (++visits > 2000000) { e.disable("AST traversal limit: " + e.describe(d)); return false; }
     const auto saved = current;
     if (const auto id = e.owner(d); id != noFamily) current = id;
     const bool result = RecursiveASTVisitor::TraverseDecl(d); current = saved; return result;
   }
   bool VisitDecl(Decl* d) {
-    if (d->isInvalidDecl()) e.disable("error-recovery AST");
+    if (d->isInvalidDecl()) e.disable("error-recovery AST: " + e.describe(d));
     if (current != noFamily && e.user(d->getBeginLoc())) for (const auto* attr : d->attrs()) {
       // Symbol-bearing forms (asm labels, aliases, used/weak/section, etc.)
       // remain unsupported. Do not treat the whole attribute syntax as opaque.
-      if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling());
+      if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     }
     return true;
   }
   bool VisitAttributedStmt(AttributedStmt* s) {
     if (current != noFamily && e.user(s->getBeginLoc())) for (const auto* attr : s->getAttrs())
-      if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling());
+      if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     return true;
   }
   bool VisitStmt(Stmt* s) {
     if (current == noFamily || !e.user(s->getBeginLoc())) return true;
-    if (isa<AsmStmt>(s)) e.disable("unsupported asm");
-    if (isa<RecoveryExpr>(s)) e.disable("error-recovery AST");
+    if (isa<AsmStmt>(s)) e.disable("unsupported asm at " + s->getBeginLoc().printToString(e.sm));
+    if (isa<RecoveryExpr>(s)) e.disable("error-recovery AST at " + s->getBeginLoc().printToString(e.sm));
     if (isa<AddrLabelExpr>(s) || isa<IndirectGotoStmt>(s) || isa<StmtExpr>(s) || isa<VAArgExpr>(s))
-      e.disable("unsupported va_arg, GNU statement expression or computed goto");
-    if (isa<CoroutineBodyStmt>(s) || isa<CoawaitExpr>(s) || isa<CoyieldExpr>(s)) e.disable("unsupported coroutine machinery");
+      e.disable("unsupported va_arg, GNU statement expression or computed goto at " + s->getBeginLoc().printToString(e.sm));
+    if (isa<CoroutineBodyStmt>(s) || isa<CoawaitExpr>(s) || isa<CoyieldExpr>(s)) e.disable("unsupported coroutine machinery at " + s->getBeginLoc().printToString(e.sm));
     return true;
   }
   bool VisitExpr(Expr* x) { type(x->getType()); return true; }
@@ -631,7 +631,7 @@ public:
       FamilyId owner = noFamily;
       for (FamilyId id = 0; id < e.model.families.size(); ++id) for (auto r : e.model.families[id].ranges)
         if (r.begin <= offset && offset < r.end) owner = id;
-      if (owner == noFamily) e.disable("unbound keep annotation");
+      if (owner == noFamily) e.disable("unbound keep annotation at byte " + std::to_string(offset));
       else e.model.annotations.push_back({offset,owner});
     }
   }

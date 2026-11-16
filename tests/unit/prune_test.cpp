@@ -227,7 +227,8 @@ TEST(prune_prepare_pragmas_allow_only_audited_effects_and_preserve_directives) {
        "clang attribute push", "omp parallel", "comment(linker,\"symbol\")", "once extra"}) {
     ResolveResult flat; flat.text = "#pragma " + std::string(pragma) + "\n";
     auto m = preparePruning(c,{},flat); CHECK(m.ok());
-    CHECK_EQ(m.value().disabledReasons,std::vector<std::string>{"unsupported user pragma"});
+    CHECK_EQ(m.value().disabledReasons.size(),1u);
+    CHECK(m.value().disabledReasons.front().starts_with("unsupported user pragma at line "));
   }
   ResolveResult flat; flat.text = "void crossed(){\n#pragma GCC diagnostic push\n}\n";
   auto m = preparePruning(c,{},flat).value();
@@ -304,4 +305,20 @@ TEST(prune_keep_metadata_before_comment_stripping) {
   CHECK_EQ(text.substr(offsets.value().front(),3),"int");
   Model b; auto id = b.add("keep","int keep();"); b.m.annotations.push_back({0,id});
   CHECK(b.run().families[id].kept);
+}
+
+TEST(prune_location_intrinsics_require_renderer_and_do_not_excuse_pasting) {
+  for (const auto* name : {"__LINE__","__FILE__"}) {
+    Model b; b.add("dead","int dead;");
+    PruneMacroExpansion e; e.name = name; e.predefined = true;
+    e.parse = {MacroState::definedUnknown,{}, {FactOrigin::compilerBuiltin}};
+    b.m.expansions = {e}; CHECK(b.run().disabledReasons.empty());
+    b.m.judgeProfile = true; CHECK(!b.run().disabledReasons.empty());
+    e.judge = {MacroState::definedUnknown,{}, {FactOrigin::specialBuiltin}};
+    b.m.expansions = {e}; CHECK(b.run().disabledReasons.empty());
+    e.paste = true; e.externalPasteOperand = true;
+    b.m.expansions = {e}; CHECK(!b.run().disabledReasons.empty());
+    e.paste = false; e.parse = known("42");
+    b.m.expansions = {e}; CHECK(!b.run().disabledReasons.empty());
+  }
 }

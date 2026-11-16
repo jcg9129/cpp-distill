@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=3
+configuration=local
+strict=yes
+absent=int unused

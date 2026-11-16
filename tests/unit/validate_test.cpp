@@ -46,7 +46,11 @@ TEST(validate_cli_options) {
   auto r = parseDistillOptions({"--no-prune", "-o", "out.cpp", "--strict", "main.cpp"}); CHECK(r.ok());
   CHECK(!r.value().compilerExplicit); CHECK(r.value().strict); CHECK_EQ(r.value().compile.front(), "g++");
   CHECK(parseDistillOptions({"--help"}).value().help);
-  for (const auto& args : std::vector<std::vector<std::string>>{{"main.cpp"}, {"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}})
+  auto defaults = parseDistillOptions({"--keep","first","--keep","second","--strip-comments","main.cpp"});
+  CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(defaults.value().stripComments);
+  CHECK_EQ(defaults.value().keep,(std::vector<std::string>{"first","second"}));
+  CHECK(parseDistillOptions({"main.cpp"}).ok());
+  for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}})
     CHECK(!parseDistillOptions(args).ok());
 }
 

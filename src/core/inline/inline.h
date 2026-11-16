@@ -55,6 +55,7 @@ struct InlineResult {
   std::vector<UserFile> userFiles; // One record per opened spelling; identity may repeat.
   std::vector<SystemInclude> systemIncludes; // One record per textual occurrence.
   InlineFlags flags;
+  std::vector<std::size_t> keepOffsets; // Physical declaration occurrences before stripping.
   std::vector<std::optional<SourceLocation>> lineMap; // nullopt = generated marker/guard.
 };
 Result<InlineResult> inlineSources(const CompileCommand&, const IncludeSearch&, const InlineOptions& = {});

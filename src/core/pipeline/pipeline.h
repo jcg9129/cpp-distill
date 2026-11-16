@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
-#include "core/validate/configuration.h"
+#include "core/prune/extract.h"
 
 namespace distill {
+struct RunSample { std::string name; std::filesystem::path input; };
 struct DistillOptions {
+  bool noPrune = false, stripComments = false;
+  std::vector<std::string> keep;
+  std::filesystem::path pruningWorker;
+  // Internal API; D4 will expose sample selection in the CLI.
+  std::vector<RunSample> samples;
   const Profile* profile = nullptr;
   bool compilerExplicit = true, strict = false;
   std::chrono::milliseconds stepTimeout{30000};
@@ -25,11 +31,16 @@ struct PipelineResult {
   std::optional<std::filesystem::path> keptWork;
   std::vector<ArtifactCheck> checks;
   ResolveResult resolution;
+  std::optional<PruningModel> pruningModel;
+  std::optional<PruningResult> retention;
   std::set<std::string> assumptions;
   std::vector<ProcessRecord> processes;
 };
 // Does not publish: bytes are the exact validated bytes for the caller to write.
-// Expected build/check failures return a result with exitCode=1 or raw fallback.
+// Expected check failures return exitCode=1 or the last checked fallback.
+Result<PipelineResult> distillProgram(const CompileCommand&, const DistillOptions&,
+                                    ConditionEvaluator&, ProcessRunner = runProcess);
+// Compatibility entry point for callers requesting inline/resolve only.
 Result<PipelineResult> distillNoPrune(const CompileCommand&, const DistillOptions&,
                                     ConditionEvaluator&, ProcessRunner = runProcess);
 } // namespace distill

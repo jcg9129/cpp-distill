@@ -56,6 +56,7 @@ struct ResolveOptions {
   std::size_t maxOutputBytes = 128 * 1024 * 1024;
 };
 struct ResolveResult {
+  std::vector<std::size_t> keepOffsets;
   std::string text;
   std::vector<std::optional<SourceLocation>> lineMap;
   std::vector<ResolutionDecision> decisions;

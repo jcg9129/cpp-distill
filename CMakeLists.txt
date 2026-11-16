@@ -28,6 +28,7 @@ add_library(distill_core STATIC
   src/core/profile/facts.cpp
   src/core/validate/preprocess.cpp
   src/core/validate/configuration.cpp
+  src/core/render/render.cpp
   src/core/pipeline/pipeline.cpp
   src/core/report/report.cpp
   src/core/report/prune.cpp
