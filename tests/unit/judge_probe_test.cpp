@@ -106,6 +106,9 @@ TEST(judge_probe_native_join_and_transitive_alias_invariants) {
   p.snapshotFacts["ALWAYS"] = {MacroState::definedUnknown,{}, {FactOrigin::nativeModel}};
   p.snapshotFacts["INVARIANT"] = {MacroState::known,Macro{false,{},false,"1"},{FactOrigin::nativeModel}};
   p.predefined["NATIVE_ALIAS"] = Macro{false,{},false,"VARIABLE"};
+  // Real profiles list every predefined macro in snapshotFacts too; otherwise
+  // A5 makes the name undefined and a judge "1" is a contradicted assumption.
+  p.snapshotFacts["NATIVE_ALIAS"] = {MacroState::known,p.predefined["NATIVE_ALIAS"],{FactOrigin::compilerBuiltin}};
   auto e = output(p,{},{{"presence|ALWAYS","1"},{"presence|INVARIANT","1"}});
   auto j = output(p,{},{{"presence|ALWAYS","1"},{"presence|INVARIANT","1"},{"presence|VARIABLE","1"},{"expansion|NATIVE_ALIAS","host-specific"}});
   auto r = checkJudgeProbe(p,e,{j}); CHECK(r.passed);
