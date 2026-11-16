@@ -25,7 +25,7 @@ class AcceptanceTests(unittest.TestCase):
         with path.open('rb') as stream:
             profile = tomllib.load(stream)
         # Mirror src/core/profile/profile.cpp's name and relative snapshot rules.
-        self.assertRegex(profile['name'], r'\A[a-z0-9-]+\Z')
+        self.assertRegex(profile['name'], r'\A[a-z0-9]+(?:-[a-z0-9]+)*-gcc[1-9][0-9]*-(?:cpp|gnupp)[0-9]{2}(?:-[a-z0-9]+)*\Z')
         self.assertEqual(path.name, profile['name'] + '.toml')
         if 'predefined' in profile:
             snapshot = profile['predefined']
@@ -69,9 +69,9 @@ class AcceptanceTests(unittest.TestCase):
                               'configuration check: triple=x86_64-w64-mingw32\n')
                     return subprocess.CompletedProcess([], 0, '', ''), report, output, 'raw'
                 profile = self.load_profile_fixture(options)
-                self.assertEqual(profile['predefined'], 'codeforces-predefined.txt')
+                self.assertEqual(profile['predefined'], 'codeforces-gcc14-cpp23-predefined.txt')
                 self.assertEqual((self.smoke.work / profile['predefined']).read_bytes(),
-                                 Path('data/judges/codeforces-predefined.txt').read_bytes())
+                                 Path('data/judges/codeforces-gcc14-cpp23-predefined.txt').read_bytes())
                 report = (self.skip + 'flat: passed\n'
                           '  configuration check: x86_64-w64-mingw32-g++ triple=x86_64-w64-mingw32\n')
                 return subprocess.CompletedProcess([], 0, '', ''), report, output, 'flat'

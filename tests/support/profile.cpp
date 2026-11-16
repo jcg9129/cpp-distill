@@ -42,10 +42,11 @@ Result<Profile> captureProfile(const std::filesystem::path& compiler, const std:
       if (ch == '\r' && i + 1 < versionRun.stdoutText.size() && versionRun.stdoutText[i + 1] == '\n') continue;
       versionOutput += ch == '\n' ? "\\n" : std::string(1, ch);
     }
-    const auto file = directory / "fixture.toml";
+    const auto name = "fixture-gcc" + std::to_string(p.identity.major) + "-gnupp20";
+    const auto file = directory / (name + ".toml");
     {
       std::ofstream out(file, std::ios::binary);
-      out << "# SPDX-License-Identifier: GPL-3.0-or-later\nname = 'fixture'\ndescription = 'runtime local compiler fixture'\ntriple = " << std::quoted(p.triple)
+      out << "# SPDX-License-Identifier: GPL-3.0-or-later\nname = '" << name << "'\ndescription = 'runtime local compiler fixture'\ntriple = " << std::quoted(p.triple)
           << "\ncompiler = { family = 'gcc', version = '" << version << "' }\nstd = 'gnu++20'\nflags = ['-O0', '-fsigned-char', '-DDISTILL_FIXTURE_JUDGE=1']\n"
           << "build = { package = 'test:runtime=" << version << "' }\nlibraries = ['" << (p.triple.find("mingw") != p.triple.npos ? "mingw-w64" : p.triple.find("darwin") != p.triple.npos ? "macos-libc" : "glibc")
           << "', 'libstdc++']\npredefined = 'fixture-predefined.txt'\ncheck = ['distill-missing-check-719239']\nupdated = '2026-11-16'\nsources = ['https://example.org/test-fixture']\n";

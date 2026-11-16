@@ -10,6 +10,10 @@
 /data/names/adl.txt -text
 /data/names/extension-coverage.txt -text
 
+# Profile content digests include exact TOML and snapshot bytes.
+/data/judges/*.toml -text
+/data/judges/*-predefined.txt -text
+
 # Probe fixtures must retain their exact captured bytes on every platform.
 tests/unit/fixtures/** -text
 

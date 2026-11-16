@@ -277,7 +277,7 @@ int run(int argc, char** argv) {
       const auto inlined = require(inlineSources(command, require(buildIncludeSearch(command, lists)))); checkMap(inlined);
       ResolveOptions options; std::optional<Profile> selected;
       std::string profileName;
-      if (std::filesystem::exists(original / "profile.toml")) { selected = require(loadProfile(original / "profile.toml")); profileName = "file"; }
+      if (std::filesystem::exists(original / "profile-gcc15-gnupp20.toml")) { selected = require(loadProfile(original / "profile-gcc15-gnupp20.toml")); profileName = "file"; }
       else if (std::filesystem::exists(original / "profile.txt")) {
         profileName = uncomment(read(original / "profile.txt"));
         if (profileName == "local") { if (!local) throw std::runtime_error("local fixture needs GCC"); selected = *local; }

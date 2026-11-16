@@ -42,7 +42,8 @@
 # -labsl_string_view -labsl_int128 -labsl_throw_delegate -labsl_time_zone -labsl_tracing_internal
 # -labsl_base -lrt -labsl_raw_logging_internal -labsl_log_severity -labsl_spinlock_wait -lz3
 # -l_lightgbm -ltorch -ltorch_cpu -lc10
-name = "atcoder"
+name = "atcoder-gcc15-gnupp23"
+alias = "atcoder"
 description = "AtCoder C++23 (GCC 15.2.0), Linux x86_64; AtCoder Library 1.6 preinstalled (not modelled)"
 # Linux is evidenced by the published installation script (apt-get, ELF library paths).
 # UNVERIFIED: exact OS release is not specified here; x86_64 is inferred from the shared judge installation environment.
@@ -246,7 +247,7 @@ build = { recipe = "https://img.atcoder.jp/file/language-update/2025-10/017-23_g
 libraries = ["glibc", "libstdc++"]
 # -I<install>/include supplies ACL, Boost etc. as judge system headers.
 # They are outside the standard-header list, so their includes disable pruning.
-predefined = "atcoder-predefined.txt"
+predefined = "atcoder-gcc15-gnupp23-predefined.txt"
 check = ["g++-15", "g++"]
 updated = "2026-11-15"
 sources = [

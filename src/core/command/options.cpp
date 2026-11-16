@@ -24,6 +24,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     } else if (a.starts_with('-')) return Error{"unknown distill option: " + a + " (compiler options must follow the compiler name)"};
     else { o.compile.assign(args.begin() + i, args.end()); break; }
   }
+  if (o.compile.empty() && o.judge == "list") return o;
   if (o.compile.empty()) return Error{"missing compile command or source file"};
   const auto ext = pathToUtf8(pathFromUtf8(o.compile.front()).extension());
   if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c++" || ext == ".C") {
@@ -34,7 +35,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
 std::string distillHelp() {
   return "Usage: distill [distill options] [<compile command>]\n"
       "  -o <file>          output (default stdout)\n"
-      "  --judge <name|file> judge profile\n"
+      "  --judge <selector>  profile name, alias or TOML path; list shows profiles\n"
       "  --report <file>    validation, conditional and pruning report\n"
       "  --no-prune         inline and resolve only\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"

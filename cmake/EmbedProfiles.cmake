@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Embed profiles and any snapshots present; adding a snapshot reconfigures CMake.
+# Embed full profile names (e.g. codeforces-gcc14-cpp23.toml) and their
+# snapshots; aliases are TOML metadata. Adding a snapshot reconfigures CMake.
 file(GLOB judge_inputs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/*.toml" "${CMAKE_CURRENT_SOURCE_DIR}/data/judges/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/builtins/*.txt" "${CMAKE_CURRENT_SOURCE_DIR}/data/native/*.txt")
 set(profile_source "// SPDX-License-Identifier: GPL-3.0-or-later\n#include \"core/profile/profile.h\"\nnamespace distill {\nconst ProfileFiles& embeddedProfileFiles() {\nstatic const ProfileFiles files = {\n")
 foreach(input IN LISTS judge_inputs)

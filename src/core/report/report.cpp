@@ -62,6 +62,15 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
   std::ostringstream out;
   out << r.resultLine << '\n';
   out << "profile: " << (profile ? profile->name + " updated " + profile->provenance.updated : "none") << '\n';
+  if (profile) {
+    out << profileSelectionLine(*profile)
+        << "judge selector: " << std::quoted(profile->provenance.selector) << '\n'
+        << "judge resolved name: " << profile->name << '\n'
+        << "judge origin: " << profile->provenance.origin;
+    if (profile->provenance.origin == "user") out << ' ' << std::quoted(pathToUtf8(profile->provenance.file));
+    out << "\njudge digest: sha256:" << profile->provenance.contentDigest << '\n';
+    for (const auto& warning : profile->warnings) out << warning << '\n';
+  }
   out << "assumptions:";
   if (r.assumptions.empty()) out << " none";
   for (const auto& a : r.assumptions) out << ' ' << a;

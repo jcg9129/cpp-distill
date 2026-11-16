@@ -177,7 +177,7 @@ TEST(resolve_real_local_and_shipped_profiles) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
   auto a = resolve("#ifdef LOCAL\nx\n#endif\n", *e);
   CHECK_EQ(a.decisions[0].decision, Decision::unknown);
-  for (const auto* name : {"codeforces", "atcoder"}) {
+  for (const auto* name : {"codeforces-gcc14-cpp23", "atcoder-gcc15-gnupp23"}) {
     auto p = lookupProfile(name); CHECK(p.ok()); if (!p.ok()) continue;
     ResolveOptions o; o.profile = &p.value();
     auto b = resolve("#ifdef LOCAL\nx\n#endif\n#ifdef ONLINE_JUDGE\ny\n#endif\n", *e, o);

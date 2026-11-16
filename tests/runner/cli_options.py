@@ -60,6 +60,45 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(result.returncode == code, (args, result.returncode, result.stderr))
             check(message in result.stdout + result.stderr, (args, result.stdout, result.stderr))
             check(set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir()))
+    with case('judge list, full names, aliases and collision diagnostics'):
+        config = root / 'profile-config'
+        judges = config / 'distill' / 'judges'
+        judges.mkdir(parents=True)
+        env = dict(os.environ, XDG_CONFIG_HOME=str(config), APPDATA=str(config))
+
+        def judge_run(selector, compile=False):
+            return subprocess.run([binary, '--judge', selector, *(['g++', '-c', 'main.cpp'] if compile else [])],
+                                  env=env, cwd=root, capture_output=True, text=True, timeout=120)
+
+        result = judge_run('list')
+        check(result.returncode == 0 and result.stderr == '', result.stderr)
+        rows = [line.split('\t') for line in result.stdout.splitlines()]
+        check(len(rows) == 2 and all(len(row) == 6 for row in rows), rows)
+        check([row[:3] for row in rows] == [
+            ['atcoder-gcc15-gnupp23', 'atcoder', 'bundled'],
+            ['codeforces-gcc14-cpp23', 'codeforces', 'bundled']], rows)
+        for alias, name in [('codeforces', 'codeforces-gcc14-cpp23'), ('atcoder', 'atcoder-gcc15-gnupp23')]:
+            for selector in (alias, name):
+                result = judge_run(selector, compile=True)
+                check(result.returncode == 1 and 'rejected option' in result.stderr, result.stderr)
+                check(f'judge: {selector} -> {name}\n' in result.stderr, result.stderr)
+        profile = ("name = 'custom-gcc14-cpp23'\nalias = 'codeforces'\ndescription = 'CLI fixture'\n"
+                   "triple = 'x86_64-w64-mingw32'\ncompiler = { family = 'gcc', version = '14.2.0' }\n"
+                   "std = 'c++23'\nflags = []\nlibraries = ['mingw-w64']\ncheck = []\n"
+                   "updated = '2026-11-16'\nsources = ['https://example.org/fixture']\n")
+        (judges / 'custom-gcc14-cpp23.toml').write_text(profile, encoding='utf-8')
+        for run in range(2):
+            result = judge_run('codeforces', compile=True)
+            check("shadows bundled identifier 'codeforces'" in result.stderr, result.stderr)
+            check('judge: codeforces -> custom-gcc14-cpp23\n' in result.stderr, result.stderr)
+        for alias in ('codeforces', 'custom-gcc14-cpp23'):
+            other = profile.replace("name = 'custom-gcc14-cpp23'", "name = 'other-gcc14-cpp23'")
+            other = other.replace("alias = 'codeforces'", f"alias = '{alias}'")
+            (judges / 'other-gcc14-cpp23.toml').write_text(other, encoding='utf-8')
+            result = judge_run('list')
+            check(result.returncode == 1 and 'identifier collision' in result.stderr, result.stderr)
+            check('custom-gcc14-cpp23.toml' in result.stderr and 'other-gcc14-cpp23.toml' in result.stderr, result.stderr)
+        shutil.rmtree(config)
     with case('atomic output replacement and failure preserves previous output'):
         output = root / 'submit.cpp'
         output.write_bytes(b'old checked artifact')

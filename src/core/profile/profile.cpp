@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/profile/profile.h"
 #include "core/profile/toml.h"
+#include "core/profile/sha256.h"
 #include "core/path.h"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <fstream>
 #include <iterator>
+#include <iomanip>
 #include <regex>
 #include <sstream>
+#include <tuple>
 
 namespace distill {
 namespace {
@@ -85,11 +88,16 @@ struct Schema {
   Profile parse(const std::filesystem::path& path, const SnapshotReader& reader) const {
     for (const auto& [key, entry] : doc) {
       (void)entry;
-      if (key != "name" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "snapshot_compiler" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
+      if (key != "name" && key != "alias" && key != "description" && key != "triple" && key != "compiler" && key != "std" && key != "flags" && key != "link" && key != "inert" && key != "build" && key != "snapshot_compiler" && key != "libraries" && key != "predefined" && key != "check" && key != "updated" && key != "sources") fail(key, "unknown key");
     }
     Profile p;
     p.name = string("name");
-    if (!matches(p.name, "[a-z0-9-]+") || pathToUtf8(path.filename()) != p.name + ".toml") fail("name", "must be [a-z0-9-]+ and match the .toml file name");
+    if (!matches(p.name, "[a-z0-9]+(-[a-z0-9]+)*-gcc[1-9][0-9]*-(cpp|gnupp)[0-9]{2}(-[a-z0-9]+)*") || pathToUtf8(path.filename()) != p.name + ".toml")
+      fail("name", "must have shape <judge>-gcc<major>-<cppNN|gnuppNN>[-<variant>], use [a-z0-9-], and match the .toml file name");
+    if (doc.contains("alias")) {
+      p.alias = string("alias");
+      if (!matches(*p.alias, "[a-z0-9-]+")) fail("alias", "must use [a-z0-9-]+");
+    }
     p.description = get<std::string>("description");
     if (p.description.empty()) fail("description", "must not be empty");
     p.triple = string("triple");
@@ -190,7 +198,21 @@ Result<Profile> parseProfile(std::string_view text, const std::filesystem::path&
   try {
     auto doc = parseProfileToml(text, pathToUtf8(file));
     if (!doc.ok()) return doc.error();
-    return Schema{doc.value(), pathToUtf8(file)}.parse(file, reader);
+    std::string digestInput = "distill-profile-v1\n";
+    auto field = [&](std::string_view bytes) {
+      digestInput += std::to_string(bytes.size()) + ":";
+      digestInput.append(bytes);
+    };
+    field(text);
+    auto profile = Schema{doc.value(), pathToUtf8(file)}.parse(file,
+      [&](const std::filesystem::path& path) -> Result<std::string> {
+        if (!reader) return Error{"snapshot missing"};
+        auto bytes = reader(path);
+        if (bytes.ok()) { field(pathToUtf8(path.filename())); field(bytes.value()); }
+        return bytes;
+      });
+    profile.provenance.contentDigest = detail::sha256(digestInput);
+    return profile;
   }
   catch (const Error& error) { return error; }
   catch (const std::exception& error) { return Error{pathToUtf8(file) + ":1: " + error.what()}; }
@@ -231,27 +253,103 @@ std::optional<std::filesystem::path> profileUserDirectory(const ProfileLookup& l
   }
   return {};
 }
+Result<ProfileCatalog> listProfiles(const ProfileLookup& lookup, const ProfileFiles& embedded) {
+  try {
+    ProfileCatalog catalog;
+    std::vector<Profile> users;
+    if (auto directory = profileUserDirectory(lookup)) {
+      std::error_code ec;
+      std::filesystem::directory_iterator entries(*directory, ec);
+      if (ec && ec != std::errc::no_such_file_or_directory)
+        return Error{pathToUtf8(*directory) + ":1: " + ec.message()};
+      std::vector<std::filesystem::path> files;
+      if (!ec) for (const auto& entry : entries)
+        if (entry.path().extension() == ".toml") files.push_back(entry.path());
+      std::sort(files.begin(), files.end());
+      for (const auto& file : files) {
+        auto p = loadProfile(std::filesystem::absolute(file));
+        if (!p.ok()) return p.error(); // Invalid user files never silently fall through.
+        users.push_back(std::move(p.value()));
+      }
+    }
+    // User names and aliases share one namespace. Check before shadowing any
+    // bundled identifiers, so directory iteration order cannot choose a winner.
+    std::map<std::string, std::size_t, std::less<>> userIdentifiers;
+    auto identify = [](const Profile& p) {
+      std::vector<std::string> ids{p.name};
+      if (p.alias && *p.alias != p.name) ids.push_back(*p.alias);
+      return ids;
+    };
+    for (std::size_t i = 0; i < users.size(); ++i) for (const auto& id : identify(users[i])) {
+      auto [found, inserted] = userIdentifiers.emplace(id, i);
+      if (!inserted) return Error{"profile identifier collision '" + id + "' (name or alias): " +
+        pathToUtf8(users[found->second].provenance.file) + " and " + pathToUtf8(users[i].provenance.file)};
+    }
+    std::set<std::string> bundledIdentifiers;
+    for (const auto& [filename, text] : embedded) {
+      if (!filename.ends_with(".toml")) continue;
+      auto parsed = parseProfile(text, pathFromUtf8("embedded") / pathFromUtf8(filename),
+        [&](const std::filesystem::path& snapshot) -> Result<std::string> {
+          const auto it = embedded.find(pathToUtf8(snapshot.filename()));
+          if (it == embedded.end()) return Error{"embedded snapshot missing"};
+          return it->second;
+        });
+      if (!parsed.ok()) return parsed.error();
+      auto p = std::move(parsed.value());
+      p.provenance.origin = "bundled";
+      for (const auto& id : identify(p)) {
+        if (!bundledIdentifiers.insert(id).second) return Error{"bundled profile identifier collision '" + id + "' (name or alias)"};
+        if (const auto user = userIdentifiers.find(id); user != userIdentifiers.end())
+          catalog.warnings.push_back("warning: user profile " + pathToUtf8(users[user->second].provenance.file) +
+                                     " shadows bundled identifier '" + id + "' (" + p.name + ")");
+      }
+      catalog.profiles.push_back(std::move(p));
+    }
+    for (auto& p : users) catalog.profiles.push_back(std::move(p));
+    std::sort(catalog.profiles.begin(), catalog.profiles.end(), [](const auto& a, const auto& b) {
+      return std::tie(a.name, a.provenance.origin) < std::tie(b.name, b.provenance.origin);
+    });
+    return catalog;
+  } catch (const std::exception& error) { return Error{std::string("judge profiles: ") + error.what()}; }
+}
+std::string renderProfileList(const ProfileCatalog& catalog) {
+  std::ostringstream out;
+  for (const auto& p : catalog.profiles) {
+    out << p.name << '\t' << p.alias.value_or("-") << '\t' << p.provenance.origin;
+    if (p.provenance.origin == "user") out << ' ' << std::quoted(pathToUtf8(p.provenance.file));
+    std::string description;
+    for (const auto ch : p.description) {
+      if (ch == '\n') description += "\\n";
+      else if (ch == '\r') description += "\\r";
+      else if (ch == '\t') description += "\\t";
+      else description += ch;
+    }
+    out << '\t' << (p.reproduced ? "reproduced" : "approximate") << '\t' << p.provenance.updated
+        << '\t' << std::quoted(description) << '\n';
+  }
+  return out.str();
+}
+std::string profileSelectionLine(const Profile& profile) {
+  return "judge: " + profile.provenance.selector + " -> " + profile.name + "\n";
+}
 Result<Profile> lookupProfile(std::string_view nameOrFile, const ProfileLookup& lookup, const ProfileFiles& embedded) {
   try {
-    if (nameOrFile.find_first_of("/\\") != nameOrFile.npos || nameOrFile.ends_with(".toml")) return loadProfile(pathFromUtf8(nameOrFile));
-    const std::string name(nameOrFile);
-    if (!matches(name, "[a-z0-9-]+")) return Error{name + ":1: invalid profile name"};
-    const auto filename = name + ".toml";
-    if (auto directory = profileUserDirectory(lookup)) {
-      auto file = *directory / pathFromUtf8(filename);
-      std::error_code ec;
-      const auto status = std::filesystem::symlink_status(file, ec);
-      if (ec && ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory) return Error{pathToUtf8(file) + ":1: " + ec.message()};
-      if (std::filesystem::exists(status)) return loadProfile(file); // Invalid user profiles never fall through.
+    if (nameOrFile.find_first_of("/\\") != nameOrFile.npos || nameOrFile.ends_with(".toml")) {
+      auto p = loadProfile(std::filesystem::absolute(pathFromUtf8(nameOrFile)));
+      if (p.ok()) p.value().provenance.selector = nameOrFile;
+      return p;
     }
-    const auto found = embedded.find(filename);
-    if (found == embedded.end()) return Error{name + ":1: judge profile not found"};
-    const auto file = pathFromUtf8("embedded") / filename;
-    return parseProfile(found->second, file, [&](const std::filesystem::path& snapshot) -> Result<std::string> {
-      const auto it = embedded.find(pathToUtf8(snapshot.filename()));
-      if (it == embedded.end()) return Error{"embedded snapshot missing"};
-      return it->second;
-    });
+    if (!matches(std::string(nameOrFile), "[a-z0-9-]+")) return Error{std::string(nameOrFile) + ":1: invalid profile selector"};
+    auto catalog = listProfiles(lookup, embedded);
+    if (!catalog.ok()) return catalog.error();
+    Profile* selected = nullptr;
+    for (auto& p : catalog.value().profiles) if (p.name == nameOrFile || (p.alias && *p.alias == nameOrFile)) {
+      if (!selected || p.provenance.origin == "user") selected = &p;
+    }
+    if (!selected) return Error{std::string(nameOrFile) + ":1: judge profile not found"};
+    selected->provenance.selector = nameOrFile;
+    selected->warnings = std::move(catalog.value().warnings);
+    return std::move(*selected);
   } catch (const std::exception& error) { return Error{std::string(nameOrFile) + ":1: " + error.what()}; }
 }
 } // namespace distill

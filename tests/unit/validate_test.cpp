@@ -46,6 +46,7 @@ TEST(validate_cli_options) {
   auto r = parseDistillOptions({"--no-prune", "-o", "out.cpp", "--strict", "main.cpp"}); CHECK(r.ok());
   CHECK(!r.value().compilerExplicit); CHECK(r.value().strict); CHECK_EQ(r.value().compile.front(), "g++");
   CHECK(parseDistillOptions({"--help"}).value().help);
+  CHECK_EQ(parseDistillOptions({"--judge", "list"}).value().judge.value(), "list");
   CHECK(parseDistillOptions({"--version"}).value().version);
   CHECK(parseDistillOptions({"-v", "--version"}).value().compile.empty());
   CHECK(!parseDistillOptions({"--version=1"}).ok());
@@ -102,7 +103,7 @@ TEST(validate_capture_profile_crlf_compiler_output) {
   CHECK(snapshot.find('\r') == snapshot.npos);
   // CRLF record separators remain valid; an embedded bare CR remains invalid.
   temp.write("fixture-predefined.txt", crlf(snapshot));
-  auto loaded = loadProfile(temp.path / "fixture.toml");
+  auto loaded = loadProfile(p.provenance.file);
   CHECK(loaded.ok());
   if (loaded.ok()) {
     CHECK_EQ(loaded.value().snapshotMetadata.versionOutput, p.snapshotMetadata.versionOutput);
@@ -111,7 +112,7 @@ TEST(validate_capture_profile_crlf_compiler_output) {
   auto malformed = snapshot;
   malformed.insert(malformed.find("\\nCopyright"), 1, '\r');
   temp.write("fixture-predefined.txt", malformed);
-  auto rejected = loadProfile(temp.path / "fixture.toml");
+  auto rejected = loadProfile(p.provenance.file);
   CHECK(!rejected.ok());
   if (!rejected.ok()) CHECK(rejected.error().message.find("fixture-predefined.txt:4: invalid UTF-8 or control character") != std::string::npos);
 }
