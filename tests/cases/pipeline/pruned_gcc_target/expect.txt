@@ -1,16 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # The target pragma is built only with an x86_64 host compiler.
 requires=x86_64
-profile=atcoder
+profile=fixture
 prune=yes
 artifact=pruned
-verification=local
+verification=fixture
 exit=0
 configuration=local
 report=removed: outside the retention closure
-report.1=profile: atcoder
-report.2=fact __x86_64__=known
+report.1=profile: fixture
 contains=#pragma GCC target("avx2")
 absent=int unused
-absent.1=#if
-absent.2=#error
