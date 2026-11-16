@@ -63,21 +63,36 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
     add(d.framework ? "-iframework" : d.kind == IncludeKind::quote ? "-iquote" : "-isystem", pathToUtf8(c.command.cwd / d.path));
   }
   if (!resource) add("-isystem",std::string(pruningResourceDirectory) + "/include");
+  // LLVM 23 cc1's CharIsSigned default is true even on unsigned-char
+  // targets. Its driver supplies -fno-signed-char for those target defaults;
+  // explicit signed char needs no option. Use the selected probe for defaults
+  // and the last explicit flag for overrides; never leave a stale negative.
+  bool unsignedChar = c.probe.macros.contains("__CHAR_UNSIGNED__");
   for (const auto& a : c.command.args) {
     if (a.option == "-D" || a.option == "-U") { m.parseArgv.push_back(a.option + a.value); continue; }
     if (a.option == "-std=" || a.classification == Class::input || a.classification == Class::controlled ||
         a.option == "-I" || a.option == "-iquote" || a.option == "-isystem" || a.option == "-m32" || a.option == "-m64") continue;
-    if (a.option == "-funsigned-char") m.parseArgv.push_back("-fno-signed-char");
-    else if (a.option == "-fsigned-char") m.parseArgv.push_back("-fsigned-char");
-    else if (a.option == "-fshort-wchar" || a.option == "-fno-rtti" || a.option == "-pthread") m.parseArgv.push_back(a.option);
+    if (a.option == "-funsigned-char") unsignedChar = true;
+    else if (a.option == "-fsigned-char") unsignedChar = false;
+    else if (a.option == "-fshort-wchar") {
+      m.parseArgv.push_back("-fwchar-type=short"); m.parseArgv.push_back("-fno-signed-wchar");
+    }
+    // -pthread really is a cc1 option in LLVM 23 (LangOpts.POSIXThreads);
+    // it supplies the target's thread predefines before ordered -D/-U ops.
+    else if (a.option == "-fno-rtti" || a.option == "-pthread" ||
+             a.option == "-O0" || a.option == "-O1" || a.option == "-O2" || a.option == "-O3" || a.option == "-Os" || a.option == "-Og")
+      m.parseArgv.push_back(a.option);
     else if (a.option == "-fno-exceptions") { /* Leave both cc1 exception flags off; set defaults below. */ }
     else {
       std::string spelling; for (const auto& word : a.spelling) { if (!spelling.empty()) spelling += ' '; spelling += word; }
       m.untranslatedOptions.push_back(spelling);
-      const bool inert = a.classification == Class::harmless;
+      // cc1 accepts -Ofast as an optimization level, but it does not supply
+      // the driver's implied fast-math language options. Fail closed.
+      const bool inert = a.classification == Class::harmless && a.option != "-Ofast";
       if (!inert) m.disabledReasons.push_back("untranslated semantic option: " + spelling);
     }
   }
+  if (unsignedChar) m.parseArgv.push_back("-fno-signed-char");
   if (std::none_of(c.command.args.begin(),c.command.args.end(),[](const auto& a) { return a.option == "-fno-exceptions"; })) {
     m.parseArgv.push_back("-fcxx-exceptions"); m.parseArgv.push_back("-fexceptions");
   }

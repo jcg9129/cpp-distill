@@ -85,6 +85,28 @@ int main(int argc, char** argv) {
                     << (id < r.families.size() ? r.families[id].reason : "retention unavailable") << '\n';
       }
     };
+    run("cc1 translated language options", [&] {
+      for (const auto* triple : {"x86_64-unknown-linux-gnu","aarch64-unknown-linux-gnu"}) {
+        Configuration c; c.probe.triple = triple; c.probe.dialect = {"c++20",false,202002};
+        c.command = take(parseCompileCommand({"g++","-funsigned-char","-fsigned-char","-fshort-wchar",
+            "-fno-exceptions","-fno-rtti","-pthread","-O2","main.cpp"},temp.path));
+        ResolveResult flat; flat.text =
+            "static_assert(char(-1) < 0);\nstatic_assert(sizeof(wchar_t) == 2 && wchar_t(-1) > 0);\n"
+            "#if defined(__EXCEPTIONS__) || defined(__GXX_RTTI) || !defined(_REENTRANT) || !defined(__OPTIMIZE__)\n"
+            "#error wrong translated language options\n#endif\nint main(){}\n";
+        m = extracted(take(preparePruning(c,{},flat)),o);
+        check(m.disabledReasons.empty(),std::string("translated options rejected for ") + triple);
+      }
+    });
+    run("cc1 unsigned default and ordered overrides", [&] {
+      Configuration c; c.probe.triple = "aarch64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
+      c.probe.macros["__CHAR_UNSIGNED__"] = Macro{false,{},false,"1"};
+      c.command = take(parseCompileCommand({"g++","-pthread","-U_REENTRANT","-O2","-O0","main.cpp"},temp.path));
+      ResolveResult flat; flat.text = "static_assert(char(-1) > 0);\n"
+          "#if defined(_REENTRANT) || defined(__OPTIMIZE__)\n#error overrides lost\n#endif\nint main(){}\n";
+      m = extracted(take(preparePruning(c,{},flat)),o);
+      check(m.disabledReasons.empty(),"unsigned default or macro/optimization overrides rejected");
+    });
     run("template ownership", [&] {
       m = extract("template<class T> struct Box { void f(); };\ntemplate<class T> void Box<T>::f() { int local=0; (void)local; }\nint unused() { return 0; }\nint main() { Box<int> x; x.f(); }\n",o);
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"ownership unexpectedly disabled");

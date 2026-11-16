@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma GCC optimize("O3")
-#pragma GCC target("avx2")
 #include <vector>
 #include <numeric>
 #include <utility>
 #include <functional>
+#if defined(__i386__) || defined(__x86_64__)
+#pragma GCC target("avx2")
+#endif
 using namespace std;
 #define rep(i, n) for (int i = 0; i < int(n); ++i)
 struct Mint {

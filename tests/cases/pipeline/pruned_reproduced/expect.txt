@@ -8,3 +8,4 @@ profile=fixture
 absent=int unused
 report=pruned: passed
 report.1=policy: D3b-1
+diagnostic=check compiler unavailable: distill-missing-check-719239

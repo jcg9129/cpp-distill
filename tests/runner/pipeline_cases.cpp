@@ -195,7 +195,14 @@ int run(int argc, char** argv) {
         if (code != 1) bytes = read(cwd / "submit.cpp");
         else check(!std::filesystem::exists(cwd / "submit.cpp"), "failed CLI wrote output");
         const auto line = "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime not requested";
-        if (code != 1) check(diagnostic.find(line) != diagnostic.npos, "wrong result line: " + diagnostic);
+        if (code != 1) {
+          std::istringstream lines(diagnostic); std::string actual; bool found = false;
+          while (std::getline(lines,actual)) {
+            if (!actual.empty() && actual.back() == '\r') actual.pop_back();
+            if (actual == line) found = true;
+          }
+          check(found, "wrong result line: " + diagnostic);
+        }
         if (code != 1 && value("prune") == "yes") {
           // The public CLI still reports runtime not requested. The SDK runner
           // independently compares its exact published bytes against a second
@@ -291,6 +298,9 @@ int run(int argc, char** argv) {
           check(skipped, "incompatible check compiler was not recorded as skipped");
         }
         diagnostic = result.diagnostic; bytes = result.bytes;
+        if (code != 1)
+          check(result.resultLine == "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime " + result.runtime,
+                "wrong result line: " + result.resultLine);
         if (value("prune") == "yes" && code != 1)
           check(result.runtime == "compared 1 samples", "missing internal runtime comparison: " + result.runtime + "\n" + report);
         if (code != 1) {
@@ -314,6 +324,7 @@ int run(int argc, char** argv) {
       for (const auto& [key, line] : expected) if (key == "report" || key.starts_with("report."))
         check(report.find(line) != report.npos, "missing report line: " + line + "\n" + report);
       for (const auto& [key,text] : expected) {
+        if (key == "diagnostic" || key.starts_with("diagnostic.")) check(diagnostic.find(text) != diagnostic.npos,"missing diagnostic: " + text);
         if (key == "contains" || key.starts_with("contains.")) check(bytes.find(text) != bytes.npos,"missing output: " + text + "\n" + bytes);
         if (key == "absent" || key.starts_with("absent.")) check(bytes.find(text) == bytes.npos,"unexpected output: " + text + "\n" + bytes);
       }

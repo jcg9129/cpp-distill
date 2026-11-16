@@ -598,7 +598,7 @@ headers in the probed search order. User search paths remain absent. Clang keeps
 its own predefinitions, including the driver's GNU compatibility default
 (`-fgnuc-version=4.2.1`), which cc1 does not enable automatically. Untranslated
 options are recorded; semantic options without support, including
-modules/OpenMP/CPU tuning, disable pruning. Source
+modules/OpenMP/CPU tuning and `-Ofast`'s implied fast-math policy, disable pruning. Source
 pragmas use the audited allow-list below; other pragmas disable pruning.
 Generated markers are identified from D2's null line-map entries, never by
 spelling alone. Keep comments are captured as physical declaration-token offsets by
@@ -621,11 +621,24 @@ The parsing policy is:
 | `-fmath-errno` | Require math errno semantics, matching GCC defaults and the Linux/MinGW driver vectors; cc1 option marshalling defaults this off. It also controls `__NO_MATH_ERRNO__` and can select header branches. |
 | `-fdeprecated-macro` | Define `__DEPRECATED`, matching the C++ driver default and GCC's ordinary C++ mode. Bare cc1 leaves it absent; libstdc++ uses it to select deprecated declarations. |
 | `-nostdinc++`, `-nostdsysteminc`, `-nobuiltininc`, `-resource-dir`, explicit include flags | Suppress implicit host searches and install the probed GCC headers plus embedded Clang resource headers in order. `-nobuiltininc` only disables automatic resource **header search**, not builtin function registration. |
-| `-D`, `-U`, `-pthread`, character/wchar options | Preserve macro operation order and selected thread/character semantics; translate driver `-funsigned-char` to cc1 `-fno-signed-char`. |
+| `-D`, `-U` | Preserve macro operation order. |
+| Character signedness | LLVM 23 cc1 defaults `CharIsSigned` to true on **all** targets; the driver supplies unsigned target defaults. Emit only `-fno-signed-char` for an unsigned selection. A signed selection emits neither character flag, even on ARM. Use the selected probe's `__CHAR_UNSIGNED__` for the default and the last explicit `-fsigned-char`/`-funsigned-char` for overrides. Neither driver spelling is forwarded. |
+| `-fwchar-type=short`, `-fno-signed-wchar` | Translate driver-only `-fshort-wchar` to both cc1 options, reproducing unsigned short wchar semantics. |
+| `-pthread` | LLVM 23's `Options.td` explicitly marks this as `CC1Option` (`LangOpts.POSIXThreads`); it is safe to forward. Clang supplies target-aware thread predefines such as `_REENTRANT` before applying ordered `-D`/`-U`. Do not replace this with a user definition at the flag's argv position. |
+| `-fwrapv`, `-fno-wrapv` | Both exist as cc1 options, but remain outside the compile-command model. They are recorded and disable resolution/pruning with named reasons, preserving the existing unmodelled-option policy. |
+| `-O0`, `-O1`, `-O2`, `-O3`, `-Os`, `-Og` | Forward in order: optimization affects `__OPTIMIZE__`, `__OPTIMIZE_SIZE__` and header branches even for syntax-only parsing. Although cc1 accepts `-Ofast`, it lacks the driver's implied fast-math language options; record it and disable pruning with `untranslated semantic option: -Ofast`. |
+| `-march=`, `-mtune=`, `-mcpu=` | Never forward driver CPU spellings. cc1 uses `-target-cpu`, `-tune-cpu` and target features; deriving the full target-specific driver translation (including `native`) is unsupported, so each remains recorded with a named `untranslated semantic option` disable. |
 | `-fno-builtin`, `-ffreestanding`, `-undef` | Never added to the extraction invocation: keep hosted builtin semantics and Clang predefinitions. The isolated condition evaluator intentionally has a different preprocessing policy. |
 | `-fcolor-diagnostics`, error limits, diagnostic formatting | Omitted: they change diagnostic presentation, not parsing or lookup. |
 | `-stack-protector`, `-mrelocation-model`, PIC/PIE flags | Do not copy a host driver's distribution/target code-generation policy. Stack protection defaults off in cc1; relocation does not initialize builtins. SSP/PIC/PIE feature macros can differ, so they are not claimed to reproduce the selected GCC's macro snapshot; user expansions still undergo the existing parse/judge fact checks. Explicit unsupported semantic options disable pruning. |
 | Backend, debug, unwind, frame-pointer and tuning flags | Omit driver implementation/code-generation flags. Selected unsupported CPU/ABI/semantic options remain recorded and disable pruning rather than silently inheriting the host driver policy. |
+
+The translation table is checked as complete argv deltas in
+`prune_prepare_cc1_translation_table`; SDK extraction tests also exercise signed
+and unsigned ARM selections, wchar type, exception/RTTI disables, thread macro
+ordering and optimization predefines. Audit references for LLVM 23.1.5:
+[`Options.td`](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.5/clang/include/clang/Options/Options.td)
+and [`RenderCharacterOptions`](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.5/clang/lib/Driver/ToolChains/Clang.cpp).
 
 Builtin function registration is a separate frontend lifecycle step, not an
 argument-vector fix. `CompilerInstance::createPreprocessor` initializes the
