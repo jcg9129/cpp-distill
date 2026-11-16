@@ -194,6 +194,24 @@ TEST(prune_prepare_selected_configuration_and_provenance) {
   CHECK(std::find(args.begin(),args.end(),"-undef") == args.end());
   CHECK(!m.value().disabledReasons.empty()); CHECK_EQ(m.value().untranslatedOptions.size(),2u);
 }
+TEST(prune_prepare_cpp_defaults_and_explicit_disables) {
+  for (int disables = 0; disables < 4; ++disables) {
+    std::vector<std::string> argv{"g++","-std=gnu++20"};
+    if (disables & 1) argv.push_back("-fno-exceptions");
+    if (disables & 2) argv.push_back("-fno-rtti");
+    argv.push_back("main.cpp");
+    Configuration c; c.command = parseCompileCommand(argv,std::filesystem::current_path()).value();
+    c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"gnu++20",true,202002};
+    auto m = preparePruning(c,{},{}); CHECK(m.ok()); CHECK(m.value().disabledReasons.empty());
+    const auto& args = m.value().parseArgv;
+    auto has = [&](const char* flag) { return std::find(args.begin(),args.end(),flag) != args.end(); };
+    CHECK(has("-fsyntax-only")); CHECK(has("-fmath-errno")); CHECK(has("-fdeprecated-macro"));
+    CHECK_EQ(has("-fcxx-exceptions"),!(disables & 1));
+    CHECK_EQ(has("-fexceptions"),!(disables & 1));
+    CHECK_EQ(has("-fno-rtti"),bool(disables & 2));
+    CHECK(!has("-fno-builtin")); CHECK(!has("-ffreestanding"));
+  }
+}
 TEST(prune_prepare_pragmas_allow_only_audited_effects_and_preserve_directives) {
   Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"gnu++20",false,202002};
   for (const auto* pragma : {"GCC optimize(\"O3\")", "GCC target(\"avx2\")", "GCC push_options", "GCC pop_options", "GCC reset_options",

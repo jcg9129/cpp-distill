@@ -7,6 +7,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
@@ -654,6 +655,11 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   compiler.createFileManager(); compiler.createSourceManager();
   if (!compiler.createTarget()) { model.disabledReasons.push_back("unsupported Clang target"); return model; }
   compiler.createPreprocessor(TU_Complete); compiler.createASTContext();
+  // createPreprocessor initializes the target's builtin table, but registering
+  // its names normally happens in FrontendAction::BeginSourceFile. We bypass
+  // that action and call ParseAST directly, so perform that step before parsing.
+  auto& pp = compiler.getPreprocessor();
+  pp.getBuiltinInfo().initializeBuiltins(pp.getIdentifierTable(),compiler.getLangOpts());
   auto& sm = compiler.getSourceManager();
   sm.setMainFileID(sm.createFileID(llvm::MemoryBuffer::getMemBufferCopy(model.text,"flat.cpp")));
   Extraction extraction(std::move(model),compiler);

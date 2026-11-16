@@ -44,9 +44,11 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
       m.disabledReasons.push_back("unsupported ABI translation: " + a.option);
     else triple = std::string(a.option == "-m32" ? "i386" : "x86_64") + triple.substr(separator);
   }
-  // CreateFromArgs takes cc1 options, so reproduce the driver's GNU
-  // compatibility default explicitly (cc1 itself defaults to no __GNUC__).
-  m.parseArgv = {"-x", "c++", "-std=" + m.dialect, "-triple", triple, "-fgnuc-version=4.2.1",
+  // CreateFromArgs takes cc1 options, not driver flags. Reproduce the parsing
+  // defaults explicitly where cc1 differs; see the audit in core/README.md.
+  // RTTI is already enabled by cc1's C++ language default.
+  m.parseArgv = {"-x", "c++", "-std=" + m.dialect, "-triple", triple, "-fsyntax-only",
+                 "-fgnuc-version=4.2.1", "-fmath-errno", "-fdeprecated-macro",
                  "-nostdinc++", "-nostdsysteminc", "-nobuiltininc", "-resource-dir", std::string(pruningResourceDirectory)};
   auto add = [&](std::string flag, std::string value) { m.parseArgv.push_back(std::move(flag)); m.parseArgv.push_back(std::move(value)); };
   bool resource = false;
@@ -65,7 +67,7 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
     if (a.option == "-funsigned-char") m.parseArgv.push_back("-fno-signed-char");
     else if (a.option == "-fsigned-char") m.parseArgv.push_back("-fsigned-char");
     else if (a.option == "-fshort-wchar" || a.option == "-fno-rtti" || a.option == "-pthread") m.parseArgv.push_back(a.option);
-    else if (a.option == "-fno-exceptions") { /* cc1 exceptions default off; set below */ }
+    else if (a.option == "-fno-exceptions") { /* Leave both cc1 exception flags off; set defaults below. */ }
     else {
       std::string spelling; for (const auto& word : a.spelling) { if (!spelling.empty()) spelling += ' '; spelling += word; }
       m.untranslatedOptions.push_back(spelling);

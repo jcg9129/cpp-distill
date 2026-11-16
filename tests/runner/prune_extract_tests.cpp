@@ -3,6 +3,7 @@
 #include "core/path.h"
 #include "core/temporary.h"
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 namespace {
 using namespace distill;
@@ -242,6 +243,33 @@ int main(int argc, char** argv) {
       check(r.disabledReasons.empty(),"ownership unexpectedly disabled");
       check(kept("Payload"),"referenced family removed");
       check(!kept("unused"),"unused function retained");
+    });
+    run("builtin functions and C++ defaults", [&] {
+      m = extract("#if !defined(__EXCEPTIONS) || !defined(__GXX_RTTI) || !defined(__DEPRECATED) || defined(__NO_MATH_ERRNO__)\n"
+                  "#error missing C++ driver defaults\n#endif\n"
+                  "static_assert(__builtin_popcount(7) == 3);\n"
+                  "static_assert(__builtin_clzll(1ULL) == 63);\n"
+                  "struct Base { virtual ~Base() = default; }; struct Derived : Base {};\n"
+                  "int main(){Derived d; Base* b=&d; if (!dynamic_cast<Derived*>(b)) __builtin_unreachable();\n"
+                  "try { throw __builtin_popcount(7); } catch(int n) {\n"
+                  "return __builtin_expect_with_probability(n + __builtin_ctz(8), 6, 0.9); }}\n",o);
+      r = take(computeRetention(m));
+      check(m.disabledReasons.empty(),"builtin/defaults parse unexpectedly disabled");
+      check(r.disabledReasons.empty(),"builtin/defaults retention unexpectedly disabled");
+      check(kept("main"),"main missing after builtin parsing");
+    });
+    run("standard library and builtin functions", [&] {
+      // Use the native GCC's target and header search, just like extraction
+      // cases; the header-free synthetic models above use a fixed target.
+      auto command = take(parseCompileCommand({"g++","-std=gnu++20","empty.cpp"},temp.path));
+      { std::ofstream empty(temp.path / "empty.cpp"); }
+      ProbeOptions po; po.temporaryRoot = temp.path;
+      const auto configuration = take(probeConfiguration(command,"builtin regression",po));
+      ResolveResult flat; flat.text = "#include <bits/stdc++.h>\nint main(){return __builtin_popcount(7);}\n";
+      flat.lineMap = {SourceLocation{"original.hpp",1},SourceLocation{"original.hpp",2}};
+      m = extracted(take(preparePruning(configuration,{},flat,&configuration.facts)),o);
+      check(m.disabledReasons.empty(),"bits/stdc++.h with __builtin_popcount failed to parse");
+      check(!family(m,"main").ranges.empty(),"main missing after standard-library parsing");
     });
     run("macro generated declarations", [&] {
       m = extract("#define DEFINE(name) template<class T> struct name { T get(){return T{};} };\nDEFINE(Box)\nint unused(){return 0;} int main(){return Box<int>{}.get();}\n",o); r = take(computeRetention(m));

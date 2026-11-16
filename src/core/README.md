@@ -583,6 +583,42 @@ spelling alone. Keep comments are captured as physical declaration-token offsets
 in the child. `keepOffsets`/`annotations` survive independently of the comment.
 D3b must map the declaration offsets when its rendering changes byte positions.
 
+The cc1 argument audit compares `clang++ -### -std=gnu++20 --target=<triple>
+-fsyntax-only` (also strict `c++20` and the MinGW target) with LLVM 23.1.5's
+`Options.td`/`LangOptions.def`. Driver defaults cannot simply be inferred from
+the initial values in `LangOptions.def`: option marshalling can replace them.
+The parsing policy is:
+
+| cc1 option | Reason and handling |
+| --- | --- |
+| `-x c++`, `-std=…`, `-triple …`, `-fsyntax-only` | Parse the selected dialect/target without code generation. Driver `--target` becomes cc1 `-triple`; x86 `-m32`/`-m64` adjusts that triple. |
+| `-fgnuc-version=4.2.1` | Reproduce Clang's driver compatibility macros (`__GNUC__`, etc.); bare cc1 otherwise leaves them absent. This does not initialize builtin function names or impersonate the selected GCC version. |
+| `-fcxx-exceptions`, `-fexceptions` | Enable both C++ exception syntax and exception handling/feature macros, as the GCC/Clang C++ drivers do. Both cc1 defaults are off. An explicit selected `-fno-exceptions` leaves both off. |
+| RTTI | cc1 defaults to RTTI on for C++, matching GCC. Forward an explicit selected `-fno-rtti` only. The SDK's `-fno-rtti` used to compile the worker is independent of the input's language options. |
+| `-fmath-errno` | Require math errno semantics, matching GCC defaults and the Linux/MinGW driver vectors; cc1 option marshalling defaults this off. It also controls `__NO_MATH_ERRNO__` and can select header branches. |
+| `-fdeprecated-macro` | Define `__DEPRECATED`, matching the C++ driver default and GCC's ordinary C++ mode. Bare cc1 leaves it absent; libstdc++ uses it to select deprecated declarations. |
+| `-nostdinc++`, `-nostdsysteminc`, `-nobuiltininc`, `-resource-dir`, explicit include flags | Suppress implicit host searches and install the probed GCC headers plus embedded Clang resource headers in order. `-nobuiltininc` only disables automatic resource **header search**, not builtin function registration. |
+| `-D`, `-U`, `-pthread`, character/wchar options | Preserve macro operation order and selected thread/character semantics; translate driver `-funsigned-char` to cc1 `-fno-signed-char`. |
+| `-fno-builtin`, `-ffreestanding`, `-undef` | Never added to the extraction invocation: keep hosted builtin semantics and Clang predefinitions. The isolated condition evaluator intentionally has a different preprocessing policy. |
+| `-fcolor-diagnostics`, error limits, diagnostic formatting | Omitted: they change diagnostic presentation, not parsing or lookup. |
+| `-stack-protector`, `-mrelocation-model`, PIC/PIE flags | Do not copy a host driver's distribution/target code-generation policy. Stack protection defaults off in cc1; relocation does not initialize builtins. SSP/PIC/PIE feature macros can differ, so they are not claimed to reproduce the selected GCC's macro snapshot; user expansions still undergo the existing parse/judge fact checks. Explicit unsupported semantic options disable pruning. |
+| Backend, debug, unwind, frame-pointer and tuning flags | Omit driver implementation/code-generation flags. Selected unsupported CPU/ABI/semantic options remain recorded and disable pruning rather than silently inheriting the host driver policy. |
+
+Builtin function registration is a separate frontend lifecycle step, not an
+argument-vector fix. `CompilerInstance::createPreprocessor` initializes the
+target builtin table but does not assign builtin IDs to identifiers.
+[`FrontendAction::BeginSourceFile`](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.5/clang/lib/Frontend/FrontendAction.cpp)
+normally calls `PP.getBuiltinInfo().initializeBuiltins(PP.getIdentifierTable(),
+PP.getLangOpts())`. Extraction calls `ParseAST` directly and must perform this
+registration itself after creating the target/preprocessor and before parsing.
+Without it, even `__builtin_unreachable` and `__builtin_popcount` are undeclared.
+The spike's `ToolInvocation`/`SyntaxOnlyAction` runs the normal frontend lifecycle;
+`evaluate.cpp` only lexes isolated `#if` expressions and never looks up builtin
+functions through Sema. No builtin declarations or compatibility macros are
+injected as a workaround. Model regressions parse builtin calls, exception/RTTI
+syntax and driver feature macros, then separately parse `<bits/stdc++.h>` plus
+`__builtin_popcount` using the native GCC probe's target and search directories.
+
 `extractPruning` serializes the request through a strict bounded private
 protocol and uses D2's `runProcess` process-group/Job Object containment to run
 `distill_prune_worker`. A deadline, crash, invalid protocol or output cap disables
