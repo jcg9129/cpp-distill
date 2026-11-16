@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         result = judge_run('list')
         check(result.returncode == 0 and result.stderr == '', result.stderr)
         rows = [line.split('\t') for line in result.stdout.splitlines()]
-        check(len(rows) == 2 and all(len(row) == 6 for row in rows), rows)
+        check(len(rows) == 2 and all(len(row) == 7 and row[6] == '-' for row in rows), rows)  # last column: latest observation
         check([row[:3] for row in rows] == [
             ['atcoder-gcc15-gnupp23', 'atcoder', 'bundled'],
             ['codeforces-gcc14-cpp23', 'codeforces', 'bundled']], rows)
