@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 cmake_minimum_required(VERSION 3.24)
-project(cpp_distill LANGUAGES C CXX)
+project(cpp_distill LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -52,6 +52,8 @@ if(WIN32)
 endif()
 set(DISTILL_LLVM_DIR "" CACHE PATH "Pinned SDK lib/cmake/llvm directory")
 if(DISTILL_LLVM_DIR)
+  # LLVM's package dependency checks (e.g. libffi) can compile C probes.
+  enable_language(C)
   set(LLVM_DIR "${DISTILL_LLVM_DIR}" CACHE PATH "" FORCE)
   get_filename_component(DISTILL_CMAKE_DIR "${DISTILL_LLVM_DIR}" DIRECTORY)
   set(Clang_DIR "${DISTILL_CMAKE_DIR}/clang" CACHE PATH "" FORCE)
