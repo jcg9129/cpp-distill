@@ -30,8 +30,8 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D3 pruning | D3a–D3d implemented: analysis, rendering, adversarial/checker cases, corpus measurement harness and first-measurement fixes; complete except user corpus measurement, pending SDK CI verification |
 | D4a runtime CLI and caide port | implemented: repeated `--verify-run`, individual assertions/reviews for all 81 caide cases; real CLI/extraction execution requires SDK CI |
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
-| D5a release packaging/docs | implemented: five-platform release/dry-run workflow, build identity, licenses/notices and user README; real dispatch and SDK validation remain CI-only |
-| D4/D5 remainder | remaining checker/corpus work and first tagged release; see design §7 |
+| D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
+| D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
 
 ## D1 findings (2026-11-15)
 
@@ -347,3 +347,19 @@ SDK linkage and every platform observation remain for the first CI run.
   First five-platform dispatch, dependency/link observations and actual release
   remain CI-only. Approved design v8 is unchanged; proposed wording records that
   macos-14 is unavailable and minos 14.0 is audited on macos-15 instead.
+
+## D5a fixes and v0.1.0 (2026-11-16)
+
+- The first dry run (run 43937032822) found two bugs, fixed in #27: Windows
+  checkouts converted hashed/shipped documents to CRLF (now `-text` in
+  `.gitattributes`, with tests), and generated `#pragma once` guard lines
+  carried `#line … "raw.cpp"` into output (now marked with the guarded original
+  file; the renderer refuses unset locations; pipeline test checks raw/flat/pruned).
+- Second dry run 43958991611 green on all five platforms. Tag `v0.1.0` on
+  `b9b72fa`; release run 43961194003 published
+  https://github.com/jcg9129/cpp-distill/releases/tag/v0.1.0 (five archives +
+  SHA256SUMS) after rerunning a macos-arm64 job that never got a runner.
+- The previous session crashed the shared VM after local binary runs plus a
+  Codex job that built and tested locally. Builds and tests now run in CI only;
+  Codex briefs must not ask for local suites while anything else runs.
+
