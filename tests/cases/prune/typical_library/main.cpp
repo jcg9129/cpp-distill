@@ -4,9 +4,7 @@
 #include <numeric>
 #include <utility>
 #include <functional>
-#if defined(__i386__) || defined(__x86_64__)
 #pragma GCC target("avx2")
-#endif
 using namespace std;
 #define rep(i, n) for (int i = 0; i < int(n); ++i)
 struct Mint {
