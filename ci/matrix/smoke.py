@@ -133,7 +133,7 @@ class Smoke:
     def profile(self, dialect, no_prune):
         # Fixture profile with explicit command facts, no claimed reproduced
         # build. Mirrors tests/support/profile.cpp without fabricating a snapshot.
-        profile = self.work / "matrix-profile.toml"
+        profile = self.work / "matrix-fixture.toml"
         profile.write_text(
             "# SPDX-License-Identifier: GPL-3.0-or-later\n"
             "name = 'matrix-fixture'\ndescription = 'CI command-fact fixture'\n"
@@ -181,7 +181,7 @@ class Smoke:
                     "shipped-profile failure did not use cross check compiler")
             self.cross_runtime(text)
             adapter = "Codeforces adapter omits unavailable -lstdc++exp; shipped profile raw fallback asserted"
-            profile = self.work / "codeforces-build-only.toml"
+            profile = self.work / "codeforces.toml"
             shipped = Path("data/judges/codeforces.toml").read_text(encoding="utf-8")
             require(shipped.count(', "-lstdc++exp"') == 1, "profile link spelling changed")
             profile.write_text(shipped.replace(', "-lstdc++exp"', ''), encoding="utf-8")

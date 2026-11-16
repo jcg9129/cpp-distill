@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +19,66 @@ class AcceptanceTests(unittest.TestCase):
         self.analysis = ('pruning analysis (does not certify an artifact)\n'
                          'parse configuration: "-std=gnu++23" "-target" "x86_64-linux-gnu"\n')
         self.skip = "distill: wrote flat (local), runtime skipped: can't run target binaries here\n"
+
+    def load_profile_fixture(self, options):
+        path = Path(options[options.index('--judge') + 1])
+        with path.open('rb') as stream:
+            profile = tomllib.load(stream)
+        # Mirror src/core/profile/profile.cpp's name and relative snapshot rules.
+        self.assertRegex(profile['name'], r'\A[a-z0-9-]+\Z')
+        self.assertEqual(path.name, profile['name'] + '.toml')
+        if 'predefined' in profile:
+            snapshot = profile['predefined']
+            self.assertNotIn(snapshot, ('.', '..'))
+            self.assertFalse(any(char in snapshot for char in '/\\:'))
+            self.assertTrue((path.parent / snapshot).is_file())
+        return profile
+
+    def test_generated_command_fact_profile_matches_loader_naming(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd(), prefix='.matrix-test-') as temp:
+            self.smoke.work = Path(temp)
+            self.smoke.triple = 'x86_64-linux-gnu'
+            self.smoke.version = '14.2.0'
+            output = Path(temp) / 'output.cpp'
+            output.write_text('int main() { return 0; }\n', encoding='utf-8')
+            for no_prune in (True, False):
+                artifact = 'flat' if no_prune else 'pruned'
+
+                def invoke(name, fixture, dialect, options, **kwargs):
+                    profile = self.load_profile_fixture(options)
+                    self.assertNotIn('predefined', profile)
+                    report = (self.analysis + 'pruned: passed\nflat: passed\n#if: resolved true\n'
+                              'option change: "-DDISTILL_FIXTURE_JUDGE=0"\n'
+                              f"profile: {profile['name']}\n")
+                    return subprocess.CompletedProcess([], 0, '', ''), report, output, artifact
+
+                with self.subTest(no_prune=no_prune), patch.object(self.smoke, 'invoke', side_effect=invoke) as call:
+                    self.smoke.profile('gnu++20', no_prune)
+                    call.assert_called_once()
+
+    def test_cross_adapter_preserves_profile_and_snapshot_names(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd(), prefix='.matrix-test-') as temp:
+            self.smoke.work = Path(temp)
+            self.smoke.triple = 'x86_64-w64-mingw32'
+            output = Path(temp) / 'output.cpp'
+            output.write_text('int main() {}\n', encoding='utf-8')
+
+            def invoke(name, fixture, dialect, options):
+                if options[1] == 'codeforces':
+                    report = (self.skip + 'cannot find -lstdc++exp\nflat rejected:\n'
+                              'configuration check: triple=x86_64-w64-mingw32\n')
+                    return subprocess.CompletedProcess([], 0, '', ''), report, output, 'raw'
+                profile = self.load_profile_fixture(options)
+                self.assertEqual(profile['predefined'], 'codeforces-predefined.txt')
+                self.assertEqual((self.smoke.work / profile['predefined']).read_bytes(),
+                                 Path('data/judges/codeforces-predefined.txt').read_bytes())
+                report = (self.skip + 'flat: passed\n'
+                          '  configuration check: x86_64-w64-mingw32-g++ triple=x86_64-w64-mingw32\n')
+                return subprocess.CompletedProcess([], 0, '', ''), report, output, 'flat'
+
+            with patch.object(self.smoke, 'invoke', side_effect=invoke) as call:
+                self.smoke.cross('cross-flat', 'no_profile', True)
+                self.assertEqual(call.call_count, 2)
 
     def test_pruned_requires_checked_candidate(self):
         self.smoke.analysis(self.analysis + 'pruned: passed\n', 'pruned')
