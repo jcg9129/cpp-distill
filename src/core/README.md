@@ -1,5 +1,5 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-# Core library (D2a–D3b)
+# Core library (D2a–D3d)
 
 `distill_core` is a C++20 static library with no LLVM or third-party dependency.
 `command/` expands GCC response files and classifies a compile invocation,
@@ -580,11 +580,19 @@ names, excluding comments/strings and including literal-operator suffixes.
 D3b runs this invariant on the final rendered candidate before its build.
 
 `names/adl` loads embedded `data/names/adl.txt`, with an explicit policy version,
-per-dialect rows and a build-time SHA-256 digest. Only C++20/23 and their GNU
+per-dialect rows and a build-time SHA-256 digest. C++11/14/17/20/23 and their GNU
 spellings are covered. Rows identify lookup mechanism, stable normative clause,
-public entry and verification status. The fixed sources are N4861 and N4950;
+public entry and verification status. The fixed sources are N3337, N4140, N4659,
+N4861 and N4950;
 public CPO-only over-retention is distinguished from a same-named ADL hook.
-The two N4861 error conversion hooks are conservatively retained but marked
+The pre-C++20 surface is `swap` ([swappable.requirements]), range-for `begin`/
+`end` ([stmt.ranged]), the sixteen valarray functions ([valarray.transcend]),
+and conservatively `make_error_code`/`make_error_condition`; C++17 adds
+structured-binding `get` ([dcl.struct.bind]). There are no CPO rows before C++20.
+The audit searched each fixed draft's library text for ADL/unqualified lookup
+permissions; operator calls, callbacks, members and template specializations
+follow their separate retention rules. Other library calls are qualified by
+[contents]/3. The eight C++11–20 error conversion rows are retained but marked
 UNVERIFIED for exact ADL permission; N4950 [contents] supplies that permission
 explicitly. Later defect reports are not silently applied. GNU extension
 eligibility is separate: `extension-coverage.txt` records the incomplete GCC
@@ -744,7 +752,27 @@ closure. Declaration ownership includes leading `[[...]]`/`alignas(...)`, so
 removing a declaration cannot leave an attribute attached to its successor.
 Inherited/implicit attributes do not expand physical ownership into an earlier
 declaration; macro prefixes remain pinned. All other declaration and statement
-attributes still disable, including unaudited symbol semantics such as `used`.
+attributes still disable unless covered by the D3d roots below.
+
+Policy D3d-1 additionally roots the family carrying `ConstructorAttr`,
+`DestructorAttr`, `UsedAttr`, `SectionAttr`, `WeakAttr`, `VisibilityAttr`,
+`AsmLabelAttr` or `AliasAttr`, including redeclarations/whole-record obligations.
+An alias also roots every matching user linker-symbol family, using Clang's
+selected-target mangler or the declaration's asm label. An unresolved alias
+symbol disables pruning. GNU asm accepts empty text and semicolon/newline-separated
+direct symbol `call`, `callq`, `jmp`, `bl`, `b`, `.quad`, `.long`, `.8byte`, `.4byte`
+statements; each target must resolve to a user family. Inline asm also roots its
+containing family so AST traversal retains its operand expressions. Unrecognized
+assembly syntax (including MS asm) and unresolved targets disable pruning.
+
+A lexical ownership pass precedes dependency traversal. It explicitly binds
+requires-expression parameters, function/prototype parameters, lambda closure
+records and init-captures, plus user local declarations visited through type
+locations or expressions. Nested template-template parameters retain their
+existing recursive binding. Structured bindings and range-for variables in
+templates belong to the enclosing family; these local names never become
+namespace-indexed names. Extraction regressions exercise all these forms.
+
 Capturing lambdas, recursive `auto self` lambdas, `if constexpr`, fold expressions,
 variadic templates/packs, structured bindings and `std::function` have no disable
 trigger and follow ordinary traversal. The GNU/variadic refusal is specifically
@@ -932,3 +960,27 @@ caide fork, original-file hashes and documented compile/source adapters.
 its measurement remains the one outstanding D3 completion item. PBDS is still
 explicitly not covered: an exhaustive GCC 14.2/15.2 transitive lookup audit has
 not been completed, so inclusion continues to disable pruning.
+
+## D3d measurement fixes
+
+Preprocess **checks** have their own `DistillOptions::maxPreprocessOutput`,
+64 MiB per stdout/stderr stream, matching the §3 inline-size limit. Ordinary
+builds, executable runs and every probe (even probes using `-E`) retain the
+4 MiB default. Truncation still fails the artifact. Comparisons run their two
+preprocessors sequentially and retain at most two 64 MiB stdout buffers plus
+one 64 MiB stderr buffer during capture (192 MiB payload, excluding string
+capacity). Token comparison remains buffered: its scanner scratch space,
+physical-line locations and token vectors add O(bytes + lines + tokens) memory;
+the byte cap is not an RSS quota. It now reuses one scan per side and moves
+token spellings instead of constructing and scanning a second full buffer.
+The local suite peak including the STL fixture is recorded in `D3D-SUMMARY.md`; hostile token/line
+density can require substantially more memory than that representative case.
+
+D3d pipeline fixtures cover attribute startup/shutdown stdout equality, concept
+parameters, each older ADL dialect, and `<bits/stdc++.h>` raw/flat checks.
+SDK D3d fixtures have separate `--d3d` CTest entries bounded to 120 seconds;
+the LLVM-free runner also executes the STL fixture. Every extraction-model
+failure now includes complete bounded worker stderr as well as all disable
+reasons. `ci/measure.py` retains the original corpus adapters and hashes;
+`tests/corpus/caide/README.md` records per-case expected classes for comparison,
+including the raw-only exception caused by the corpus's unmodelled `-v`.

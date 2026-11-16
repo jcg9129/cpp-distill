@@ -6,6 +6,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
+#include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
@@ -24,6 +25,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 
 namespace distill {
 namespace {
@@ -142,6 +144,9 @@ struct Extraction {
       bindParameters(t->getTemplateParameters(),id);
       if (t->getTemplatedDecl()) bind(t->getTemplatedDecl(),id);
     }
+    // Prototype-scope parameters (including nested function declarators) need
+    // not appear in DeclContext::decls(). Bind them before dependency traversal.
+    if (const auto* f = dyn_cast<FunctionDecl>(d)) for (const auto* p : f->parameters()) bind(p,id);
     if (const auto* v = dyn_cast<DeclaratorDecl>(d)) for (const auto* p : v->getTemplateParameterLists()) bindParameters(p,id);
     if (const auto* t = dyn_cast<TagDecl>(d)) for (const auto* p : t->getTemplateParameterLists()) bindParameters(p,id);
     if (const auto* t = dyn_cast<ClassTemplatePartialSpecializationDecl>(d)) bindParameters(t->getTemplateParameters(),id);
@@ -199,7 +204,7 @@ struct Extraction {
     else if (isa<UsingDecl>(base) || isa<UsingDirectiveDecl>(base) || isa<UsingEnumDecl>(base)) { f.kind = FamilyKind::usingDecl; f.namespaceUsing = true; }
     else if (isa<StaticAssertDecl>(base)) { f.kind = FamilyKind::assertion; f.root = "namespace static_assert"; }
     else if (isa<EmptyDecl>(base)) { /* Complete, inert declaration. */ }
-    else if (isa<FileScopeAsmDecl>(base)) disable("unsupported file-scope asm: " + describe(d));
+    else if (isa<FileScopeAsmDecl>(base)) f.root = "file-scope asm";
     else f.pinned = std::string("unsupported declaration: ") + base->getDeclKindName();
     if (const auto* s = dyn_cast<ClassTemplateSpecializationDecl>(base)) {
       auto* primary = s->getSpecializedTemplate();
@@ -353,15 +358,14 @@ public:
   }
 };
 
-// Closure records in namespace-scope variable initializers can have only a
-// namespace DeclContext. Index their syntactic enclosing family before any
-// dependency visits the variable's (closure) type, including generic lambdas.
-class Closures final : public RecursiveASTVisitor<Closures> {
+// Some local declarations have a TU/prototype semantic context, or aren't
+// DeclContext children. Bind lexical ownership before any dependency traversal.
+class Ownership final : public RecursiveASTVisitor<Ownership> {
   Extraction& e;
   FamilyId current = noFamily;
   std::size_t visits = 0;
 public:
-  explicit Closures(Extraction& x) : e(x) {}
+  explicit Ownership(Extraction& x) : e(x) {}
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
   bool TraverseDecl(Decl* d) {
@@ -371,8 +375,18 @@ public:
     if (const auto id = e.owner(d); id != noFamily) current = id;
     const bool result = RecursiveASTVisitor::TraverseDecl(d); current = saved; return result;
   }
+  bool VisitDecl(Decl* d) {
+    if (current != noFamily && e.user(d->getBeginLoc()) && e.owner(d) == noFamily) e.bind(d,current);
+    return true;
+  }
+  bool VisitRequiresExpr(RequiresExpr* x) {
+    if (current != noFamily) for (const auto* p : x->getLocalParameters()) e.bind(p,current);
+    return true;
+  }
   bool VisitLambdaExpr(LambdaExpr* x) {
     if (current != noFamily && e.owner(x->getLambdaClass()) == noFamily) e.bind(x->getLambdaClass(),current);
+    if (current != noFamily) for (const auto& capture : x->captures())
+      if (capture.capturesVariable() && capture.getCapturedVar()->isInitCapture()) e.bind(capture.getCapturedVar(),current);
     return true;
   }
 };
@@ -385,6 +399,32 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
   std::vector<const Decl*> systemPending;
   std::size_t visits = 0;
   std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
+  std::map<std::string,std::set<FamilyId>,std::less<>> symbols;
+  bool symbolRoot(std::string_view symbol, std::string_view form) {
+    auto found = symbols.find(symbol);
+    if (found == symbols.end()) {
+      e.disable("unresolved " + std::string(form) + " symbol: " + std::string(symbol)); return false;
+    }
+    for (auto id : found->second) e.model.families[id].root = std::string(form) + " symbol reference";
+    return true;
+  }
+  void assembly(std::string_view text, clang::SourceLocation at) {
+    // Only direct symbol calls/branches and address directives are interpreted.
+    // Arbitrary assembly is never guessed from identifier-looking substrings.
+    std::string lines(text); std::replace(lines.begin(),lines.end(),';','\n');
+    std::istringstream input(lines); std::string line;
+    while (std::getline(input,line)) {
+      std::istringstream words(line); std::string op, symbol, extra;
+      if (!(words >> op)) continue;
+      if ((op != "call" && op != "callq" && op != "jmp" && op != "bl" && op != "b" &&
+           op != ".quad" && op != ".long" && op != ".8byte" && op != ".4byte") ||
+          !(words >> symbol) || (words >> extra) ||
+          symbol.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$") != symbol.npos) {
+        e.disable("unsupported asm at " + at.printToString(e.sm)); return;
+      }
+      symbolRoot(symbol,"asm");
+    }
+  }
   void edge(const Decl* d) {
     if (!d) return;
     // Builtin templates have no source declaration to retain. Their template
@@ -510,10 +550,12 @@ public:
   bool VisitDecl(Decl* d) {
     if (d->isInvalidDecl()) e.disable("error-recovery AST: " + e.describe(d));
     if (current != noFamily && e.user(d->getBeginLoc())) for (const auto* attr : d->attrs()) {
-      // Symbol-bearing forms (asm labels, aliases, used/weak/section, etc.)
-      // remain unsupported. Do not treat the whole attribute syntax as opaque.
-      if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
+      if (isa<ConstructorAttr,DestructorAttr,UsedAttr,SectionAttr,WeakAttr,VisibilityAttr,AsmLabelAttr,AliasAttr>(attr)) {
+        e.model.families[current].root = std::string("attribute: ") + attr->getSpelling();
+        if (const auto* alias = dyn_cast<AliasAttr>(attr)) symbolRoot(alias->getAliasee().str(),"alias");
+      } else if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     }
+    if (const auto* a = dyn_cast<FileScopeAsmDecl>(d); a && e.user(d->getBeginLoc())) assembly(a->getAsmString(),d->getBeginLoc());
     return true;
   }
   bool VisitAttributedStmt(AttributedStmt* s) {
@@ -523,7 +565,12 @@ public:
   }
   bool VisitStmt(Stmt* s) {
     if (current == noFamily || !e.user(s->getBeginLoc())) return true;
-    if (isa<AsmStmt>(s)) e.disable("unsupported asm at " + s->getBeginLoc().printToString(e.sm));
+    if (const auto* a = dyn_cast<GCCAsmStmt>(s)) {
+      assembly(a->getAsmString(),s->getBeginLoc());
+      // Operand expressions are traversed normally; keeping the enclosing
+      // family makes their referenced declarations roots through AST closure.
+      e.model.families[current].root = "asm operands";
+    } else if (isa<AsmStmt>(s)) e.disable("unsupported asm at " + s->getBeginLoc().printToString(e.sm));
     if (isa<RecoveryExpr>(s)) e.disable("error-recovery AST at " + s->getBeginLoc().printToString(e.sm));
     if (isa<AddrLabelExpr>(s) || isa<IndirectGotoStmt>(s) || isa<StmtExpr>(s) || isa<VAArgExpr>(s))
       e.disable("unsupported va_arg, GNU statement expression or computed goto at " + s->getBeginLoc().printToString(e.sm));
@@ -592,6 +639,23 @@ public:
     return true;
   }
   void run() {
+    // Alias strings name linker symbols, not C++ identifiers. Respect explicit
+    // asm labels and the selected target ABI's mangling; ambiguous spellings
+    // conservatively root every matching user family.
+    std::unique_ptr<MangleContext> mangler(e.compiler.getASTContext().createMangleContext());
+    for (const auto& [decl,id] : e.owners) {
+      const auto* named = dyn_cast<NamedDecl>(decl);
+      if (!named || named->getDeclName().isEmpty() || isa<CXXConstructorDecl,CXXDestructorDecl,CXXDeductionGuideDecl>(decl)) continue;
+      const auto* variable = dyn_cast<VarDecl>(decl);
+      if (!isa<FunctionDecl>(decl) && (!variable || !variable->hasGlobalStorage())) continue;
+      if (const auto* function = dyn_cast<FunctionDecl>(decl); function && function->isDependentContext()) continue;
+      if (variable && (variable->getDeclContext()->isDependentContext() || variable->getType()->isDependentType())) continue;
+      std::string symbol;
+      if (const auto* label = named->getAttr<AsmLabelAttr>()) symbol = label->getLabel().str();
+      else if (mangler->shouldMangleDeclName(named)) { llvm::raw_string_ostream out(symbol); mangler->mangleName(named,out); }
+      else symbol = named->getNameAsString();
+      symbols[symbol].insert(id);
+    }
     for (auto [decl,id] : e.declarations) { current = id; TraverseDecl(const_cast<Decl*>(decl)); }
     current = noFamily;
     for (std::size_t i = 0; i < systemPending.size(); ++i) {
@@ -617,8 +681,8 @@ public:
         auto [it,fresh] = overloads.emplace(key,id); if (!fresh) e.model.unions.emplace_back(id,it->second);
       }
     }
-    Closures closures(e);
-    for (auto [d,id] : e.declarations) { (void)id; closures.TraverseDecl(const_cast<Decl*>(d)); }
+    Ownership ownership(e);
+    for (auto [d,id] : e.declarations) { (void)id; ownership.TraverseDecl(const_cast<Decl*>(d)); }
     Dependencies dependencies(e); dependencies.run();
     for (auto [d,id] : e.declarations) {
       for (auto r : e.model.families[id].ranges) for (auto m : e.macroInvocations)

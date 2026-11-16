@@ -67,14 +67,20 @@ TEST(prune_never_removed_rules_and_nonroots) {
 }
 TEST(prune_adl_dialects_and_all_registry_names) {
   const auto& registry = embeddedAdlRegistry(); CHECK(registry.digest.starts_with("sha256:")); CHECK_EQ(registry.digest.size(),71u);
-  for (const auto* dialect : {"c++20","gnu++20","c++23","gnu++23"}) {
-    CHECK(registry.supports(dialect)); auto names = registry.names(dialect); CHECK(names.size() >= 38u);
+  for (const auto* dialect : {"c++11","gnu++11","c++14","gnu++14","c++17","gnu++17","c++20","gnu++20","c++23","gnu++23"}) {
+    CHECK(registry.supports(dialect)); auto names = registry.names(dialect); const bool modern = std::string_view(dialect).ends_with("20") || std::string_view(dialect).ends_with("23");
+    auto expected = std::set<std::string, std::less<>>{"swap", "begin", "end", "make_error_code", "make_error_condition",
+      "abs", "acos", "asin", "atan", "atan2", "cos", "cosh", "exp", "log", "log10", "pow", "sin", "sinh", "sqrt", "tan", "tanh"};
+    if (modern || std::string_view(dialect).ends_with("17")) expected.insert("get");
+    if (modern) for (const auto* hook : {"iter_move","iter_swap","rbegin","rend","size","cbegin","cend","crbegin","crend",
+        "ssize","empty","data","cdata","strong_order","weak_order","partial_order","from_stream"}) expected.insert(hook);
+    CHECK_EQ(names,expected);
     for (const auto& name : names) {
       Model b; b.m.dialect = dialect; b.add(name,"void unrelated(){}");
       auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.families[0].reason,"never removed: ADL name (A6)");
     }
   }
-  for (const auto* dialect : {"c++17","gnu++26","c++2b",""}) { Model b; b.m.dialect = dialect; b.add("x","int x;"); CHECK(!b.run().disabledReasons.empty()); }
+  for (const auto* dialect : {"c++98","gnu++03","gnu++26","c++2b",""}) { Model b; b.m.dialect = dialect; b.add("x","int x;"); CHECK(!b.run().disabledReasons.empty()); }
   CHECK(!parseAdlRegistry("c++20 x ADL [clause] x verified\n").ok());
   bool delegated = false;
   for (const auto& row : registry.entries) if (row.name == "cdata") delegated |= row.mechanism.starts_with("public-CPO-overretention");
@@ -125,7 +131,7 @@ TEST(prune_system_edges_transitive_cycles_positive_only) {
   b.m.systemUses = {{noFamily,0}}; CHECK(b.run().families[hook].kept);
 }
 TEST(prune_all_disable_reasons_accumulate) {
-  Model b; b.add("x","int x;"); b.m.unknownInUserCode = true; b.m.dialect = "c++17";
+  Model b; b.add("x","int x;"); b.m.unknownInUserCode = true; b.m.dialect = "c++98";
   b.m.includes = {"ext/rope","ext/pb_ds/assoc_container.hpp","bits/extc++.h","vendor.h"};
   b.m.disabledReasons = {"parse error","limit","parse error"};
   auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6"));

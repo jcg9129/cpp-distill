@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# version: A6-1-n4861-n4950
+# version: A6-2-n3337-n4140-n4659-n4861-n4950
 # Fixed draft editions, no later defect reports implicitly applied.
 # Columns: dialect name mechanism stable-clause public-entry verification
-# Verified against https://timsong-cpp.github.io/cppwp/n4861/ and /n4950/
+# Audited editions: https://timsong-cpp.github.io/cppwp/n3337/, /n4140/,
+# /n4659/, /n4861/ and /n4950/
 # Append the stable clause (without brackets) to those URLs.
 # C++20 lookup uses the specified poison-pill/unqualified contexts;
 # C++23 often specifies ADL-only. Both mechanisms retain the same hook names.
@@ -11,12 +12,77 @@
 # N4861 error conversion constructors spell make_error_* but [contents]/3
 # generally qualifies library names. Exact ADL permission was not verified in
 # this fixed draft (later LWG 3629 clarification is not silently backported).
-# These two C++20 rows are retained conservatively and marked UNVERIFIED.
+# N3337/N4140/N4659 have the same [contents]/3 qualification ambiguity.
+# All eight pre-C++23 error conversion rows are retained conservatively and marked UNVERIFIED.
 # N4950 [contents]/3 explicitly grants ADL to make_error_code/condition.
 # [range.prim.*] stable subclauses are under the range.access page in both.
 # Not included: members, callbacks, operator functions, permitted template
 # specializations (hash, formatter, tuple/iterator traits, range variables).
 # Those require ownership/AST/association rules, independently of this table.
+c++11 swap unqualified+ADL [swappable.requirements] std::swap verified
+c++11 begin language-ADL [stmt.ranged] range-for verified
+c++11 end language-ADL [stmt.ranged] range-for verified
+c++11 make_error_code intended-ADL-overretention [syserr.errcode.constructors] error_code UNVERIFIED
+c++11 make_error_condition intended-ADL-overretention [syserr.errcondition.constructors] error_condition UNVERIFIED
+c++11 abs unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 acos unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 asin unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 atan unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 atan2 unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 cos unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 cosh unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 exp unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 log unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 log10 unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 pow unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 sin unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 sinh unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 sqrt unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 tan unqualified-numeric [valarray.transcend] valarray-math verified
+c++11 tanh unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 swap unqualified+ADL [swappable.requirements] std::swap verified
+c++14 begin language-ADL [stmt.ranged] range-for verified
+c++14 end language-ADL [stmt.ranged] range-for verified
+c++14 make_error_code intended-ADL-overretention [syserr.errcode.constructors] error_code UNVERIFIED
+c++14 make_error_condition intended-ADL-overretention [syserr.errcondition.constructors] error_condition UNVERIFIED
+c++14 abs unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 acos unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 asin unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 atan unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 atan2 unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 cos unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 cosh unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 exp unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 log unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 log10 unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 pow unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 sin unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 sinh unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 sqrt unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 tan unqualified-numeric [valarray.transcend] valarray-math verified
+c++14 tanh unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 swap unqualified+ADL [swappable.requirements] std::swap verified
+c++17 begin language-ADL [stmt.ranged] range-for verified
+c++17 end language-ADL [stmt.ranged] range-for verified
+c++17 get language-ADL [dcl.struct.bind] structured-binding verified
+c++17 make_error_code intended-ADL-overretention [syserr.errcode.constructors] error_code UNVERIFIED
+c++17 make_error_condition intended-ADL-overretention [syserr.errcondition.constructors] error_condition UNVERIFIED
+c++17 abs unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 acos unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 asin unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 atan unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 atan2 unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 cos unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 cosh unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 exp unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 log unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 log10 unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 pow unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 sin unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 sinh unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 sqrt unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 tan unqualified-numeric [valarray.transcend] valarray-math verified
+c++17 tanh unqualified-numeric [valarray.transcend] valarray-math verified
 c++20 swap unqualified+ADL [swappable.requirements] std::swap verified
 c++20 swap CPO-ADL [concept.swappable] ranges::swap verified
 c++20 iter_move CPO-ADL [iterator.cust.move] ranges::iter_move verified

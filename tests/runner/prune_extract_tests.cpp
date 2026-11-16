@@ -32,7 +32,12 @@ int main(int argc, char** argv) {
     TemporaryDirectory temp(".prune-extract-tests-",std::filesystem::current_path());
     PruneWorkerOptions o; o.executable = std::filesystem::absolute(argv[1]); o.temporaryRoot = temp.path;
     std::size_t checks = 0, failed = 0, assertions = 0;
-    std::string active;
+    std::string active, workerDiagnostics;
+    o.runner = [&](const ProcessSpec& spec) {
+      auto result = runProcess(spec);
+      workerDiagnostics += result.ok() ? result.value().stderrText : result.error().message;
+      return result;
+    };
     PruningModel m; PruningResult r;
     auto check = [&](bool condition, const std::string& why) {
       ++assertions;
@@ -68,7 +73,7 @@ int main(int argc, char** argv) {
       return facts;
     };
     auto run = [&](const char* name, auto test) {
-      active = name; m = {}; r = {}; const auto before = failed;
+      active = name; m = {}; r = {}; workerDiagnostics.clear(); const auto before = failed;
       try { test(); }
       catch (const Error& e) { check(false,e.message); }
       catch (const std::exception& e) { check(false,e.what()); }
@@ -76,6 +81,7 @@ int main(int argc, char** argv) {
         if (why.starts_with("pruning worker") || why.starts_with("invalid pruning worker result")) check(false,why);
       if (before == failed) { ++checks; std::cout << "PASS " << active << '\n'; }
       else {
+        std::cerr << workerDiagnostics;
         for (const auto& why : m.disabledReasons) std::cerr << "  disabled: " << why << '\n';
         for (const auto& why : r.disabledReasons)
           if (std::find(m.disabledReasons.begin(),m.disabledReasons.end(),why) == m.disabledReasons.end())
@@ -185,12 +191,49 @@ int main(int argc, char** argv) {
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"attribute macro disabled");
       check(!family(m,"f").pinned.empty(),"attribute macro not pinned");
     });
-    run("opaque attribute", [&] {
-      m = extract("int x __attribute__((used)); int main(){}\n",o); r = take(computeRetention(m));
-      check(!r.disabledReasons.empty(),"opaque attribute accepted");
+    run("attribute roots", [&] {
+      m = extract("__attribute__((constructor(200))) void startup(){}\n"
+                  "__attribute__((destructor(200))) void shutdown(){}\n"
+                  "__attribute__((used)) int retained=42;\n"
+                  "__attribute__((used)) void retainedFunction(){}\n"
+                  "__attribute__((section(\"my_section\"))) int sectioned=1;\n"
+                  "__attribute__((weak)) int weakValue=1;\n"
+                  "__attribute__((visibility(\"hidden\"))) void visible(){}\n"
+                  "void unused(){} int main(){}\n",o); r = take(computeRetention(m));
+      check(r.disabledReasons.empty(),"root attributes disabled");
+      for (const auto* name : {"startup","shutdown","retained","retainedFunction","sectioned","weakValue","visible"}) {
+        check(kept(name),std::string("attribute root removed: ")+name);
+        check(!family(m,name).root.empty(),std::string("attribute not rooted: ")+name);
+      }
+      check(!kept("unused"),"unrelated function retained");
+    });
+    run("alias and asm symbols", [&] {
+      m = extract("void target() asm(\"target_symbol\"); void target(){}\n"
+                  "void alias() __attribute__((alias(\"target_symbol\")));\n"
+                  "void mangled(){} void another() __attribute__((alias(\"_Z7mangledv\")));\n"
+                  "int data asm(\"data_symbol\")=1;\n"
+                  "asm(\".quad data_symbol\");\n"
+                  "void caller(){asm(\"call target_symbol\");}\n"
+                  "void unused(){} int main(){}\n",o); r = take(computeRetention(m));
+      check(r.disabledReasons.empty(),"resolved symbols disabled");
+      for (const auto* name : {"target","alias","mangled","another","data","caller"}) check(kept(name),std::string("symbol root removed: ")+name);
+      check(!kept("unused"),"unrelated function retained");
+    });
+    run("unresolved alias", [&] {
+      m = extract("void alias() __attribute__((alias(\"missing_symbol\"))); int main(){}\n",o);
+      r = take(computeRetention(m)); check(!r.disabledReasons.empty(),"unresolved alias accepted");
+    });
+    run("unresolved asm", [&] {
+      m = extract("int main(){asm(\"call missing_symbol\");}\n",o);
+      r = take(computeRetention(m)); check(!r.disabledReasons.empty(),"unresolved asm accepted");
+    });
+    run("empty asm operands", [&] {
+      m = extract("int value; void unused(){asm(\"\" : : \"r\"(&value));} int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"empty asm disabled");
+      check(kept("value") && kept("unused"),"asm operand closure removed");
     });
     run("opaque asm", [&] {
-      m = extract("int main(){asm(\"\");}\n",o); r = take(computeRetention(m));
+      m = extract("int main(){asm(\"opaque instruction\");}\n",o); r = take(computeRetention(m));
       check(!r.disabledReasons.empty(),"opaque asm accepted");
     });
     run("stripped keep annotation", [&] {
@@ -211,6 +254,24 @@ int main(int argc, char** argv) {
       check(r.disabledReasons.empty(),"ownership unexpectedly disabled");
       check(kept("Box"),"referenced family removed");
       check(!kept("unused"),"unused function retained");
+    });
+    run("parameter-like lexical ownership", [&] {
+      m = extract("template<class T> concept Add = requires(T a, T b){ a+b; };\n"
+                  "template<class T> concept Function = requires(T (*f)(T named)){ f(T{}); };\n"
+                  "template<class T> concept Lambda = requires { [](T parameter){ return parameter; }; };\n"
+                  "template<template<class Inner> class C, class T> struct Wrap { C<T> value; };\n"
+                  "template<class T> struct Item { T value; };\n"
+                  "auto global=[]<class T>(T argument){return argument;};\n"
+                  "template<class T> int run(T input){\n"
+                  "  auto f=[captured=input](T parameter){return captured+parameter;};\n"
+                  "  T array[2]={input,input}; auto [left,right]=array;\n"
+                  "  for (auto element:array) left+=element; return f(left)+right; }\n"
+                  "int unused(){return 0;}\n"
+                  "int main(){static_assert(Add<int> && Function<int> && Lambda<int>);\n"
+                  "  Wrap<Item,int> x{}; return global(run(x.value.value));}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"local ownership disabled");
+      for (const auto* name : {"Add","Function","Lambda","Wrap","global","run"}) check(kept(name),std::string("enclosing family removed: ")+name);
+      check(!kept("unused"),"unrelated function retained");
     });
     run("nested template parameters", [&] {
       m = extract("template<template<class> class C, class T> struct Wrap { C<T> value; };\ntemplate<class T> struct Item { T x; };\nint unused(){return 0;} int main(){Wrap<Item,int> x{};return x.value.x;}\n",o); r = take(computeRetention(m));
