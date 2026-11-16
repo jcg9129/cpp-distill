@@ -23,47 +23,62 @@ int main(int argc, char** argv) {
     const auto configuration = take(probeConfiguration(command,"selected flat",po));
     std::vector<std::filesystem::path> cases;
     for (const auto& d : std::filesystem::directory_iterator(DISTILL_PRUNE_CASES)) if (d.is_directory()) cases.push_back(d.path());
-    std::sort(cases.begin(),cases.end()); std::size_t count = 0;
+    std::sort(cases.begin(),cases.end()); std::size_t count = 0, failed = 0;
     for (const auto& path : cases) {
-      ResolveResult flat; flat.text = read(path / "main.cpp");
-      auto scan = take(scanDirectives(flat.text));
-      std::size_t lines = 1 + std::count(flat.text.begin(),flat.text.end(),'\n');
-      for (std::size_t i = 1; i <= lines; ++i) flat.lineMap.push_back(SourceLocation{pathToUtf8(path / "main.cpp"),i});
-      if (std::filesystem::exists(path / "generated-lines.txt")) {
-        std::istringstream in(read(path / "generated-lines.txt")); std::string l;
-        while (std::getline(in,l)) if (!l.empty() && !l.starts_with('#')) flat.lineMap.at(std::stoul(l)-1).reset();
-      }
-      auto model = take(preparePruning(configuration,{},flat,&configuration.facts));
-      PruneWorkerOptions options; options.executable = std::filesystem::absolute(argv[1]); options.temporaryRoot = work.path;
-      model = take(extractPruning(model,options)); auto retained = take(computeRetention(model));
-      std::istringstream expect(read(path / "expect.txt")); std::string line; bool disabled = false;
-      while (std::getline(expect,line)) {
-        if (line.empty() || line.starts_with('#')) continue;
-        const auto bar = line.find('|'); if (bar == line.npos) throw Error{"invalid expectation"};
-        auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
-        if (assertion == "disabled") {
-          disabled = true; for (const auto& why : retained.disabledReasons) matched |= why.find(reason) != why.npos;
-        } else {
-          auto space = assertion.find(' '); auto fate = assertion.substr(0,space), label = assertion.substr(space+1);
-          for (FamilyId id = 0; id < model.families.size(); ++id) if (model.families[id].label == label) {
-            const auto& r = retained.families[id];
-            if (r.kept == (fate == "kept") && r.reason.find(reason) != r.reason.npos) matched = true;
+      PruningModel model; PruningResult retained; bool caseFailed = false;
+      auto fail = [&](const std::string& why) {
+        std::cerr << "FAIL " << path.filename() << ": " << why << '\n'; caseFailed = true;
+      };
+      try {
+        ResolveResult flat; flat.text = read(path / "main.cpp");
+        auto scan = take(scanDirectives(flat.text));
+        std::size_t lines = 1 + std::count(flat.text.begin(),flat.text.end(),'\n');
+        for (std::size_t i = 1; i <= lines; ++i) flat.lineMap.push_back(SourceLocation{pathToUtf8(path / "main.cpp"),i});
+        if (std::filesystem::exists(path / "generated-lines.txt")) {
+          std::istringstream in(read(path / "generated-lines.txt")); std::string l;
+          while (std::getline(in,l)) if (!l.empty() && !l.starts_with('#')) flat.lineMap.at(std::stoul(l)-1).reset();
+        }
+        model = take(preparePruning(configuration,{},flat,&configuration.facts));
+        PruneWorkerOptions options; options.executable = std::filesystem::absolute(argv[1]); options.temporaryRoot = work.path;
+        model = take(extractPruning(model,options)); retained = take(computeRetention(model));
+        std::istringstream expect(read(path / "expect.txt")); std::string line; bool disabled = false;
+        while (std::getline(expect,line)) {
+          if (line.empty() || line.starts_with('#')) continue;
+          const auto bar = line.find('|'); if (bar == line.npos) { fail("invalid expectation: " + line); continue; }
+          auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
+          if (assertion == "disabled") {
+            disabled = true; for (const auto& why : retained.disabledReasons) matched |= why.find(reason) != why.npos;
+          } else {
+            auto space = assertion.find(' '); auto fate = assertion.substr(0,space), label = assertion.substr(space+1);
+            for (FamilyId id = 0; id < model.families.size(); ++id) if (model.families[id].label == label) {
+              const auto& r = retained.families[id];
+              if (r.kept == (fate == "kept") && r.reason.find(reason) != r.reason.npos) matched = true;
+            }
           }
+          if (!matched) fail("missing " + line);
         }
-        if (!matched) {
-          std::cerr << path.filename() << ": missing " << line << '\n';
-          for (const auto& why : retained.disabledReasons) std::cerr << "  disabled: " << why << '\n';
-          for (FamilyId id = 0; id < model.families.size(); ++id) std::cerr << "  " << model.families[id].label << ": " << retained.families[id].reason << '\n';
-          return 1;
-        }
+        if (!disabled && !retained.disabledReasons.empty()) fail("unexpectedly disabled");
+        for (const auto& why : model.disabledReasons)
+          if (why.starts_with("pruning worker") || why.starts_with("invalid pruning worker result")) fail(why);
+        // Every deletion range is physical, complete and disjoint; the model
+        // validator independently checks bounds/overlap before retention.
+        for (const auto& f : model.families) for (auto r : f.ranges) if (r.end > flat.text.size()) fail("bad range");
+      } catch (const Error& e) { fail(e.message); }
+      catch (const std::exception& e) { fail(e.what()); }
+      if (caseFailed) {
+        ++failed;
+        for (const auto& why : model.disabledReasons) std::cerr << "  disabled: " << why << '\n';
+        for (const auto& why : retained.disabledReasons)
+          if (std::find(model.disabledReasons.begin(),model.disabledReasons.end(),why) == model.disabledReasons.end())
+            std::cerr << "  disabled: " << why << '\n';
+        for (FamilyId id = 0; id < model.families.size(); ++id)
+          std::cerr << "  " << model.families[id].label << ": "
+                    << (id < retained.families.size() ? retained.families[id].reason : "retention unavailable") << '\n';
+      } else {
+        std::cout << "PASS " << path.filename() << ": kept=" << retained.keptBytes << " removed=" << retained.removedBytes << '\n'; ++count;
       }
-      if (!disabled && !retained.disabledReasons.empty()) throw Error{pathToUtf8(path.filename()) + ": unexpectedly disabled: " + retained.disabledReasons.front()};
-      // Every deletion range is physical, complete and disjoint; the model
-      // validator independently checks bounds/overlap before retention.
-      for (const auto& f : model.families) for (auto r : f.ranges) if (r.end > flat.text.size()) throw Error{"bad range"};
-      std::cout << "PASS " << path.filename() << ": kept=" << retained.keptBytes << " removed=" << retained.removedBytes << '\n'; ++count;
     }
-    std::cout << count << " extraction cases passed\n"; return 0;
+    std::cout << count << " extraction cases passed, " << failed << " failed\n"; return failed ? 1 : 0;
   } catch (const Error& e) { std::cerr << e.message << '\n'; return 1; }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

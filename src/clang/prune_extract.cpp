@@ -81,31 +81,79 @@ struct Extraction {
     return EditRange{begin,stop};
   }
   const Decl* canonical(const Decl* d) const { return d ? d->getCanonicalDecl() : nullptr; }
-  FamilyId owner(const Decl* d) const {
-    if (!d) return noFamily;
-    if (auto i = owners.find(d); i != owners.end()) return i->second;
-    if (auto i = owners.find(canonical(d)); i != owners.end()) return i->second;
-    // Preserve explicit specialization identity before falling back to patterns.
-    if (const auto* f = dyn_cast<FunctionDecl>(d)) {
-      if (f->getTemplateSpecializationKind() != TSK_ExplicitSpecialization)
-        if (auto* p = f->getTemplateInstantiationPattern()) if (p != d) return owner(p);
-    }
-    if (const auto* r = dyn_cast<CXXRecordDecl>(d)) {
-      if (const auto* s = dyn_cast<ClassTemplateSpecializationDecl>(r)) {
-        if (s->getSpecializationKind() != TSK_ExplicitSpecialization) return owner(s->getSpecializedTemplate());
+  FamilyId owner(const Decl* declaration) const {
+    if (!declaration) return noFamily;
+    if (auto i = owners.find(declaration); i != owners.end()) return i->second;
+    if (auto i = owners.find(canonical(declaration)); i != owners.end()) return i->second;
+    // Pattern, canonical and context links can form cycles (notably injected
+    // class names). Try every route without letting a failed pattern lookup
+    // hide an enclosing record's owner. Direct bindings preserve specializations.
+    std::vector<const Decl*> pending{declaration}; std::set<const Decl*> seen;
+    while (!pending.empty()) {
+      const auto* d = pending.back(); pending.pop_back();
+      if (!d || !seen.insert(d).second) continue;
+      if (auto i = owners.find(d); i != owners.end()) return i->second;
+      if (auto i = owners.find(canonical(d)); i != owners.end()) return i->second;
+      auto context = [&](const DeclContext* ctx) {
+        if (ctx && !ctx->isTranslationUnit() && !ctx->isNamespace()) pending.push_back(Decl::castFromDeclContext(ctx));
+      };
+      context(d->getLexicalDeclContext());
+      context(d->getDeclContext()); // Out-of-line members have namespace lexical context.
+      if (const auto* f = dyn_cast<FunctionDecl>(d)) {
+        if (f->getTemplateSpecializationKind() != TSK_ExplicitSpecialization) {
+          pending.push_back(f->getPrimaryTemplate());
+          pending.push_back(f->getInstantiatedFromDecl());
+          pending.push_back(f->getInstantiatedFromMemberFunction());
+          pending.push_back(f->getTemplateInstantiationPattern());
+        }
+        if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f)) pending.push_back(guide->getDeducedTemplate());
       }
-      if (auto* p = r->getInstantiatedFromMemberClass()) if (p != d) return owner(p);
+      if (const auto* r = dyn_cast<CXXRecordDecl>(d)) {
+        pending.push_back(r->getInstantiatedFromMemberClass());
+        if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(r)) {
+          if (spec->getSpecializationKind() != TSK_ExplicitSpecialization) {
+            pending.push_back(spec->getSpecializedTemplate());
+            pending.push_back(r->getTemplateInstantiationPattern()); // Includes partial specializations.
+          }
+        }
+        if (r->isLambda()) pending.push_back(r->getLambdaContextDecl());
+      }
+      if (const auto* v = dyn_cast<VarDecl>(d); v && v->getTemplateSpecializationKind() != TSK_ExplicitSpecialization) {
+        pending.push_back(v->getInstantiatedFromStaticDataMember());
+        pending.push_back(v->getTemplateInstantiationPattern());
+        if (const auto* spec = dyn_cast<VarTemplateSpecializationDecl>(v)) pending.push_back(spec->getSpecializedTemplate());
+      }
+      if (const auto* en = dyn_cast<EnumDecl>(d)) pending.push_back(en->getInstantiatedFromMemberEnum());
+      if (const auto* t = dyn_cast<RedeclarableTemplateDecl>(d)) pending.push_back(t->getInstantiatedFromMemberTemplate());
     }
-    const auto* context = d->getLexicalDeclContext();
-    if (context && !context->isTranslationUnit() && !context->isNamespace()) return owner(Decl::castFromDeclContext(context));
     return noFamily;
+  }
+  void bindParameters(const TemplateParameterList* parameters, FamilyId id) {
+    if (parameters) for (const auto* p : *parameters) bind(p,id);
   }
   void bind(const Decl* d, FamilyId id) {
     owners[d] = id;
     auto [it,fresh] = owners.emplace(canonical(d),id);
     if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
-    if (const auto* t = dyn_cast<TemplateDecl>(d); t && t->getTemplatedDecl()) bind(t->getTemplatedDecl(),id);
+    // Template parameters are not DeclContext children, and often have a TU
+    // semantic context. Out-of-line definitions own separate outer parameters.
+    if (const auto* t = dyn_cast<TemplateDecl>(d)) {
+      bindParameters(t->getTemplateParameters(),id);
+      if (t->getTemplatedDecl()) bind(t->getTemplatedDecl(),id);
+    }
+    if (const auto* v = dyn_cast<DeclaratorDecl>(d)) for (const auto* p : v->getTemplateParameterLists()) bindParameters(p,id);
+    if (const auto* t = dyn_cast<TagDecl>(d)) for (const auto* p : t->getTemplateParameterLists()) bindParameters(p,id);
+    if (const auto* t = dyn_cast<ClassTemplatePartialSpecializationDecl>(d)) bindParameters(t->getTemplateParameters(),id);
+    if (const auto* t = dyn_cast<VarTemplatePartialSpecializationDecl>(d)) bindParameters(t->getTemplateParameters(),id);
     if (const auto* ctx = dyn_cast<DeclContext>(d)) for (auto* child : ctx->decls()) if (!isa<NamespaceDecl>(child)) bind(child,id);
+  }
+  std::string describe(const Decl* d) const {
+    std::string text = d->getDeclKindName();
+    if (const auto* n = dyn_cast<NamedDecl>(d)) text += " '" + n->getQualifiedNameAsString() + "'";
+    auto loc = d->getLocation().isValid() ? d->getLocation() : d->getBeginLoc();
+    text += " at " + loc.printToString(sm);
+    if (loc.isMacroID()) text += " (spelling " + sm.getSpellingLoc(loc).printToString(sm) + ")";
+    return text;
   }
   void index(const NamedDecl* d, PruneFamily& f, bool callable = false) {
     if (!d || d->getDeclName().isEmpty()) return;
@@ -279,10 +327,15 @@ public:
     bool condition = false;
     for (auto d : e.conditionRanges) if (d.begin <= offset && offset < d.end) condition = true;
     if (condition) return; // All user conditions have already been resolved or disable pruning.
-    const auto def = mi->getDefinitionLoc();
-    const bool source = def.isValid() && e.sm.isWrittenInMainFile(e.sm.getSpellingLoc(def));
-    const bool system = def.isValid() && e.sm.isInSystemHeader(e.sm.getSpellingLoc(def));
-    const bool builtin = !source && !system;
+    const auto def = e.sm.getSpellingLoc(mi->getDefinitionLoc());
+    const bool source = def.isValid() && e.sm.isWrittenInMainFile(def);
+    // The predefines buffer is marked as system code too. Classify it first:
+    // a pasted/rescanned __GNUC__ is a predefined expansion even without any
+    // judge snapshot, and must participate in the cross-configuration check.
+    const bool command = def.isValid() && e.sm.isWrittenInCommandLineFile(def);
+    const bool builtin = !source && (mi->isBuiltinMacro() || !def.isValid() ||
+        e.sm.isWrittenInBuiltinFile(def) || command || !e.sm.isInSystemHeader(def));
+    const bool system = !source && !builtin && def.isValid() && e.sm.isInSystemHeader(def);
     const bool judgePredefined = e.model.judgeInitial.contains(name) &&
         std::any_of(e.model.judgeInitial.at(name).provenance.begin(),e.model.judgeInitial.at(name).provenance.end(),[](auto o) { return o == FactOrigin::compilerBuiltin || o == FactOrigin::specialBuiltin || o == FactOrigin::nativeModel; });
     MacroFact judge;
@@ -291,11 +344,35 @@ public:
     else if (e.model.judgeProfile && (e.model.judgeComplete || !isReserved(name))) judge.state = MacroState::undefined;
     bool paste = source && std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.is(tok::hashhash); });
     auto parse = fact(mi);
-    parse.provenance = {source ? FactOrigin::source : system ? FactOrigin::systemHeader : FactOrigin::compilerBuiltin};
+    parse.provenance = {source ? FactOrigin::source : system ? FactOrigin::systemHeader : command ? FactOrigin::commandOperation : FactOrigin::compilerBuiltin};
     e.model.expansions.push_back({offset,name,true,false,builtin || judgePredefined,parse,judge,paste,false,true});
     auto& group = e.pasteGroups[offset]; group.first |= paste; group.second |= system || builtin || judgePredefined;
     if (system) e.systemMacros[offset].insert(name);
     if (auto r = e.range(range)) e.macroInvocations.push_back(*r);
+  }
+};
+
+// Closure records in namespace-scope variable initializers can have only a
+// namespace DeclContext. Index their syntactic enclosing family before any
+// dependency visits the variable's (closure) type, including generic lambdas.
+class Closures final : public RecursiveASTVisitor<Closures> {
+  Extraction& e;
+  FamilyId current = noFamily;
+  std::size_t visits = 0;
+public:
+  explicit Closures(Extraction& x) : e(x) {}
+  bool shouldVisitTemplateInstantiations() const { return true; }
+  bool shouldVisitImplicitCode() const { return true; }
+  bool TraverseDecl(Decl* d) {
+    if (!d) return true;
+    if (++visits > 2000000) { e.disable("AST traversal limit"); return false; }
+    const auto saved = current;
+    if (const auto id = e.owner(d); id != noFamily) current = id;
+    const bool result = RecursiveASTVisitor::TraverseDecl(d); current = saved; return result;
+  }
+  bool VisitLambdaExpr(LambdaExpr* x) {
+    if (current != noFamily && e.owner(x->getLambdaClass()) == noFamily) e.bind(x->getLambdaClass(),current);
+    return true;
   }
 };
 
@@ -309,6 +386,10 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
   std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
   void edge(const Decl* d) {
     if (!d) return;
+    // Builtin templates have no source declaration to retain. Their template
+    // arguments/result types are still traversed by type()/argument().
+    if (isa<BuiltinTemplateDecl>(d)) return;
+    if (const auto* shadow = dyn_cast<UsingShadowDecl>(d)) edge(shadow->getTargetDecl());
     const auto target = e.owner(d);
     if (target != noFamily) {
       if (current != noFamily) e.model.families[current].edges.push_back(target);
@@ -316,7 +397,7 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
       return;
     }
     if (scalarBuiltin(d)) return;
-    if (e.user(d->getBeginLoc())) { e.disable("unowned user dependency"); return; }
+    if (e.user(d->getBeginLoc())) { e.disable("unowned user dependency: " + e.describe(d)); return; }
     if (!isa<FunctionDecl>(d) && !isa<CXXRecordDecl>(d) && !isa<VarDecl>(d)) return;
     const auto [it,fresh] = systems.emplace(d,systems.size());
     if (fresh) { e.model.systemEntities.push_back({d->getDeclKindName(),{}, {}}); systemPending.push_back(d); }
@@ -451,6 +532,7 @@ public:
   bool VisitExpr(Expr* x) { type(x->getType()); return true; }
   bool VisitTypeLoc(TypeLoc t) { type(t.getType()); return true; }
   bool VisitDeclRefExpr(DeclRefExpr* x) { edge(x->getDecl()); return true; }
+  bool VisitUsingShadowDecl(UsingShadowDecl* d) { edge(d->getTargetDecl()); return true; }
   bool VisitMemberExpr(MemberExpr* x) { edge(x->getMemberDecl()); return true; }
   bool VisitCXXConstructExpr(CXXConstructExpr* x) { edge(x->getConstructor()); return true; }
   bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr* x) { edge(x->getTemporary()->getDestructor()); return true; }
@@ -471,7 +553,7 @@ public:
   bool VisitFunctionDecl(FunctionDecl* f) {
     if (current == noFamily) return true;
     auto& family = e.model.families[current];
-    if (!isa<CXXMethodDecl>(f)) {
+    if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
       const auto key = std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
       auto [it,fresh] = overloads.emplace(key,current); if (!fresh && it->second != current) e.model.unions.emplace_back(current,it->second);
       e.index(f,family,true); family.nonMemberOperator |= f->isOverloadedOperator() || f->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName;
@@ -534,6 +616,8 @@ public:
         auto [it,fresh] = overloads.emplace(key,id); if (!fresh) e.model.unions.emplace_back(id,it->second);
       }
     }
+    Closures closures(e);
+    for (auto [d,id] : e.declarations) { (void)id; closures.TraverseDecl(const_cast<Decl*>(d)); }
     Dependencies dependencies(e); dependencies.run();
     for (auto [d,id] : e.declarations) {
       for (auto r : e.model.families[id].ranges) for (auto m : e.macroInvocations)
