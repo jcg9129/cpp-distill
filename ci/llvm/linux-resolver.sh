@@ -12,4 +12,11 @@ cmake --build build-resolver -j2
 # Includes the thin CLI, shared pipeline cases through its real binary, and
 # CLI help/option errors, and both pruning extraction model/case suites.
 # All subprocess/test deadlines remain bounded.
-ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1
+if ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1; then
+  exit 0
+else
+  status=$?
+  # Preserve the original failure even if the diagnostic rerun passes.
+  ctest --test-dir build-resolver -R prune_extract --output-on-failure -V --timeout 120 -j1 || true
+  exit "$status"
+fi

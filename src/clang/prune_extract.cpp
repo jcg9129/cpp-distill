@@ -10,12 +10,14 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
+#include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Lex/MacroArgs.h"
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Parse/ParseAST.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include <algorithm>
 #include <map>
@@ -102,7 +104,7 @@ struct Extraction {
     owners[d] = id;
     auto [it,fresh] = owners.emplace(canonical(d),id);
     if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
-    if (const auto* t = dyn_cast<TemplateDecl>(d)) bind(t->getTemplatedDecl(),id);
+    if (const auto* t = dyn_cast<TemplateDecl>(d); t && t->getTemplatedDecl()) bind(t->getTemplatedDecl(),id);
     if (const auto* ctx = dyn_cast<DeclContext>(d)) for (auto* child : ctx->decls()) if (!isa<NamespaceDecl>(child)) bind(child,id);
   }
   void index(const NamedDecl* d, PruneFamily& f, bool callable = false) {
@@ -125,7 +127,9 @@ struct Extraction {
     }
     const auto id = model.families.size(); PruneFamily f;
     const Decl* base = d;
-    if (const auto* t = dyn_cast<TemplateDecl>(d)) base = t->getTemplatedDecl();
+    // Concepts are TemplateDecls with no templated declaration. Keep the
+    // ConceptDecl itself as the family rather than dereferencing nullptr.
+    if (const auto* t = dyn_cast<TemplateDecl>(d); t && t->getTemplatedDecl()) base = t->getTemplatedDecl();
     if (const auto* n = dyn_cast<NamedDecl>(base)) {
       f.label = n->getQualifiedNameAsString();
       if (!n->getDeclContext()->isRecord()) index(n,f,isa<FunctionDecl>(base));
@@ -524,7 +528,7 @@ public:
     // Namespaces, redeclarations, overloads and template identities share retention.
     std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
     for (auto [d,id] : e.declarations) {
-      if (const auto* t = dyn_cast<TemplateDecl>(d)) d = t->getTemplatedDecl();
+      if (const auto* t = dyn_cast<TemplateDecl>(d); t && t->getTemplatedDecl()) d = t->getTemplatedDecl();
       if (const auto* f = dyn_cast<FunctionDecl>(d); f && !isa<CXXMethodDecl>(f)) {
         auto key = std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
         auto [it,fresh] = overloads.emplace(key,id); if (!fresh) e.model.unions.emplace_back(id,it->second);
@@ -557,7 +561,7 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
     auto path = std::string(pruningResourceDirectory) + "/include/" + resource.path;
     memory->addFile(path,0,llvm::MemoryBuffer::getMemBuffer(llvm::StringRef(reinterpret_cast<const char*>(resource.data),resource.size),path));
   }
-  auto diagnostics = CompilerInstance::createDiagnostics(*overlay,invocation->getDiagnosticOpts(),new IgnoringDiagConsumer,true);
+  auto diagnostics = CompilerInstance::createDiagnostics(*overlay,invocation->getDiagnosticOpts(),new TextDiagnosticPrinter(llvm::errs(),invocation->getDiagnosticOpts()),true);
   std::vector<const char*> argv; for (const auto& s : model.parseArgv) argv.push_back(s.c_str());
   if (!diagnostics || !CompilerInvocation::CreateFromArgs(*invocation,argv,*diagnostics)) {
     model.disabledReasons.push_back("invalid Clang parse configuration"); return model;

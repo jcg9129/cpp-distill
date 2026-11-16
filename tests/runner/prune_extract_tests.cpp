@@ -12,12 +12,24 @@ const PruneFamily& family(const PruningModel& m, std::string_view label) {
   for (const auto& f : m.families) if (f.label == label) return f;
   throw Error{"missing family: " + std::string(label)};
 }
+PruningModel extracted(const PruningModel& input, const PruneWorkerOptions& o) {
+  auto m = take(extractPruning(input,o));
+  // Print even for negative tests: an expected disable must never hide a
+  // worker crash, protocol rejection or missing-header diagnostic in CI.
+  for (const auto& why : m.disabledReasons) {
+    std::cerr << "  disabled: " << why << '\n';
+    if (why.starts_with("pruning worker") || why.starts_with("invalid pruning worker result")) throw Error{why};
+  }
+  return m;
+}
 PruningModel extract(std::string text, const PruneWorkerOptions& o) {
   Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
   ResolveResult flat; flat.text = std::move(text);
   for (std::size_t i = 0, line = 1; i < flat.text.size(); ++i) if (i == 0 || flat.text[i-1] == '\n') flat.lineMap.push_back(SourceLocation{"original.hpp",line++});
-  auto m = take(preparePruning(c,{},flat)); return take(extractPruning(m,o));
+  auto m = take(preparePruning(c,{},flat));
+  return extracted(m,o);
 }
+
 }
 int main(int argc, char** argv) {
   if (argc != 2) return 1;
@@ -73,7 +85,7 @@ int main(int argc, char** argv) {
       ResolveResult flat; flat.text = "// distill: keep\nint preserved(){return 1;} int main(){}\n";
       auto input = take(preparePruning(c,{},flat));
       const auto newline = input.text.find('\n'); input.text.replace(0,newline,newline,' ');
-      m = take(extractPruning(input,o)); r = take(computeRetention(m));
+      m = extracted(input,o); r = take(computeRetention(m));
       check(r.disabledReasons.empty() && !m.annotations.empty(),"keep metadata lost after stripping comment");
       check(family(m,"preserved").names.contains("preserved"),"kept declaration missing"); ++checks;
     }

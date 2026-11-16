@@ -4,6 +4,8 @@
 #include "core/names/adl.h"
 #include "core/report/prune.h"
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 using namespace distill;
 namespace {
 struct Model {
@@ -162,6 +164,22 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   b.m.families[0].edges = {100}; CHECK(!computeRetention(b.m).ok()); b.m.families[0].edges.clear();
   b.m.families[1].ranges = b.m.families[0].ranges; CHECK(!computeRetention(b.m).ok());
 }
+TEST(prune_protocol_errors_locate_field_and_line) {
+  for (const auto* value : {"oops", "11", "65"}) {
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-1 \"first\nsecond\" \"c++20\" 1 ") + value);
+    CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
+  }
+  auto string = parsePruningModel("DISTILL-PRUNE-1 unquoted");
+  CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
+  auto truncated = parsePruningModel("DISTILL-PRUNE-1 \"first\nsecond");
+  CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
+  PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
+  auto encoded = serializePruningModel(m); CHECK(encoded.ok());
+  auto bad = encoded.value(); const auto offset = bad.find("987 "); CHECK(offset != bad.npos);
+  bad.replace(offset,3,"9999");
+  auto invalid = parsePruningModel(bad); CHECK(!invalid.ok());
+  CHECK(invalid.error().message.find("field model.keepOffsets[0], line 2, byte " + std::to_string(offset)) != std::string::npos);
+}
 TEST(prune_prepare_selected_configuration_and_provenance) {
   Configuration c; c.command = parseCompileCommand({"g++","-std=c++23","-DU=1","-UU","-DU=2","-funsigned-char","-march=native","-O2","main.cpp"},std::filesystem::current_path()).value();
   c.probe.triple = "x86_64-w64-mingw32"; c.probe.dialect = {"c++23",false,202302};
@@ -169,6 +187,7 @@ TEST(prune_prepare_selected_configuration_and_provenance) {
   ResolveResult flat; flat.text = "#line 1 \"a\"\nvoid unused(){}\n"; flat.lineMap = {std::nullopt,SourceLocation{"a",1}};
   auto m = preparePruning(c,{},flat); CHECK(m.ok()); CHECK_EQ(m.value().generatedMarkers.size(),1u);
   const auto& args = m.value().parseArgv;
+  CHECK(std::find(args.begin(),args.end(),"-fgnuc-version=4.2.1") != args.end());
   CHECK(std::find(args.begin(),args.end(),"-DU=1") < std::find(args.begin(),args.end(),"-UU"));
   CHECK(std::find(args.begin(),args.end(),"-UU") < std::find(args.begin(),args.end(),"-DU=2"));
   CHECK(std::find(args.begin(),args.end(),"/gcc/internal") == args.end());
@@ -200,18 +219,37 @@ TEST(prune_prepare_pragmas_allow_only_audited_effects_and_preserve_directives) {
 }
 TEST(prune_worker_failures_use_bounded_core_runner) {
   Model b; b.add("x","int x;"); test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
-  for (int scenario = 0; scenario < 5; ++scenario) {
+  for (int scenario = 0; scenario < 8; ++scenario) {
     o.runner = [&](const ProcessSpec& spec) -> Result<ProcessResult> {
       CHECK_EQ(spec.argv[1],"--internal-prune"); CHECK(spec.timeout <= o.timeout); CHECK(std::filesystem::exists(spec.argv[2]));
-      ProcessResult r; r.exitCode = 0;
+      CHECK(spec.cwd.is_absolute()); CHECK(pathFromUtf8(spec.argv[2]).is_absolute());
+      CHECK(!spec.memoryLimitBytes); // A condition-sized AS cap cannot host a Clang AST.
+      if (scenario == 7) return Error{"spawn fixture failure"};
+      ProcessResult r; r.exitCode = 0; r.stderrText = "diagnostic fixture\n" + std::string(3000,'x') + "OMITTED TAIL";
       if (scenario == 0) r.timedOut = true;
       if (scenario == 1) r.stdoutTruncated = true;
       if (scenario == 2) r.exitCode = 1;
       if (scenario == 3) r.stdoutText = "broken";
       if (scenario == 4) r.stdoutText = serializePruningModel(b.m).value();
+      if (scenario == 5) { r.signal = 11; r.exitCode = 139; }
+      if (scenario == 6) r.stderrTruncated = true;
       return r;
     };
     auto r = extractPruning(b.m,o); CHECK(r.ok()); CHECK_EQ(r.value().disabledReasons.empty(),scenario == 4);
+    if (scenario != 4) {
+      const auto& why = r.value().disabledReasons.back();
+      for (const auto* key : {"exit_code=", "signal=", "timed_out=", "stdout_truncated=", "stderr_truncated=", "cwd=", "argv=[", "--internal-prune", "stderr (first 2048 bytes):"}) CHECK(why.find(key) != why.npos);
+      std::istringstream argv(why.substr(why.find("argv=[")+6)); std::string executable;
+      argv >> std::quoted(executable); CHECK_EQ(executable,pathToUtf8(o.executable));
+      if (scenario != 7) { CHECK(why.find("diagnostic fixture\n") != why.npos); CHECK(why.find("OMITTED TAIL") == why.npos); }
+      if (scenario == 0) CHECK(why.find("timed_out=true") != why.npos);
+      if (scenario == 1) CHECK(why.find("stdout_truncated=true") != why.npos);
+      if (scenario == 2) CHECK(why.find("exit_code=1;") != why.npos);
+      if (scenario == 3) { CHECK(why.find("field version") != why.npos); CHECK(why.find("line 1") != why.npos); }
+      if (scenario == 5) { CHECK(why.find("exit_code=139") != why.npos); CHECK(why.find("signal=11") != why.npos); }
+      if (scenario == 6) CHECK(why.find("stderr_truncated=true") != why.npos);
+      if (scenario == 7) CHECK(why.find("spawn fixture failure") != why.npos);
+    }
     CHECK(std::filesystem::is_empty(temp.path));
   }
   o.timeout = std::chrono::milliseconds(0); CHECK(!extractPruning(b.m,o).value().disabledReasons.empty());

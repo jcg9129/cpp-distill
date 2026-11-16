@@ -74,7 +74,8 @@ Result<bool> staticNameInvariant(const PruningModel&, const PruningResult&, std:
 // Private bounded worker protocol. Parsing is strict and validates all indices/ranges.
 Result<std::string> serializePruningModel(const PruningModel&);
 Result<PruningModel> parsePruningModel(std::string_view);
-Result<bool> validatePruningModel(const PruningModel&);
+// invalidField optionally identifies the failing protocol field path.
+Result<bool> validatePruningModel(const PruningModel&, std::string* invalidField = nullptr);
 // Identifier tokens plus literal-operator suffixes, excluding comments/strings.
 Result<std::vector<Token>> pruningIdentifiers(std::string_view);
 Result<std::vector<std::size_t>> captureKeepOffsets(std::string_view);

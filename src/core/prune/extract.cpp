@@ -4,6 +4,8 @@
 #include "core/temporary.h"
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 namespace distill {
 namespace {
 bool supportedPragma(const Directive& d) {
@@ -42,7 +44,9 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
       m.disabledReasons.push_back("unsupported ABI translation: " + a.option);
     else triple = std::string(a.option == "-m32" ? "i386" : "x86_64") + triple.substr(separator);
   }
-  m.parseArgv = {"-x", "c++", "-std=" + m.dialect, "-triple", triple,
+  // CreateFromArgs takes cc1 options, so reproduce the driver's GNU
+  // compatibility default explicitly (cc1 itself defaults to no __GNUC__).
+  m.parseArgv = {"-x", "c++", "-std=" + m.dialect, "-triple", triple, "-fgnuc-version=4.2.1",
                  "-nostdinc++", "-nostdsysteminc", "-nobuiltininc", "-resource-dir", std::string(pruningResourceDirectory)};
   auto add = [&](std::string flag, std::string value) { m.parseArgv.push_back(std::move(flag)); m.parseArgv.push_back(std::move(value)); };
   bool resource = false;
@@ -101,11 +105,34 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
     spec.argv = {pathToUtf8(o.executable),"--internal-prune",pathToUtf8(input)};
     if (o.deadline) spec.timeout = std::min(spec.timeout,std::chrono::duration_cast<std::chrono::milliseconds>(*o.deadline-std::chrono::steady_clock::now()));
     if (spec.timeout.count() <= 0) return disabled("pruning worker deadline exceeded");
-    auto run = o.runner(spec); if (!run.ok()) return disabled("pruning worker: " + run.error().message);
+    auto context = [&](const ProcessResult* r) {
+      std::ostringstream out;
+      out << "; exit_code=";
+      if (r) out << r->exitCode; else out << "unavailable";
+      out << "; signal=";
+      if (r && r->signal) out << *r->signal; else out << (r ? "none" : "unavailable");
+      out << "; timed_out=" << (r ? (r->timedOut ? "true" : "false") : "unavailable")
+          << "; stdout_truncated=" << (r ? (r->stdoutTruncated ? "true" : "false") : "unavailable")
+          << "; stderr_truncated=" << (r ? (r->stderrTruncated ? "true" : "false") : "unavailable")
+          << "; timeout_ms=" << spec.timeout.count() << "; max_output_bytes=" << spec.maxOutputBytes
+          << "; cwd=" << std::quoted(pathToUtf8(spec.cwd)) << "; argv=[";
+      for (std::size_t i = 0; i < spec.argv.size(); ++i) out << (i ? ", " : "") << std::quoted(spec.argv[i]);
+      out << "]; stderr (first 2048 bytes):\n";
+      if (r) {
+        out << r->stderrText.substr(0,2048);
+        if (r->stderrText.size() > 2048) out << "\n[stderr excerpt truncated]";
+      } else out << "[unavailable]";
+      return out.str();
+    };
+    // Do not impose a small address-space cap on full AST parsing:
+    // libstdc++ headers and embedded Clang resources need substantially more AS.
+    auto run = o.runner(spec);
+    if (!run.ok()) return disabled("pruning worker: " + run.error().message + context(nullptr));
     const auto& r = run.value();
-    if (r.timedOut || r.exitCode || r.signal || r.stdoutTruncated || r.stderrTruncated) return disabled("pruning worker failed or reached a limit");
+    if (r.timedOut || r.exitCode || r.signal || r.stdoutTruncated || r.stderrTruncated)
+      return disabled("pruning worker failed or reached a limit" + context(&r));
     auto model = parsePruningModel(r.stdoutText);
-    if (!model.ok()) return disabled("invalid pruning worker result: " + model.error().message);
+    if (!model.ok()) return disabled("invalid pruning worker result: " + model.error().message + context(&r));
     if (model.value().text != in.text || model.value().parseArgv != in.parseArgv || model.value().lineMap != in.lineMap || model.value().generatedMarkers != in.generatedMarkers ||
         model.value().sourceDirectives != in.sourceDirectives || model.value().includes != in.includes ||
         model.value().keepNames != in.keepNames || model.value().keepOffsets != in.keepOffsets || model.value().dialect != in.dialect ||
@@ -113,7 +140,12 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
         !std::all_of(in.disabledReasons.begin(),in.disabledReasons.end(),[&](const auto& reason) {
           return std::find(model.value().disabledReasons.begin(),model.value().disabledReasons.end(),reason) != model.value().disabledReasons.end();
         }))
-      return disabled("pruning worker changed immutable input");
+      return disabled("pruning worker changed immutable input" + context(&r));
+    // Clang can return a valid, disabled model after a parse/configuration
+    // error. Keep its diagnostics just as for an unsuccessful worker exit.
+    for (auto& reason : model.value().disabledReasons)
+      if (reason == "Clang parse error" || reason == "invalid Clang parse configuration" || reason == "unsupported Clang target")
+        reason += context(&r);
     return model;
   } catch (const Error& e) { return e; }
   catch (const std::exception& e) { return Error{std::string("pruning worker: ")+e.what()}; }

@@ -572,8 +572,10 @@ bits/extc++.h. Those includes disable pruning. Data are embedded at build time.
 `Configuration`, preserving its triple, dialect and ordered macro operations.
 GCC-internal search directories are replaced with embedded Clang resource
 headers in the probed search order. User search paths remain absent. Clang keeps
-its own predefinitions. Untranslated options are recorded; semantic options
-without support, including modules/OpenMP/CPU tuning, disable pruning. Source
+its own predefinitions, including the driver's GNU compatibility default
+(`-fgnuc-version=4.2.1`), which cc1 does not enable automatically. Untranslated
+options are recorded; semantic options without support, including
+modules/OpenMP/CPU tuning, disable pruning. Source
 pragmas use the audited allow-list below; other pragmas disable pruning.
 Generated markers are identified from D2's null line-map entries, never by
 spelling alone. Keep comments are captured as physical declaration-token offsets by
@@ -584,7 +586,17 @@ D3b must map the declaration offsets when its rendering changes byte positions.
 `extractPruning` serializes the request through a strict bounded private
 protocol and uses D2's `runProcess` process-group/Job Object containment to run
 `distill_prune_worker`. A deadline, crash, invalid protocol or output cap disables
-pruning. `src/clang/prune_extract.cpp` runs only in that child: it parses with a
+pruning. CTest supplies the worker's target-file path; the tests make it absolute.
+The worker receives `--internal-prune <absolute-input-path>` and runs in a private
+absolute temporary directory containing that binary protocol input. Its default
+wall deadline is 30 seconds (shortened by any caller deadline), with a 64 MiB cap
+per output stream and a 256 MiB protocol byte cap. It sets no address-space limit:
+a small `RLIMIT_AS` can prevent Clang from parsing standard-library headers.
+Failures record exit/signal, timeout/truncation flags, argv/cwd and the first
+2 KiB of stderr. Decode failures identify a field path and protocol line/byte;
+Clang diagnostics and worker-stage errors go to stderr. The Linux resolver job
+reruns extraction tests verbosely after a failing CTest run.
+`src/clang/prune_extract.cpp` runs only in that child: it parses with a
 real-filesystem overlay and build-time embedded resource headers, discovers
 complete declaration ownership, pins macro-produced declarations and directive
 crossings, and traverses patterns, known instantiations, implicit code, type

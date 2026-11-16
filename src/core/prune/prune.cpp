@@ -72,38 +72,68 @@ Result<std::vector<std::size_t>> captureKeepOffsets(std::string_view text) {
   for (const auto& t : tokens) { trivia(t.begin); previous = t.end; }
   trivia(text.size()); return result;
 }
-Result<bool> validatePruningModel(const PruningModel& m) {
+Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidField) {
+  auto invalid = [&](std::string message, std::string field) -> Result<bool> {
+    if (invalidField) *invalidField = std::move(field);
+    return Error{std::move(message)};
+  };
   const auto n = m.families.size();
-  if (m.text.size() > 128 * 1024 * 1024 || n > 1000000) return Error{"pruning model limit"};
+  if (m.text.size() > 128 * 1024 * 1024) return invalid("pruning model limit","model.text");
+  if (n > 1000000) return invalid("pruning model limit","model.families");
   auto valid = [&](EditRange r) { return r.begin < r.end && r.end <= m.text.size(); };
   std::vector<EditRange> ranges;
-  for (const auto& f : m.families) {
-    if (static_cast<unsigned>(f.kind) > static_cast<unsigned>(FamilyKind::instantiation)) return Error{"invalid family kind"};
-    for (auto r : f.ranges) { if (!valid(r)) return Error{"invalid family edit range"}; ranges.push_back(r); }
-    for (auto id : f.edges) if (id >= n) return Error{"invalid AST edge"};
-    for (auto id : f.associatedTypes) if (id >= n) return Error{"invalid association"};
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto& f = m.families[i];
+    const auto field = "model.families[" + std::to_string(i) + "]";
+    if (static_cast<unsigned>(f.kind) > static_cast<unsigned>(FamilyKind::instantiation)) return invalid("invalid family kind",field+".kind");
+    for (std::size_t j = 0; j < f.ranges.size(); ++j) {
+      auto r = f.ranges[j];
+      if (!valid(r)) return invalid("invalid family edit range",field+".ranges["+std::to_string(j)+"]");
+      ranges.push_back(r);
+    }
+    for (std::size_t j = 0; j < f.edges.size(); ++j) if (f.edges[j] >= n) return invalid("invalid AST edge",field+".edges["+std::to_string(j)+"]");
+    for (std::size_t j = 0; j < f.associatedTypes.size(); ++j) if (f.associatedTypes[j] >= n) return invalid("invalid association",field+".associatedTypes["+std::to_string(j)+"]");
   }
   std::sort(ranges.begin(), ranges.end(), [](auto a, auto b) { return a.begin < b.begin; });
-  for (std::size_t i = 1; i < ranges.size(); ++i) if (intersects(ranges[i-1], ranges[i])) return Error{"overlapping edit ranges"};
-  for (auto [a,b] : m.unions) if (a >= n || b >= n) return Error{"invalid family union"};
-  for (auto r : m.generatedMarkers) if (!valid(r)) return Error{"invalid generated marker"};
-  for (auto r : m.sourceDirectives) if (!valid(r)) return Error{"invalid directive range"};
-  for (auto offset : m.keepOffsets) if (offset >= m.text.size()) return Error{"invalid keep offset"};
-  for (auto a : m.annotations) if (a.family >= n || a.offset > m.text.size()) return Error{"invalid keep annotation"};
-  for (const auto& e : m.systemEntities) {
-    for (auto id : e.userEdges) if (id >= n) return Error{"invalid system-user edge"};
-    for (auto id : e.systemEdges) if (id >= m.systemEntities.size()) return Error{"invalid system edge"};
+  for (std::size_t i = 1; i < ranges.size(); ++i) if (intersects(ranges[i-1], ranges[i])) return invalid("overlapping edit ranges","model.families");
+  for (std::size_t i = 0; i < m.unions.size(); ++i) {
+    auto [a,b] = m.unions[i];
+    if (a >= n || b >= n) return invalid("invalid family union","model.unions["+std::to_string(i)+"]");
   }
-  for (auto u : m.systemUses) if ((u.family != noFamily && u.family >= n) || u.entity >= m.systemEntities.size()) return Error{"invalid system use"};
+  for (std::size_t i = 0; i < m.generatedMarkers.size(); ++i) if (!valid(m.generatedMarkers[i])) return invalid("invalid generated marker","model.generatedMarkers["+std::to_string(i)+"]");
+  for (std::size_t i = 0; i < m.sourceDirectives.size(); ++i) if (!valid(m.sourceDirectives[i])) return invalid("invalid directive range","model.sourceDirectives["+std::to_string(i)+"]");
+  for (std::size_t i = 0; i < m.keepOffsets.size(); ++i) if (m.keepOffsets[i] >= m.text.size()) return invalid("invalid keep offset","model.keepOffsets["+std::to_string(i)+"]");
+  for (std::size_t i = 0; i < m.annotations.size(); ++i) {
+    auto a = m.annotations[i];
+    if (a.family >= n || a.offset > m.text.size()) return invalid("invalid keep annotation","model.annotations["+std::to_string(i)+"]");
+  }
+  for (std::size_t i = 0; i < m.systemEntities.size(); ++i) {
+    const auto& e = m.systemEntities[i];
+    const auto field = "model.systemEntities["+std::to_string(i)+"]";
+    for (std::size_t j = 0; j < e.userEdges.size(); ++j) if (e.userEdges[j] >= n) return invalid("invalid system-user edge",field+".userEdges["+std::to_string(j)+"]");
+    for (std::size_t j = 0; j < e.systemEdges.size(); ++j) if (e.systemEdges[j] >= m.systemEntities.size()) return invalid("invalid system edge",field+".systemEdges["+std::to_string(j)+"]");
+  }
+  for (std::size_t i = 0; i < m.systemUses.size(); ++i) {
+    auto u = m.systemUses[i];
+    if ((u.family != noFamily && u.family >= n) || u.entity >= m.systemEntities.size()) return invalid("invalid system use","model.systemUses["+std::to_string(i)+"]");
+  }
   auto factValid = [](const MacroFact& f) {
     if (static_cast<unsigned>(f.state) > static_cast<unsigned>(MacroState::unknown)) return false;
     for (auto o : f.provenance) if (static_cast<unsigned>(o) > static_cast<unsigned>(FactOrigin::noProfile)) return false;
     return true;
   };
-  for (const auto& [name,fact] : m.judgeInitial) { (void)name; if (!factValid(fact)) return Error{"invalid judge macro fact"}; }
-  for (const auto& e : m.expansions) {
-    if (e.offset > m.text.size()) return Error{"invalid expansion offset"};
-    if (!factValid(e.parse) || !factValid(e.judge)) return Error{"invalid expansion fact"};
+  std::size_t index = 0;
+  for (const auto& [name,fact] : m.judgeInitial) {
+    (void)name;
+    if (!factValid(fact)) return invalid("invalid judge macro fact","model.judgeInitial["+std::to_string(index)+"].second");
+    ++index;
+  }
+  for (std::size_t i = 0; i < m.expansions.size(); ++i) {
+    const auto& e = m.expansions[i];
+    const auto field = "model.expansions["+std::to_string(i)+"]";
+    if (e.offset > m.text.size()) return invalid("invalid expansion offset",field+".offset");
+    if (!factValid(e.parse)) return invalid("invalid expansion fact",field+".parse");
+    if (!factValid(e.judge)) return invalid("invalid expansion fact",field+".judge");
   }
   return true;
 }
