@@ -70,11 +70,24 @@ jobs:
       - name: Data tooling self-tests
         if: runner.os == 'Linux'
         run: |
-          python3 -m unittest discover -s ci/extensions -p 'test_*.py'
-          python3 -m unittest discover -s ci/profiles -p 'test_*.py'
+          timeout 120 python3 -m unittest discover -s ci/extensions -p 'test_*.py'
+          timeout 120 python3 -m unittest discover -s ci/profiles -p 'test_*.py'
+          timeout 120 python3 ci/llvm/test-ci.py
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} ${{ matrix.cmake_options }}
       - name: Build
-        run: cmake --build build --target distill_core distill_unit_tests distill_inline_cases -j2
+        run: cmake --build build -j2
       - name: Test
         run: ctest --test-dir build --output-on-failure --timeout 120
+  resolver:
+    name: resolver (linux, clang)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check published SDK (authenticated)
+        run: gh release view llvm-23.1.5-1 --repo "$GITHUB_REPOSITORY" >/dev/null
+      - name: Build and test in manylinux 2.28
+        run: bash ci/llvm/in-container.sh quay.io/pypa/manylinux_2_28_x86_64 bash ci/llvm/linux-resolver.sh

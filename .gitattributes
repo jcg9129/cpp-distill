@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Probe fixtures must retain their exact captured bytes on every platform.
 tests/unit/fixtures/** -text
 
 # Inliner fixtures include CRLF, BOM and missing-final-newline cases.
 tests/cases/inline/** -text
+
+# Resolver fixtures preserve directive and source line coordinates.
+tests/cases/resolve/** -text

@@ -1,0 +1,2 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A2(a) is deliberately violated: both preprocess and runtime checks must reject flat.

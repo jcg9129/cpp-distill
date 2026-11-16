@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+main.cpp:3 true
+main.cpp:8 false

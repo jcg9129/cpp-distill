@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name = "profile"
+description = "Command-only fixture, checked with the local compiler"
+triple = "x86_64-linux-gnu"
+compiler = { family = "gcc", version = "15.2.0" }
+std = "gnu++20"
+flags = ["-O0", "-UFIXTURE", "-DFIXTURE=1"]
+libraries = ["glibc", "libstdc++"]
+check = []
+updated = "2026-11-15"
+sources = ["https://gcc.gnu.org/"]

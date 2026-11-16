@@ -2,7 +2,7 @@
 # Progress
 
 Where cpp-distill stands, so a new session can continue from the repo alone.
-Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
+Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
 [`reviews/`](reviews/).
 
 ## How work is done
@@ -19,12 +19,13 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
 
 | M | State |
 |---|---|
-| D0 design | done: v6 approved 2026-11-15 after five Codex rounds |
+| D0 design | done: v7 approved 2026-11-15 after five Codex rounds and the profile amendment |
 | D1 distribution spike | done: SDK `llvm-23.1.5-1` published for all five platforms; spike passes everywhere (results in [`d1-spike.md`](d1-spike.md#results)) |
-| D2 preprocessing half | D2a–D2c implemented; resolver, validation configurations and the `--no-prune` CLI remain |
+| D2 preprocessing half | D2a–D2d implemented; validation configurations and the `--no-prune` CLI remain |
 | D2a command/process/probe | done (#5): C++20 core with unit tests, green on Linux (posix_spawn and fork paths), macOS and Windows CI |
 | D2b scanner/names/inliner | done: text scanner, embedded C++26/C23 name tables, include search and guarded recursion, line-preserving raw output, unit and GCC equivalence/runtime case runner |
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
+| D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
 | D3 pruning | after D2; needs a short Codex round on the v6 pruning rules first |
 | D4–D5 | see design §7 |
 
@@ -90,3 +91,28 @@ Design: [`design.md`](design.md) (approved v6). Reviews of each design round:
   Embedded-list tests load all inventories and check extension and user macro names.
 - Resolver and validation orchestration (§4.5–4.6) remain subsequent D2 implementation;
   target verification will require exact probes and no unresolved native host.
+
+## D2d resolver (2026-11-16)
+
+- `resolve/` turns inliner output into line-preserving flat text, with decisions
+  for every conditional directive, external macro/arithmetic requirements,
+  reason counts, disabling reasons and the unknown-in-user-code precondition.
+  Header and GCC option-pragma invalidation use the embedded A1/native inventories.
+- Reuses profile facts and the probe's full macro-definition type. A3 conflict
+  checking also catches definitions in approximate snapshots whose values are
+  withheld. Known source bindings are derived facts; unknown alternatives start
+  independently and join equal bindings.
+- Optional `distill_clang` uses Clang 23.1.5's in-memory preprocessor. The core
+  still builds without LLVM. Test-only GCC evaluation, fake logic tests and
+  resolver cases run in existing CI jobs; the new `resolver (linux, clang)` job
+  builds inside manylinux_2_28 and runs Clang plus differential suites.
+- Cases capture actual local GCC facts for equivalence, replace local macro
+  operations with fixture operations, compare every preprocessed token's file/line,
+  and compare runtime stdout/exit. Shipped profiles only assert decisions. One
+  deliberately invalid standard-header fixture must fail both equivalence checks.
+- Arithmetic without a target model is deliberately limited to Boolean token
+  trees; unsupported integer layouts and macro-generated `defined` stay unknown.
+  Full worker/process containment for in-process Clang awaits pipeline/CLI wiring.
+- Local verification and proposed design wording are recorded in temporary root
+  `D2D-SUMMARY.md`; approved `docs/design.md` is unchanged.
+- Next: D2e validation configuration orchestration and the usable `--no-prune` CLI.

@@ -17,6 +17,7 @@ struct Macro {
   std::vector<std::string> parameters;
   bool variadic = false;
   std::string replacement;
+  bool operator==(const Macro&) const = default;
 };
 using MacroTable = std::map<std::string, Macro, std::less<>>;
 enum class CompilerFamily { gcc, clang, appleClang, unknown };
