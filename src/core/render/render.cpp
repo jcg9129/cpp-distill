@@ -22,7 +22,7 @@ struct Input {
         deletions.insert(deletions.end(),m.families[id].ranges.begin(),m.families[id].ranges.end());
     }
     joinDeletions();
-    if (r) removeEmptyNamespaces();
+    if (r) removeEmptyShells();
     joinDeletions();
     for (const auto& l : scan.lines) {
       const bool generated = generatedMarker(l);
@@ -63,10 +63,10 @@ struct Input {
     }
     deletions = std::move(joined);
   }
-  void removeEmptyNamespaces() {
-    // Shells do not participate in retention. Work on lexer tokens after family
-    // deletion, ignoring comments/literals as names and generated line markers
-    // as contents. Source directives always keep their enclosing shell.
+  void removeEmptyShells() {
+    // Shells do not participate in retention. Ignore comments/literals as
+    // names and generated line markers as contents. Source directives and
+    // other surviving non-shell tokens always keep their enclosing shells.
     struct Lexeme { const Token* token; bool directive; };
     std::vector<Lexeme> ts;
     for (const auto& l : scan.lines) if (!generatedMarker(l))
@@ -77,50 +77,176 @@ struct Input {
       if (ts[i].token->text == "{") stack.push_back(i);
       else if (ts[i].token->text == "}" && !stack.empty()) { close[stack.back()] = i; stack.pop_back(); }
     }
-    struct Shell { std::size_t begin, open, end; std::vector<std::string> names; };
+    // Namespace identities are shared by reopened blocks. Linkage shells use
+    // their enclosing scope; anonymous/inline namespaces also permit lookup
+    // through their parent.
+    struct Namespace {
+      std::size_t parent;
+      std::string name;
+      bool transparent = false, exposed = false;
+      std::size_t firstUse;
+      std::vector<std::size_t> blocks, inlineBlocks;
+    };
+    struct Shell {
+      std::size_t begin, end, parent, scope;
+      bool contents = false, keep = false;
+    };
+    const auto none = n;
+    std::vector<Namespace> namespaces{{0,"",true,false,n,{},{}}};
+    std::map<std::pair<std::size_t,std::string>,std::size_t> identities;
     std::vector<Shell> shells;
-    std::vector<bool> headerName(n), live(n);
+    std::vector<std::size_t> parents, scope(n), owner(n,none);
+    std::vector<bool> header(n), live(n), exposes(n);
+    std::set<std::string,std::less<>> ambiguousQualifiers, namespaceNames;
+    for (std::size_t i = 0; i < n; ++i)
+      live[i] = !deleted({ts[i].token->begin,ts[i].token->end});
     for (std::size_t i = 0; i < n; ++i) {
-      if (ts[i].directive || ts[i].token->text != "namespace") continue;
+      while (!parents.empty() && shells[parents.back()].end < i) parents.pop_back();
+      const auto parent = parents.empty() ? none : parents.back();
+      const auto enclosing = parent == none ? 0 : shells[parent].scope;
+      scope[i] = enclosing; owner[i] = parent;
+      if (ts[i].directive) { exposes[i] = true; continue; }
       auto j = i+1;
-      std::vector<std::size_t> names;
-      if (j < n && ts[j].token->kind == TokenKind::identifier && ts[j].token->text != "{") {
-        names.push_back(j++);
-        while (j < n && ts[j].token->text == "::") {
-          ++j;
-          if (j < n && ts[j].token->text == "inline") ++j;
-          if (j == n || ts[j].token->kind != TokenKind::identifier) break;
-          names.push_back(j++);
+      std::vector<std::pair<std::size_t,bool>> names;
+      const bool isNamespace = ts[i].token->text == "namespace";
+      if (isNamespace) {
+        if (j < n && ts[j].token->kind == TokenKind::identifier) {
+          names.push_back({j++,i && ts[i-1].token->text == "inline"});
+          while (j < n && ts[j].token->text == "::") {
+            ++j;
+            const bool inlined = j < n && ts[j].token->text == "inline";
+            if (inlined) ++j;
+            if (j == n || ts[j].token->kind != TokenKind::identifier) break;
+            names.push_back({j++,inlined});
+          }
         }
-      }
+        // Alias targets and using-directives can expose descendant names via
+        // other spellings. Treat their reach conservatively, including macros.
+        if ((j < n && ts[j].token->text == "=") ||
+            (i && ts[i-1].token->text == "using")) {
+          for (auto k = i+1; k < n && ts[k].token->text != ";"; ++k) exposes[k] = true;
+          if (j < n && ts[j].token->text == "=") ambiguousQualifiers.insert(ts[i+1].token->text);
+        }
+      } else if (ts[i].token->text == "extern" && j < n &&
+                 ts[j].token->kind == TokenKind::literal &&
+                 (ts[j].token->text == "\"C\"" || ts[j].token->text == "\"C++\"")) ++j;
+      else continue;
       if (j == n || ts[j].directive || ts[j].token->text != "{" || close[j] == n) continue;
       auto begin = i;
-      if (i && !ts[i-1].directive && ts[i-1].token->text == "inline") --begin;
-      Shell shell{begin,j,close[j],{}};
-      for (auto k : names) { headerName[k] = true; shell.names.push_back(ts[k].token->text); }
-      shells.push_back(std::move(shell));
+      if (isNamespace && i && !ts[i-1].directive && ts[i-1].token->text == "inline") --begin;
+      auto current = enclosing;
+      auto addNamespace = [&](const std::string& name,bool transparent) {
+        auto [it,inserted] = identities.emplace(std::make_pair(current,name),namespaces.size());
+        if (inserted) namespaces.push_back({current,name,transparent,false,n,{},{}});
+        current = it->second;
+        namespaces[current].transparent = namespaces[current].transparent || transparent;
+        namespaces[current].blocks.push_back(shells.size());
+        if (transparent && !name.empty()) namespaces[current].inlineBlocks.push_back(shells.size());
+      };
+      if (isNamespace) {
+        if (names.empty()) addNamespace("",true);
+        for (auto [k,inlined] : names) addNamespace(ts[k].token->text,inlined);
+      }
+      for (auto k = begin; k <= j; ++k) header[k] = true;
+      header[close[j]] = true;
+      shells.push_back({begin,close[j],parent,current});
+      parents.push_back(shells.size()-1);
+      // Skip the header, but give all its tokens the enclosing lookup scope.
+      for (auto k = i; k <= j; ++k) { scope[k] = enclosing; owner[k] = parent; }
+      i = j;
     }
-    std::map<std::string,std::size_t,std::less<>> uses;
-    for (std::size_t i = 0; i < n; ++i) {
-      const auto& t = *ts[i].token;
-      live[i] = !deleted({t.begin,t.end});
-      if (live[i] && !headerName[i] && t.kind == TokenKind::identifier) ++uses[t.text];
+    std::map<std::string,std::vector<std::size_t>,std::less<>> uses;
+    for (std::size_t i = 0; i < n; ++i) if (live[i] && !header[i]) {
+      if (owner[i] != none) shells[owner[i]].contents = true;
+      if (ts[i].token->kind == TokenKind::identifier) {
+        uses[ts[i].token->text].push_back(i);
+        if (ts[i].directive) ambiguousQualifiers.insert(ts[i].token->text);
+      }
     }
-    // Reverse source order visits inner shells first. A prefix count of live
-    // tokens plus the removed child sizes avoids rescanning namespace bodies.
-    std::vector<std::size_t> prefix(n+1);
-    for (std::size_t i = 0; i < n; ++i) prefix[i+1] = prefix[i] + live[i];
-    std::map<std::size_t,std::size_t> removed;
-    for (auto it = shells.rbegin(); it != shells.rend(); ++it) {
-      const auto& s = *it;
-      auto contents = prefix[s.end] - prefix[s.open+1];
-      for (auto child = removed.lower_bound(s.open+1); child != removed.end() && child->first < s.end; ++child)
-        contents -= child->second;
-      if (contents || std::any_of(s.names.begin(),s.names.end(),[&](const auto& name) { return uses[name] != 0; })) continue;
-      auto first = removed.lower_bound(s.begin), last = removed.upper_bound(s.end);
-      removed.erase(first,last);
-      removed.emplace(s.begin,prefix[s.end+1]-prefix[s.begin]);
-      deletions.push_back({ts[s.begin].token->begin,ts[s.end].token->end});
+    for (const auto& ns : namespaces) namespaceNames.insert(ns.name);
+    // Match a qualified spelling relative to each enclosing lookup scope.
+    // Anonymous and inline namespaces may be omitted from the spelling.
+    auto matches = [&](auto&& self,std::size_t id,std::size_t base,
+                       const std::vector<std::string>& name,std::size_t count) -> bool {
+      if (!count) {
+        if (id == base) return true;
+        return id && namespaces[id].transparent && self(self,namespaces[id].parent,base,name,0);
+      }
+      if (!id || id == base) return false;
+      const auto& ns = namespaces[id];
+      return (ns.name == name[count-1] && self(self,ns.parent,base,name,count-1)) ||
+          (ns.transparent && self(self,ns.parent,base,name,count));
+    };
+    auto reaches = [&](std::size_t id,std::size_t i) {
+      // At global scope, any surviving spelling is enough to keep the name.
+      // Restrict nested names to uses that can reach their enclosing scope.
+      if (!namespaces[id].parent || ts[i].directive) return true;
+      std::vector<std::string> name{ts[i].token->text};
+      auto first = i;
+      while (first >= 2 && live[first-1] && live[first-2] &&
+             ts[first-1].token->text == "::" && ts[first-2].token->kind == TokenKind::identifier) {
+        first -= 2; name.push_back(ts[first].token->text);
+      }
+      std::reverse(name.begin(),name.end());
+      const bool global = first && live[first-1] && ts[first-1].token->text == "::";
+      // An alias or macro qualifier may denote an exposed ancestor. A known,
+      // different namespace qualification does not become relevant merely
+      // because this namespace was imported elsewhere.
+      if (namespaces[id].exposed)
+        for (std::size_t k = 0; k+1 < name.size(); ++k)
+          if (ambiguousQualifiers.contains(name[k]) || !namespaceNames.contains(name[k])) return true;
+      auto base = global ? 0 : scope[i];
+      do {
+        if (matches(matches,id,base,name,name.size())) return true;
+        if (!base) break;
+        base = namespaces[base].parent;
+      } while (true);
+      if (!global) for (auto p = namespaces[id].parent; p; p = namespaces[p].parent)
+        if (namespaces[p].exposed && matches(matches,id,p,name,name.size())) return true;
+      return false;
+    };
+    // Imports, aliases and macros can expose descendants through other
+    // spellings. Once an ancestor is exposed, retain matching descendant names
+    // conservatively. Parent ids precede their children, including reopenings.
+    for (std::size_t id = 1; id < namespaces.size(); ++id) {
+      auto& ns = namespaces[id];
+      ns.exposed = namespaces[ns.parent].exposed;
+      for (auto i : uses[ns.name]) if (exposes[i] && reaches(id,i)) ns.exposed = true;
+      for (auto i : uses[ns.name]) if (reaches(id,i)) { ns.firstUse = i; break; }
+    }
+    // A live subtree provides all namespaces in its header. Prefer such a block
+    // as the provider if it precedes every use; otherwise retain one empty
+    // block. In particular, a reopened empty outer block cannot go if it alone
+    // provides a referenced inner namespace.
+    for (auto it = shells.rbegin(); it != shells.rend(); ++it)
+      if (it->contents && it->parent != none) shells[it->parent].contents = true;
+    auto keepShell = [&](std::size_t block) {
+      for (; block != none && !shells[block].keep; block = shells[block].parent) shells[block].keep = true;
+    };
+    // Select descendant providers first, so their enclosing blocks can also
+    // satisfy references to the outer namespace without another empty block.
+    for (auto it = namespaces.rbegin(); it != namespaces.rend(); ++it) {
+      const auto& ns = *it;
+      if (ns.firstUse != n && !ns.blocks.empty()) {
+        auto provider = ns.blocks.front();
+        for (auto block : ns.blocks)
+          if ((shells[block].contents || shells[block].keep) && shells[block].begin < ns.firstUse) {
+            provider = block; break;
+          }
+        keepShell(provider);
+      }
+      // A plain reopening inherits lookup from the original inline declaration.
+      if (!ns.inlineBlocks.empty() && std::any_of(ns.blocks.begin(),ns.blocks.end(),
+          [&](auto block) { return shells[block].contents || shells[block].keep; }))
+        keepShell(ns.inlineBlocks.front());
+    }
+    // Decide outermost first. Removing a subtree suppresses every nested shell,
+    // regardless of unrelated occurrences of its inner names elsewhere.
+    for (std::size_t i = 0; i < shells.size(); ++i) {
+      const auto& s = shells[i];
+      if (s.parent != none && !shells[s.parent].keep && !shells[s.parent].contents) continue;
+      if (!s.keep && !s.contents)
+        deletions.push_back({ts[s.begin].token->begin,ts[s.end].token->end});
     }
   }
   std::vector<EditRange> touching(EditRange range) const {

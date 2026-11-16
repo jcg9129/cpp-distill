@@ -163,7 +163,7 @@ TEST(render_repeated_presumed_locations_stay_distinct) {
   CHECK_EQ(render(m,{{0,10}}).provenance.text,
            "#line 1 \"a.cpp\"\nint second;\n#line 1 \"a.cpp\"\nint third;\n");
 }
-TEST(render_removes_empty_namespace_shells_inside_out) {
+TEST(render_removes_empty_namespace_shell_subtrees) {
   for (const auto& text : {
       "namespace outer { namespace inner { int dead; } }\n",
       "namespace outer { inline namespace version { int dead; } }\n",
@@ -195,7 +195,7 @@ TEST(render_preserves_named_namespace_uses_and_live_contents) {
   const auto begin = reopened.find("int dead;");
   const auto out = render(source(reopened),{{begin,begin+9}}).provenance.text;
   const auto first = out.find("namespace n {");
-  CHECK(first != out.npos && out.find("namespace n {",first+1) != out.npos);
+  CHECK(first != out.npos && out.find("namespace n {",first+1) == out.npos);
 }
 TEST(render_namespace_names_ignore_deleted_uses_comments_and_literals) {
   const std::string text = "namespace n { int dead; }\nvoid gone(){using namespace n;}\nconst char* s=R\"(n namespace n {})\"; // n\n";
@@ -216,4 +216,134 @@ TEST(render_namespace_directives_and_provenance) {
   const auto out = render(m,{{begin,begin+9}});
   CHECK_EQ(out.provenance.text,"#line 42 \"a.cpp\"\nint live=__LINE__;\n");
   CHECK_EQ(out.provenance.lineMap.back()->line,42u);
+}
+
+TEST(render_namespace_caide_unrelated_inner_names) {
+  const std::string text =
+      "namespace ns1 { void unused() {} }\n"
+      "namespace ns1 { void used() {} }\n"
+      "namespace ns2 { void used() {} }\n"
+      "namespace outer1 { namespace inner1 { template<class T> struct UsedClass {}; } }\n"
+      "namespace outer2 { namespace inner1 { void used() {} } }\n"
+      "namespace outer3 { namespace inner1 { void unused() {} } }\n"
+      "int main() { ns1::used(); ns2::used(); outer2::inner1::used(); "
+      "{ outer1::inner1::UsedClass<int> x; } return 0; }\n";
+  std::vector<EditRange> deletions;
+  for (auto at = text.find("void unused() {}"); at != text.npos; at = text.find("void unused() {}",at+1))
+    deletions.push_back({at,at+16});
+  const auto out = render(source(text),deletions).provenance.text;
+  CHECK(out.find("outer3") == out.npos);
+  CHECK(out.find("namespace outer1") != out.npos);
+  CHECK(out.find("namespace outer2") != out.npos);
+  const auto first = out.find("namespace ns1");
+  CHECK(first != out.npos && out.find("namespace ns1",first+1) == out.npos);
+}
+TEST(render_namespace_two_and_three_level_name_collisions) {
+  for (const auto& body : {
+      "namespace inner { int dead; }",
+      "namespace middle { namespace inner { int dead; } }"}) {
+    const auto text = std::string("namespace other { namespace middle { namespace inner {} } }\n") +
+        "namespace outer { " + body + " }\nusing namespace other::middle::inner;\n";
+    const auto dead = text.find("int dead;");
+    const auto out = render(source(text),{{dead,dead+9}}).provenance.text;
+    CHECK(out.find("namespace outer") == out.npos);
+    CHECK(out.find("namespace other") != out.npos);
+  }
+  // The outer has retained contents, but a different qualification cannot
+  // reach its inner namespace. Apply this at two and three levels.
+  for (const auto& suffix : {std::string("inner"),std::string("middle::inner")}) {
+    const auto body = suffix == "inner" ? "namespace inner {}" : "namespace middle { namespace inner {} }";
+    const auto text = std::string("namespace outer { ") + body + " int live; }\n" +
+        "namespace other { " + body + " }\n" +
+        "using namespace other::" + suffix + ";\n";
+    const auto out = render(source(text),{}).provenance.text;
+    CHECK(out.find("namespace outer") != out.npos);
+    CHECK(out.find(std::string("namespace outer { ") + body) == out.npos);
+  }
+}
+TEST(render_namespace_nested_lookup_and_exposure) {
+  for (const auto& use : {"using namespace outer3;", "namespace alias = outer3;"}) {
+    const auto text = std::string("namespace other { namespace inner1 { int live; } }\n") +
+        "namespace outer3 { namespace inner1 { int dead; } }\n" + use +
+        "\nint x = other::inner1::live;\n";
+    const auto dead = text.find("int dead;");
+    const auto out = render(source(text),{{dead,dead+9}}).provenance.text;
+    CHECK(out.find("namespace outer3") != out.npos);
+    CHECK(out.find("namespace outer3 { namespace inner1") == out.npos);
+    CHECK(out.find("namespace other { namespace inner1") != out.npos);
+  }
+  for (const auto& use : {
+      "using namespace outer::middle::inner;",
+      "namespace alias = outer::middle::inner;",
+      "using namespace outer; using namespace middle::inner;",
+      "namespace alias = outer; using namespace alias::middle::inner;"}) {
+    const auto text = std::string("namespace outer { namespace middle { namespace inner {} } }\n") + use + '\n';
+    const auto out = render(source(text),{}).provenance.text;
+    CHECK(out.find("namespace outer") != out.npos);
+    CHECK(out.find("namespace middle") != out.npos);
+    CHECK(out.find("namespace inner") != out.npos);
+  }
+  const auto text = "namespace outer { namespace inner {} namespace middle { namespace deep {} } "
+      "using namespace inner; using namespace middle::deep; }\n";
+  const auto out = render(source(text),{}).provenance.text;
+  CHECK(out.find("namespace inner") != out.npos);
+  CHECK(out.find("namespace deep") != out.npos);
+}
+TEST(render_namespace_reopened_blocks_provide_required_names) {
+  const auto count = [](const std::string& text,const std::string& needle) {
+    std::size_t result = 0;
+    for (auto at = text.find(needle); at != text.npos; at = text.find(needle,at+needle.size())) ++result;
+    return result;
+  };
+  for (const auto& text : {
+      "namespace n {}\nnamespace n {}\nusing namespace n;\n",
+      "namespace n { int live; }\nnamespace n {}\nusing namespace n;\n",
+      "namespace n {}\nnamespace n { int live; }\nusing namespace n;\n"}) {
+    CHECK_EQ(count(render(source(text),{}).provenance.text,"namespace n {"),1u);
+  }
+  CHECK_EQ(render(source("namespace n {}\nnamespace n {}\n"),{}).provenance.text,"");
+  const auto text = "namespace n { namespace inner {} }\nnamespace n { int live; }\nusing namespace n::inner;\n";
+  const auto out = render(source(text),{}).provenance.text;
+  CHECK_EQ(count(out,"namespace n {"),2u);
+  CHECK(out.find("namespace inner") != out.npos);
+  const auto beforeUse = "namespace n {}\nusing namespace n;\nnamespace n { int live; }\n";
+  CHECK_EQ(count(render(source(beforeUse),{}).provenance.text,"namespace n {"),2u);
+  const auto nested = "namespace n { namespace inner {} }\nnamespace n { namespace inner {} }\n"
+      "using namespace n::inner;\n";
+  CHECK_EQ(count(render(source(nested),{}).provenance.text,"namespace n {"),1u);
+  const auto different = "namespace n { namespace unused {} }\nnamespace n { namespace inner {} }\n"
+      "using namespace n::inner;\n";
+  CHECK_EQ(count(render(source(different),{}).provenance.text,"namespace n {"),1u);
+}
+TEST(render_anonymous_inline_and_linkage_shells) {
+  for (const auto& text : {
+      "namespace { int dead; }\n",
+      "inline namespace version { int dead; }\n",
+      "extern \"C\" { int dead; }\n",
+      "extern \"C++\" { namespace outer { int dead; } }\n",
+      "namespace outer { extern \"C\" { namespace inner { int dead; } } }\n"}) {
+    auto m = source(text);
+    const auto dead = m.text.find("int dead;");
+    CHECK_EQ(render(m,{{dead,dead+9}}).provenance.text,"");
+  }
+  for (const auto& text : {
+      "namespace { namespace inner {} }\nusing namespace inner;\n",
+      "inline namespace version { namespace inner {} }\nusing namespace inner;\n",
+      "extern \"C\" { namespace inner {} }\nusing namespace inner;\n",
+      "inline namespace version {}\nnamespace alias = version;\n",
+      "extern \"C\" { int live; }\n",
+      "namespace outer { extern \"C\" {\n#define X 1\n} }\n"}) {
+    const auto out = render(source(text),{}).provenance.text;
+    CHECK(out.find("#line 1 \"a.cpp\"\n") == 0);
+    CHECK(out.find(text) != out.npos);
+  }
+}
+TEST(render_inline_namespace_reopening_preserves_implicit_lookup) {
+  for (const auto& text : {
+      "inline namespace version {}\nnamespace version { int live; }\nint x = live;\n",
+      "inline namespace version {}\nnamespace version { namespace inner {} }\nusing namespace inner;\n"}) {
+    const auto out = render(source(text),{}).provenance.text;
+    CHECK(out.find("inline namespace version") != out.npos);
+    CHECK(out.find(text) != out.npos);
+  }
 }
