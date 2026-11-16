@@ -18,10 +18,13 @@ struct EvaluationRequirements {
 };
 // The source contains only closure definitions and #if, with unique result tokens.
 // Implementations must suppress ALL implicit macro definitions and header search.
+// Process-backed implementations honor deadline; an in-process engine must be
+// contained by its caller (the CLI uses a bounded Clang worker).
 struct ConditionInput {
   std::string source;
   EvaluationRequirements requirements;
   std::string trueToken = "DISTILL_CONDITION_TRUE", falseToken = "DISTILL_CONDITION_FALSE";
+  std::optional<std::chrono::steady_clock::time_point> deadline = {};
 };
 // Undefine intrinsic/standard bindings that -undef may leave active.
 std::string isolatedConditionSource(const ConditionInput&);
@@ -45,6 +48,7 @@ struct ResolutionDecision {
   EvaluationRequirements requirements;
 };
 struct ResolveOptions {
+  std::optional<std::chrono::steady_clock::time_point> deadline = {};
   const Profile* profile = nullptr;
   EvaluationRequirements requirements; // Missing fields inherit from profile.
   NameLists names;

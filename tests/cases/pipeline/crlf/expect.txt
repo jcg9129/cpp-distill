@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=flat
+verification=local
+exit=0
+configuration=local
+report=main.cpp:2 #if: resolved true
+report.endif=main.cpp:4 #endif: resolved true
+report.assumptions=assumptions: none

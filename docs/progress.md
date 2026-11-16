@@ -21,11 +21,12 @@ Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
 |---|---|
 | D0 design | done: v7 approved 2026-11-15 after five Codex rounds and the profile amendment |
 | D1 distribution spike | done: SDK `llvm-23.1.5-1` published for all five platforms; spike passes everywhere (results in [`d1-spike.md`](d1-spike.md#results)) |
-| D2 preprocessing half | D2a–D2d implemented; validation configurations and the `--no-prune` CLI remain |
+| D2 preprocessing half | implemented through D2e: configurations, preprocess checks and usable `--no-prune` CLI; SDK link/run verification belongs to CI |
 | D2a command/process/probe | done (#5): C++20 core with unit tests, green on Linux (posix_spawn and fork paths), macOS and Windows CI |
 | D2b scanner/names/inliner | done: text scanner, embedded C++26/C23 name tables, include search and guarded recursion, line-preserving raw output, unit and GCC equivalence/runtime case runner |
 | D2c judge profiles and A1 lists | done: strict TOML subset/schema and injected lookup, researched Codeforces/AtCoder profiles, CI-produced snapshots and all four merged A1 inventories shipped; embedded-profile/list and generator tests |
 | D2d resolver | implemented: four-state walk/joins and isolated condition inputs, optional Clang evaluator, test-only GCC oracle, adversarial cases and Clang/differential CI |
+| D2e validation/pipeline/CLI | implemented: exact configuration probes, directional satisfaction, target/local verification, preprocess checks, no-prune orchestration/report, bounded Clang workers and shared core/CLI cases |
 | D3 pruning | after D2; needs a short Codex round on the v6 pruning rules first |
 | D4–D5 | see design §7 |
 
@@ -116,3 +117,32 @@ Design: [`design.md`](design.md) (approved v7). Reviews of each design round:
 - Local verification and proposed design wording are recorded in temporary root
   `D2D-SUMMARY.md`; approved `docs/design.md` is unchanged.
 - Next: D2e validation configuration orchestration and the usable `--no-prune` CLI.
+
+
+## D2e validation and no-prune CLI (2026-11-16)
+
+- `validate/` probes exact effective flags, ordinary/special macros and startup
+  provenance, constructs resolver initial states using the snapshot fact rules,
+  reruns directional satisfaction, and distinguishes target from local checking.
+  Local native options always prevent target verification. Without a profile,
+  resolution retains D2d's conservative facts and uses only the effective dialect.
+- The production preprocess parser compares tokens, logical locations, user file
+  identities and pragma boundaries. System headers compare by spelled path.
+  Raw checks compare with the original; flat checks compare with raw under the
+  selected satisfying configuration. Failed flat checks select checked raw;
+  failed raw checks retain work files, report the path and return exit 1.
+- `pipeline/` orchestrates the no-prune stages without LLVM, with injected
+  evaluator/runner, shared phase deadlines, bounded outputs and exact checked
+  bytes. `report/` supplies the non-pruning header and every conditional record.
+- SDK-only `distill` supports output, judge name/file, report, strict, verbose,
+  mandatory no-prune, help and exit codes 0/1/3. Clang evaluations run in bounded
+  process-group/Job Object workers. Runtime remains not requested (D4).
+- Shared pipeline cases cover no profile, captured reproduced/approximate facts,
+  absent/present check compilers, native flags, disabled resolution, A3 conflict,
+  local macro replacement, baseline/raw failures, token corruption, unknown/dead
+  directives and strict results. The unchanged resolver CI job runs them through
+  the actual CLI as well as the core Clang evaluator, plus CLI surface checks.
+- D2 is implemented; LLVM linking, the real CLI run, and cross-platform behavior
+  still require CI. Local normal/fork suites and published-SDK syntax checks are
+  recorded in temporary `D2E-SUMMARY.md`. No design edits were made; proposed
+  wording for implementation ambiguities is collected there for review.

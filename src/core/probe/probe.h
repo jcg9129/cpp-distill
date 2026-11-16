@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "core/command/command.h"
+#include "core/process/process.h"
 #include <map>
 #include <string_view>
 
@@ -31,6 +32,9 @@ struct ProbeOptions {
   std::vector<std::string> defines;
   // Defaults to std::filesystem::temp_directory_path().
   std::optional<std::filesystem::path> temporaryRoot;
+  ProcessRunner runner = runProcess;
+  std::chrono::milliseconds timeout{30000};
+  std::size_t maxOutputBytes = 4 * 1024 * 1024;
 };
 struct ProbeResult {
   SearchLists searchLists;
@@ -38,6 +42,8 @@ struct ProbeResult {
   MacroTable macros;
   CompilerIdentity identity;
   Dialect dialect;
+  std::map<std::string, bool, std::less<>> special;
+  MacroTable startupMacros;
 };
 Result<SearchLists> parseSearchLists(std::string_view stderrOfDashV);
 bool isGccInternalIncludeDir(const std::filesystem::path& path);

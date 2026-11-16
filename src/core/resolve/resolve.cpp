@@ -60,7 +60,11 @@ struct Engine {
     }
     return {MacroState::unknown, {}, {FactOrigin::noProfile}};
   }
+  void checkDeadline() const {
+    if (options.deadline && std::chrono::steady_clock::now() >= *options.deadline) throw Error{"resolver deadline exceeded"};
+  }
   void prepare() {
+    checkDeadline();
     scan = take(scanDirectives(raw.text));
     if (options.profile) {
       auto inherited = profileRequirements(*options.profile);
@@ -140,6 +144,7 @@ struct Engine {
   ResolutionDecision& record(std::size_t i) { return result.decisions.at(records.at(i)); }
   void decide(std::size_t i, Decision d, std::string reason = {}) { record(i).decision = d; record(i).reason = std::move(reason); }
   void condition(std::size_t i, const States& state) {
+    checkDeadline();
     auto& r = record(i); const auto& d = *scan.lines[i].directive;
     std::vector<Token> expression = d.tokens;
     if (d.name != "if" && d.name != "elif") {
@@ -152,6 +157,7 @@ struct Engine {
     std::string reason;
     std::function<void(const std::vector<Token>&, const std::set<std::string, std::less<>>&)> visit;
     visit = [&](const auto& ts, const auto& bound) {
+      checkDeadline();
       if (closureDepth >= options.maxNesting) { reason = "condition limit"; return; }
       ++closureDepth;
       for (std::size_t j = 0; j < ts.size() && reason.empty(); ++j) {
@@ -217,7 +223,7 @@ struct Engine {
     };
     const auto yes = unique("DISTILL_CONDITION_TRUE"), no = unique("DISTILL_CONDITION_FALSE");
     source += "#if " + conditionText + '\n' + yes + "\n#else\n" + no + "\n#endif\n";
-    auto evaluated = evaluator.evaluate({source, r.requirements, yes, no});
+    auto evaluated = evaluator.evaluate({source, r.requirements, yes, no, options.deadline});
     if (!evaluated.ok()) decide(i, Decision::unknown, "evaluator error: " + evaluated.error().message);
     else decide(i, evaluated.value() ? Decision::trueValue : Decision::falseValue);
   }
@@ -271,6 +277,7 @@ struct Engine {
   void remove(std::size_t a, std::size_t b) { for (auto i = a; i < b; ++i) keep[i] = false; resync[b] = true; }
   void walk(std::size_t a, std::size_t b, States& state) {
     for (auto i = a; i < b; ++i) {
+      checkDeadline();
       if (!groups.contains(i)) { transition(i, state); continue; }
       const auto& g = groups.at(i);
       bool unknown = false, selected = false;
@@ -331,6 +338,7 @@ struct Engine {
   }
   void render() {
     for (std::size_t i = 0; i < scan.lines.size(); ++i) if (keep[i]) {
+      checkDeadline();
       const auto& l = scan.lines[i];
       // Raw markers already reset the following line; an extra one is safe.
       if (resync[i]) marker(locations[i]);

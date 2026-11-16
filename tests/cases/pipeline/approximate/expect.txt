@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+artifact=flat
+verification=local
+exit=0
+configuration=local
+profile=codeforces
+report=ONLINE_JUDGE: profile command
+requires=linux
+reason=check compiler skipped:

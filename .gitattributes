@@ -7,3 +7,7 @@ tests/cases/inline/** -text
 
 # Resolver fixtures preserve directive and source line coordinates.
 tests/cases/resolve/** -text
+
+# Pipeline commands, expectations and source bytes are platform-independent.
+tests/cases/pipeline/** -text
+tests/cases/pipeline/crlf/main.cpp whitespace=cr-at-eol

@@ -2,6 +2,9 @@
 #include "core/probe/probe.h"
 #include "core/path.h"
 #include "core/process/process.h"
+#include "core/profile/profile.h"
+#include "core/validate/preprocess.h"
+#include "core/lex/scan.h"
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -141,32 +144,39 @@ Result<ProbeResult> probe(const std::filesystem::path& compiler, const CompileCo
   if (!created.ok()) return created.error();
   const auto input = temp.path / "empty.cpp";
   { std::ofstream file(input, std::ios::binary); if (!file) return Error{"cannot create probe source"}; }
-  std::vector<std::string> modelled;
+  std::vector<std::string> configured;
   std::vector<std::string> target;
   for (const auto& arg : command.args) {
-    if (arg.classification != Class::modelled) continue;
+    if (arg.classification == Class::input || arg.classification == Class::controlled) continue;
     if (arg.option == "-m32" || arg.option == "-m64") target.insert(target.end(), arg.spelling.begin(), arg.spelling.end());
     if (!options.keepLocalMacros && (arg.option == "-D" || arg.option == "-U")) continue;
-    // User include dirs are relevant to inlining, not the compiler's system search.
-    if (arg.option == "-I" || arg.option == "-iquote") continue;
-    modelled.insert(modelled.end(), arg.spelling.begin(), arg.spelling.end());
+    configured.insert(configured.end(), arg.spelling.begin(), arg.spelling.end());
   }
-  for (const auto& define : options.defines) modelled.push_back("-D" + define);
+  for (const auto& define : options.defines) configured.push_back("-D" + define);
   auto execute = [&](std::vector<std::string> argv, const std::vector<std::string>& flags) -> Result<ProcessResult> {
     argv.insert(argv.begin(), pathToUtf8(compiler));
     argv.insert(argv.end(), flags.begin(), flags.end());
     ProcessSpec spec;
     spec.argv = std::move(argv);
     spec.cwd = command.cwd;
-    spec.timeout = std::chrono::seconds(30);
-    auto run = runProcess(spec);
+    spec.timeout = options.timeout;
+    spec.maxOutputBytes = options.maxOutputBytes;
+    auto run = options.runner(spec);
     if (!run.ok()) return run.error();
     if (run.value().timedOut || run.value().exitCode != 0 || run.value().signal)
       return Error{"compiler probe failed: " + run.value().stderrText};
     if (run.value().stdoutTruncated || run.value().stderrTruncated) return Error{"compiler probe output exceeded limit"};
     return run;
   };
-  auto verbose = execute({"-xc++", "-E", "-v", pathToUtf8(input), "-o", pathToUtf8(temp.path / "empty.i")}, modelled);
+  std::vector<std::string> searchFlags;
+  // SearchLists describes only system paths; buildIncludeSearch inserts user paths.
+  for (const auto& arg : command.args) {
+    if (arg.classification == Class::input || arg.classification == Class::controlled || arg.option == "-I" || arg.option == "-iquote") continue;
+    if (!options.keepLocalMacros && (arg.option == "-D" || arg.option == "-U")) continue;
+    searchFlags.insert(searchFlags.end(), arg.spelling.begin(), arg.spelling.end());
+  }
+  for (const auto& define : options.defines) searchFlags.push_back("-D" + define);
+  auto verbose = execute({"-xc++", "-E", "-v", pathToUtf8(input), "-o", pathToUtf8(temp.path / "empty.i")}, searchFlags);
   if (!verbose.ok()) return verbose.error();
   auto lists = parseSearchLists(verbose.value().stderrText);
   if (!lists.ok()) return lists.error();
@@ -174,13 +184,60 @@ Result<ProbeResult> probe(const std::filesystem::path& compiler, const CompileCo
   if (!machine.ok()) return machine.error();
   const std::string triple(trim(machine.value().stdoutText));
   if (triple.empty() || triple.find_first_of(" \t\r\n") != std::string::npos) return Error{"invalid compiler target triple"};
-  auto predefined = execute({"-xc++", "-dM", "-E", pathToUtf8(input)}, modelled);
+  auto predefined = execute({"-xc++", "-dM", "-E", pathToUtf8(input)}, configured);
   if (!predefined.ok()) return predefined.error();
   auto table = parseMacros(predefined.value().stdoutText);
   if (!table.ok()) return table.error();
   auto identity = identifyCompiler(table.value());
   auto dialect = effectiveDialect(command.dialect(), table.value());
-  return ProbeResult{std::move(lists.value()), triple, std::move(table.value()), identity, std::move(dialect)};
+  // Probe registry operators separately: -dM does not enumerate them. For an
+  // unsupported release, probe the union but consumers still withhold unaudited facts.
+  auto builtins = specialBuiltins(identity);
+  for (const auto& [file, text] : embeddedProfileFiles()) if (file.starts_with("builtins/")) {
+    std::istringstream lines(text); std::string line;
+    while (std::getline(lines, line)) if (!line.empty() && !line.starts_with('#')) builtins.insert(line);
+  }
+  for (const char* name : {"__has_feature", "__has_extension", "__is_identifier", "__building_module", "__has_warning"}) builtins.insert(name);
+  std::vector<std::string> ordered(builtins.begin(), builtins.end());
+  std::string prefix = "DISTILL_PRESENT_";
+  while ([&] {
+    for (std::size_t i = 0; i < ordered.size(); ++i) if (table.value().contains(prefix + std::to_string(i))) return true;
+    return false;
+  }()) prefix += '_';
+  {
+    std::ofstream file(input, std::ios::binary);
+    for (std::size_t i = 0; i < ordered.size(); ++i)
+      file << "#ifdef " << ordered[i] << "\n" << prefix << i << "\n#endif\n";
+    if (!file) return Error{"cannot write special builtin probe"};
+  }
+  auto special = execute({"-xc++", "-E", "-P", pathToUtf8(input)}, configured);
+  if (!special.ok()) return special.error();
+  auto scanned = scanDirectives(special.value().stdoutText);
+  if (!scanned.ok()) return scanned.error();
+  std::set<std::string> present;
+  for (const auto& t : scanned.value().identifiers) present.insert(t.text);
+  std::map<std::string, bool, std::less<>> probes;
+  for (std::size_t i = 0; i < ordered.size(); ++i) probes[ordered[i]] = present.contains(prefix + std::to_string(i));
+  { std::ofstream file(input, std::ios::binary); }
+  auto startup = execute({"-xc++", "-dD", "-E", pathToUtf8(input)}, configured);
+  if (!startup.ok()) return startup.error();
+  MacroTable startupMacros;
+  SourceLocation at;
+  std::istringstream lines(startup.value().stdoutText); std::string line;
+  while (std::getline(lines, line)) {
+    auto marker = parseLineMarker(line, at);
+    if (!marker.ok()) return marker.error();
+    if (marker.value()) continue;
+    if (at.file.empty() || at.file.starts_with('<') || at.file == pathToUtf8(input)) continue;
+    if (!at.file.ends_with("/stdc-predef.h") && at.file != "stdc-predef.h") return Error{"unexpected startup header: " + at.file};
+    if (line.starts_with("#define ")) {
+      auto parsed = parseMacros(line + '\n');
+      if (!parsed.ok()) return parsed.error();
+      for (const auto& [name, macro] : parsed.value()) startupMacros[name] = macro;
+    }
+  }
+  return ProbeResult{std::move(lists.value()), triple, std::move(table.value()), identity,
+                     std::move(dialect), std::move(probes), std::move(startupMacros)};
 }
 } // namespace
 bool isGccInternalIncludeDir(const std::filesystem::path& path) {

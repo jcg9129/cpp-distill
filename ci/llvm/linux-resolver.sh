@@ -9,4 +9,6 @@ cmake -S . -B build-resolver -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
   -DDISTILL_LLVM_DIR="$PWD/spike-work/sdk/lib/cmake/llvm"
 cmake --build build-resolver -j2
+# Includes the thin CLI, shared pipeline cases through its real binary, and
+# CLI help/option errors. All subprocess/test deadlines remain bounded.
 ctest --test-dir build-resolver --output-on-failure --timeout 120 -j1

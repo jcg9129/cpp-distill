@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+profile=fixture
+check=present
+artifact=flat
+verification=fixture
+exit=0
+configuration=check
+report=configuration check:

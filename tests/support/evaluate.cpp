@@ -7,6 +7,7 @@
 #include "clang/evaluate.h"
 #endif
 #include <atomic>
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
@@ -54,6 +55,10 @@ Result<bool> GccEvaluator::evaluate(const ConditionInput& in) {
       spec.argv.push_back(m.charSigned ? "-fsigned-char" : "-funsigned-char");
       // Local GCC supports these wchar layouts without target libraries.
       spec.argv.push_back(m.wcharBits == 16 ? "-fshort-wchar" : "-fno-short-wchar");
+    }
+    if (in.deadline) {
+      spec.timeout = std::min(spec.timeout, std::chrono::duration_cast<std::chrono::milliseconds>(*in.deadline - std::chrono::steady_clock::now()));
+      if (spec.timeout.count() <= 0) return Error{"condition deadline exceeded"};
     }
     spec.argv.push_back(pathToUtf8(file.path));
     auto run = runProcess(spec);
