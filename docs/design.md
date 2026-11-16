@@ -359,6 +359,12 @@ Textual substitution, not preprocessing:
   file, outside any conditional: `DISTILL_ONCE_<hash of file identity>`
   (device + inode, or volume + file index on Windows), checked against all
   identifiers in the input. Any other `#pragma once` is rejected.
+  Generated guard directives have no original D2 location. Their presumed
+  coordinates use the guarded original file, followed by a marker restoring
+  its first source line; no marker may name an internal raw/flat/pruned file.
+  Raw retains the complete guard. When resolution proves its condition true,
+  flat removes the `#ifndef`/`#endif` and keeps the harmless `#define` so later
+  inclusions still resolve as dead. Pruned retains that define too.
 - **Recursive inclusion** (a header reached again while on the include stack)
   is dropped only if the header's whole content is one guard `G`, `#define G`
   textually precedes the recursive include, no `#undef G` appears in user

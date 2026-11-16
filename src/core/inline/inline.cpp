@@ -266,6 +266,9 @@ struct Engine {
     stack.push_back({id, 0, {}});
     if (n.once) {
       result.assumptions.insert("A3");
+      // Guards have no original provenance, but their presumed file must still
+      // be an original source, even for a #pragma once in the root file.
+      marker(n, 1);
       newline(); append("#ifndef " + n.guard + "\n#define " + n.guard + "\n");
       stack.back().guardEpoch = unsafeIncludes;
     }

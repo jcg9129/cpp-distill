@@ -106,11 +106,12 @@ def sdk_evidence(repository, sdk_platform, acquisition):
                 cmake_settings=measurements["cmake_settings"])
 
 
-def verify_licenses():
-    manifest = json.loads((ROOT / "ci/release/licenses.json").read_text(encoding="utf-8"))
+def verify_licenses(root=ROOT):
+    manifest = json.loads((root / "ci/release/licenses.json").read_text(encoding="utf-8"))
     for name, digest in manifest.items():
-        if sha256(ROOT / name) != digest:
-            raise ValueError(f"License/notice checksum mismatch: {name}")
+        if sha256(root / name) != digest:
+            raise ValueError(f"License/notice checksum mismatch: {name}; expected committed bytes "
+                             "(check checkout line endings and .gitattributes)")
 
 
 def check_link_commands(commands):
@@ -158,7 +159,7 @@ def version_line(value):
 def package(sdk_platform, root=ROOT):
     if sdk_platform not in PLATFORMS:
         raise ValueError("Unknown platform")
-    verify_licenses()
+    verify_licenses(root)
     value = json.loads((root / "results/release.json").read_text(encoding="utf-8"))
     if value["platform"] != sdk_platform:
         raise ValueError("Package platform differs from build provenance")
@@ -173,6 +174,7 @@ def package(sdk_platform, root=ROOT):
     with_stage = root / "results" / stem
     with_stage.mkdir()
     try:
+        # Binary copies preserve committed LF document bytes on Windows too.
         for path in [binary, *(root / name for name in DOCUMENTS), root / "results/BUILDINFO.txt"]:
             shutil.copy2(path, with_stage / path.name)
         if sdk_platform.startswith("windows-"):

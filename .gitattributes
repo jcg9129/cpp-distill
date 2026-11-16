@@ -1,4 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Release documents are copied byte-for-byte into both tarballs and Windows zips.
+# Keep their committed LF bytes, including the checksum-verified notices.
+/LICENSE -text
+/README.md -text
+/THIRD_PARTY_NOTICES.md -text
+/LLVM-LICENSE.txt -text
+
+# Build-time policy digests must also be identical on every platform.
+/data/names/adl.txt -text
+/data/names/extension-coverage.txt -text
+
 # Probe fixtures must retain their exact captured bytes on every platform.
 tests/unit/fixtures/** -text
 

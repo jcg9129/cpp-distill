@@ -62,6 +62,19 @@ TEST(render_generated_marker_inside_removed_function) {
   const auto end = m.text.find("int main");
   CHECK_EQ(render(m,{{0,end}}).provenance.text,"#line 42 \"a.cpp\"\nint main(){return __LINE__;}\n");
 }
+TEST(render_generated_guards_require_original_presumed_file) {
+  auto m = source("#line 1 \"a.h\"\n#ifndef G\n#define G\n#line 1 \"a.h\"\nint live;\n#endif\n");
+  for (auto& at : m.lineMap) at.reset();
+  m.lineMap[4] = SourceLocation{"a.h",1};
+  PruningResult r;
+  CHECK_EQ(take(renderSource(m,&r)).provenance.text,
+           "#line 1 \"a.h\"\n#ifndef G\n#line 2 \"a.h\"\n#define G\n#line 1 \"a.h\"\nint live;\n#endif\n");
+  // Missing initial provenance must fail instead of introducing flat.cpp.
+  m.text.erase(0,m.text.find('\n')+1); m.lineMap.erase(m.lineMap.begin());
+  auto invalid = renderSource(m,&r);
+  CHECK(!invalid.ok());
+  CHECK(invalid.error().message.find("missing source location") != std::string::npos);
+}
 TEST(render_multiple_files_crlf_and_no_final_newline) {
   auto m = source("int dead;\r\nint b;\r\nint c;",7,"one\\a\".h");
   m.lineMap[2] = SourceLocation{"other.cpp",42};

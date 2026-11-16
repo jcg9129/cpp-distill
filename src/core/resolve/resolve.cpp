@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/resolve/resolve.h"
 #include "core/lex/scan.h"
+#include "core/path.h"
+#include "core/validate/preprocess.h"
 #include <algorithm>
 #include <functional>
 #include <sstream>
@@ -96,10 +98,19 @@ struct Engine {
     std::vector<std::size_t> stack;
     keep.assign(scan.lines.size(), true); resync.assign(scan.lines.size() + 1, false);
     // Recover static source coordinates even for generated once guards (null map).
-    SourceLocation at{"raw.cpp", 1};
+    SourceLocation at{pathToUtf8(cmd.source), 1};
+    std::set<std::size_t> markers;
+    for (const auto& l : scan.lines)
+      if (l.directive && l.directive->name == "line" && l.firstLine <= raw.lineMap.size() && !raw.lineMap[l.firstLine-1])
+        markers.insert(l.firstLine);
     std::vector<SourceLocation> physical;
     std::istringstream lines(raw.text); std::string line;
-    while (std::getline(lines, line)) { physical.push_back(at); ++at.line; }
+    while (std::getline(lines, line)) {
+      physical.push_back(at);
+      if (markers.contains(physical.size())) {
+        if (!take(parseLineMarker(line, at))) throw Error{"invalid generated line marker"};
+      } else ++at.line;
+    }
     for (std::size_t i = 0; i < scan.lines.size(); ++i) {
       const auto& l = scan.lines[i];
       locations.push_back(physical.at(l.firstLine - 1));
