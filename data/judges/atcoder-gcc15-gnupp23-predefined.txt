@@ -50,7 +50,6 @@
 # command-operation #define USE_PDLP 1
 # command-operation #define USE_SCIP 1
 #define _GNU_SOURCE 1
-# state _ILP32 unknown native-model
 #define _LP64 1
 #define _OPENMP 201511
 # state _Pragma defined-unknown special-builtin
@@ -371,7 +370,6 @@
 #define __GXX_WEAK__ 1
 # state __HAVE_SPECULATION_SAFE_VALUE unknown native-model
 # state __HRESET__ unknown native-model
-# state __ILP32__ unknown native-model
 # state __INCLUDE_LEVEL__ defined-unknown special-builtin
 #define __INT16_C(c) c
 #define __INT16_MAX__ 0x7fff
@@ -476,8 +474,8 @@
 # state __RTM__ unknown native-model
 #define __SCHAR_MAX__ 0x7f
 #define __SCHAR_WIDTH__ 8
-# state __SEG_FS unknown native-model
-# state __SEG_GS unknown native-model
+#define __SEG_FS 1
+#define __SEG_GS 1
 # state __SERIALIZE__ unknown native-model
 # state __SGX__ unknown native-model
 # state __SHA512__ unknown native-model
@@ -490,7 +488,7 @@
 #define __SIG_ATOMIC_TYPE__ int
 #define __SIG_ATOMIC_WIDTH__ 32
 #define __SIZEOF_DOUBLE__ 8
-# state __SIZEOF_FLOAT128__ unknown native-model
+#define __SIZEOF_FLOAT128__ 16
 # state __SIZEOF_FLOAT80__ unknown native-model
 #define __SIZEOF_FLOAT__ 4
 #define __SIZEOF_INT128__ 16
@@ -598,8 +596,8 @@
 # state __XSAVE__ unknown native-model
 # state __alderlake unknown native-model
 # state __alderlake__ unknown native-model
-# state __amd64 unknown native-model
-# state __amd64__ unknown native-model
+#define __amd64 1
+#define __amd64__ 1
 # state __amdfam10 unknown native-model
 # state __amdfam10__ unknown native-model
 # state __arrowlake unknown native-model
@@ -631,11 +629,7 @@
 # state __cascadelake__ unknown native-model
 # state __clearwaterforest unknown native-model
 # state __clearwaterforest__ unknown native-model
-# state __code_model_32__ unknown native-model
-# state __code_model_kernel__ unknown native-model
-# state __code_model_large__ unknown native-model
-# state __code_model_medium__ unknown native-model
-# state __code_model_small__ unknown native-model
+#define __code_model_small__ 1
 # state __cooperlake unknown native-model
 # state __cooperlake__ unknown native-model
 # state __core2 unknown native-model
@@ -876,8 +870,8 @@
 # state __tune_znver5__ unknown native-model
 #define __unix 1
 #define __unix__ 1
-# state __x86_64 unknown native-model
-# state __x86_64__ unknown native-model
+#define __x86_64 1
+#define __x86_64__ 1
 # state __yongfeng unknown native-model
 # state __yongfeng__ unknown native-model
 # state __znver1 unknown native-model

@@ -642,7 +642,7 @@ TEST(profile_digest_sha256_vectors_and_exact_input_bytes) {
   CHECK_EQ(lookupProfile("codeforces").value().provenance.contentDigest,
            "95171947eee3866811e9991b7bb409663dd3bbf2a26583ab4901f45723dc1668");
   CHECK_EQ(lookupProfile("atcoder").value().provenance.contentDigest,
-           "87f950dd750954b4c12f0636eeb351083803d5e512cb624b2dcef2ae5536e205");
+           "26a21770a045edf07df92a474347be1b16e7fcd0fbe0d4ebf206ac157585e14a");
   const auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
   const auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   auto p = synthetic(text); CHECK(p.ok()); if (!p.ok()) return;
