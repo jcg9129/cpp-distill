@@ -90,7 +90,7 @@ def cpu_values(compiler, option):
     return values
 
 
-def join_native(dumps, model, tune_only=False):
+def join_native(dumps, model, tune_only=False, fixed=frozenset()):
     if not dumps:
         raise ValueError('no CPU configurations accepted in this ABI')
     varying = {n for n in set().union(*dumps) if len({d.get(n) for d in dumps}) > 1}
@@ -101,7 +101,14 @@ def join_native(dumps, model, tune_only=False):
     result = {}
     for name in allowed:
         values = {d.get(name) for d in dumps}
-        if values == {None}:
+        if name not in fixed:
+            # Named -march/-mtune values are not the configurations a native
+            # option allows: the driver takes ISA bits (e.g. -mshstk, -mrtm)
+            # and cache parameters straight from CPUID. Every model name the
+            # command does not fix is therefore unknown; the sweep above only
+            # checks that nothing outside the model varies (design §4.3).
+            result[name] = ('unknown', None)
+        elif values == {None}:
             result[name] = ('undefined', None)
         elif len(values) == 1:
             result[name] = ('known', next(iter(values)))
@@ -131,7 +138,16 @@ def native_runs(compiler, argv, empty, model):
             raise
         dumps.append(dump)
         accepted.append(command)
-    return join_native(dumps, model, '-march' not in options), accepted
+    # -D/-U operations apply after the target's builtins, on every CPU.
+    fixed, pending = set(), False
+    for f in argv:
+        if pending:
+            fixed.add(re.split(r'[(=]', f, maxsplit=1)[0]); pending = False
+        elif f in ('-D', '-U'):
+            pending = True
+        elif f.startswith(('-D', '-U')):
+            fixed.add(re.split(r'[(=]', f[2:], maxsplit=1)[0])
+    return join_native(dumps, model, '-march' not in options, frozenset(fixed)), accepted
 
 
 def capture(profile_file, compiler, reproduced_build=None):
