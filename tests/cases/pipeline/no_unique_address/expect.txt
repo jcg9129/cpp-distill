@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+api=yes
+milestone=D3d
+report=policy: D3d-2
+contains=struct Record {
+contains.1=[[no_unique_address]] Empty empty;
+contains.2=[[no_unique_address]] Value value;
+contains.3=int compact_path()
+contains.4=int expanded_path()
+contains.5=sizeof(T) == sizeof(Value)
+contains.6=std::is_standard_layout_v<Record>
+absent=int unrelated
+absent.1=struct UnusedRecord

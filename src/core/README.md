@@ -777,7 +777,22 @@ Inherited/implicit attributes do not expand physical ownership into an earlier
 declaration; macro prefixes remain pinned. All other declaration and statement
 attributes still disable unless covered by the D3d roots below.
 
-Policy D3d-1 additionally roots the family carrying `ConstructorAttr`,
+Policy D3d-2 also accepts `NoUniqueAddressAttr` only for the standard,
+argument-free `[[no_unique_address]]` spelling on a non-static, non-bit-field
+`FieldDecl` owned by its enclosing record. Empty and nonempty fields, templates,
+nested records and macro-produced attributes follow the same rule. The expanded
+tokens must match the AST attribute and field ownership; discarded/ignored
+attributes, arguments (including empty `()`), other contexts, vendor/scoped
+spellings such as `msvc::no_unique_address`, and the unaudited
+`__no_unique_address__` spelling disable with `unsupported attribute`. The pinned
+frontend headers/AttrDocs are not present in this source tree, so only the plain
+spelling has been admitted. This adds no roots: unused whole records can still
+be deleted. Retained records keep every member in source order, with normal
+type, initializer, constructor and destructor dependency traversal. Layout and
+trait choices may differ between compilers; preserving the entire record and
+dependency closure does not require those choices to agree.
+
+Since D3d-1, the policy additionally roots the family carrying `ConstructorAttr`,
 `DestructorAttr`, `UsedAttr`, `SectionAttr`, `WeakAttr`, `VisibilityAttr`,
 `AsmLabelAttr` or `AliasAttr`, including redeclarations/whole-record obligations.
 An alias also roots every matching user linker-symbol family, using Clang's

@@ -62,6 +62,10 @@ struct Extraction {
   std::vector<EditRange> macroInvocations, conditionRanges;
   std::vector<distill::Token> tokens;
   std::map<std::size_t,std::set<std::string>> systemMacros;
+  // Expanded spelling locations, including macros. Every accepted spelling
+  // must also be seen as a NoUniqueAddressAttr on a whole-record-owned field.
+  std::map<unsigned,clang::SourceLocation> noUniqueAddressSpellings;
+  std::set<unsigned> verifiedNoUniqueAddress;
   explicit Extraction(PruningModel m, CompilerInstance& c) : model(std::move(m)), compiler(c), sm(c.getSourceManager()) {
     auto scan = scanDirectives(model.text);
     if (!scan.ok()) { disable("directive scan failure in flat.cpp: " + scan.error().message); return; }
@@ -300,9 +304,69 @@ struct Extraction {
   }
 };
 
+bool supportedAttribute(const Attr* a, const Decl* declaration, Extraction& e) {
+  if (!isa<NoUniqueAddressAttr>(a)) return supportedAttribute(a);
+  const auto* field = dyn_cast_or_null<FieldDecl>(declaration);
+  if (!field || field->isBitField() || field->getLexicalDeclContext() != field->getParent()) return false;
+  const auto owner = e.owner(field->getParent());
+  const auto location = a->getLocation().getRawEncoding();
+  if (owner == noFamily || e.owner(field) != owner || !e.noUniqueAddressSpellings.contains(location)) return false;
+  e.verifiedNoUniqueAddress.insert(location);
+  return true;
+}
+
 class Macros final : public PPCallbacks {
   Extraction& e;
   std::map<std::string,MacroFact,std::less<>> sourceBindings;
+  enum class AttributeSyntax { none, standard, gnu, declspec };
+  AttributeSyntax attributeSyntax = AttributeSyntax::none;
+  std::vector<clang::Token> attributeTokens;
+  bool previousSquare = false, awaitingParen = false;
+  unsigned attributeDepth = 0;
+  void auditAttribute() {
+    unsigned parens = 0;
+    for (std::size_t i = 0; i < attributeTokens.size(); ++i) {
+      const auto& token = attributeTokens[i];
+      if (token.is(tok::l_paren)) { ++parens; continue; }
+      if (token.is(tok::r_paren)) { if (parens) --parens; continue; }
+      const unsigned nameDepth = attributeSyntax == AttributeSyntax::standard ? 0 :
+                                 attributeSyntax == AttributeSyntax::gnu ? 2 : 1;
+      if (parens != nameDepth || !token.is(tok::identifier)) continue;
+      const auto name = token.getIdentifierInfo()->getName();
+      if (name != "no_unique_address" && name != "__no_unique_address__") continue;
+      // Do not infer spelling or argument validity from the AST: Clang can
+      // diagnose and discard an attribute (including an unknown vendor form).
+      // No pinned Attr.td/AttrDocs are available here to audit the __ spelling.
+      const bool plain = attributeSyntax == AttributeSyntax::standard && name == "no_unique_address" &&
+          !attributeTokens.front().is(tok::kw_using) &&
+          (i == 0 || attributeTokens[i-1].is(tok::comma)) && i+1 < attributeTokens.size() &&
+          attributeTokens[i+1].isOneOf(tok::comma,tok::r_square);
+      if (plain) e.noUniqueAddressSpellings.emplace(token.getLocation().getRawEncoding(),token.getLocation());
+      else e.disable("unsupported attribute: " + name.str() + " at " + token.getLocation().printToString(e.sm));
+    }
+    attributeTokens.clear(); attributeSyntax = AttributeSyntax::none;
+  }
+  void attributeToken(const clang::Token& token) {
+    if (attributeSyntax != AttributeSyntax::none) {
+      attributeTokens.push_back(token);
+      const bool standard = attributeSyntax == AttributeSyntax::standard;
+      if (awaitingParen) {
+        awaitingParen = false;
+        if (!token.is(tok::l_paren)) { attributeTokens.clear(); attributeSyntax = AttributeSyntax::none; return; }
+      }
+      if (token.is(standard ? tok::l_square : tok::l_paren)) ++attributeDepth;
+      if (token.is(standard ? tok::r_square : tok::r_paren) && attributeDepth) --attributeDepth;
+      if (!attributeDepth) auditAttribute();
+      return;
+    }
+    if (previousSquare && token.is(tok::l_square)) {
+      attributeSyntax = AttributeSyntax::standard; attributeDepth = 2;
+    } else if (token.isOneOf(tok::kw___attribute,tok::kw___declspec)) {
+      attributeSyntax = token.is(tok::kw___attribute) ? AttributeSyntax::gnu : AttributeSyntax::declspec;
+      awaitingParen = true; attributeDepth = 0;
+    }
+    previousSquare = attributeSyntax == AttributeSyntax::none && token.is(tok::l_square);
+  }
   MacroFact fact(const MacroInfo* mi) {
     if (!mi || mi->isBuiltinMacro()) return {MacroState::definedUnknown,{}, {}};
     Macro m; m.functionLike = mi->isFunctionLike(); m.variadic = mi->isVariadic();
@@ -318,7 +382,9 @@ public:
     if (e.user(loc) && kind != PIK_HashPragma) e.disable("unsupported generated user pragma at " + loc.printToString(e.sm));
   }
   void finalToken(const clang::Token& token) {
-    if (!token.is(tok::identifier) || !e.user(token.getLocation())) return;
+    if (!e.user(token.getLocation())) return;
+    attributeToken(token);
+    if (!token.is(tok::identifier)) return;
     const auto name = token.getIdentifierInfo()->getName().str();
     if (sourceBindings.contains(name)) return;
     auto it = e.model.judgeInitial.find(name);
@@ -563,14 +629,14 @@ public:
       if (isa<ConstructorAttr,DestructorAttr,UsedAttr,SectionAttr,WeakAttr,VisibilityAttr,AsmLabelAttr,AliasAttr>(attr)) {
         e.model.families[current].root = std::string("attribute: ") + attr->getSpelling();
         if (const auto* alias = dyn_cast<AliasAttr>(attr)) symbolRoot(alias->getAliasee().str(),"alias");
-      } else if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
+      } else if (!supportedAttribute(attr,d,e)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     }
     if (const auto* a = dyn_cast<FileScopeAsmDecl>(d); a && e.user(d->getBeginLoc())) assembly(a->getAsmString(),d->getBeginLoc());
     return true;
   }
   bool VisitAttributedStmt(AttributedStmt* s) {
     if (current != noFamily && e.user(s->getBeginLoc())) for (const auto* attr : s->getAttrs())
-      if (!supportedAttribute(attr)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
+      if (!supportedAttribute(attr,nullptr,e)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     return true;
   }
   bool VisitStmt(Stmt* s) {
@@ -745,6 +811,9 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   ParseAST(compiler.getPreprocessor(),&consumer,compiler.getASTContext());
   diagnostics->getClient()->EndSourceFile();
   if (diagnostics->hasErrorOccurred()) extraction.disable("Clang parse error");
+  for (const auto& [location,source] : extraction.noUniqueAddressSpellings)
+    if (!extraction.verifiedNoUniqueAddress.contains(location))
+      extraction.disable("unsupported attribute: no_unique_address at " + source.printToString(sm));
   for (auto& fact : extraction.model.expansions) if (fact.paste) {
     auto group = extraction.pasteGroups.at(fact.offset); fact.externalPasteOperand = group.second;
     // Argument pre-expansion callbacks may have the argument's physical offset

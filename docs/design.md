@@ -981,6 +981,21 @@ Clarifications from D3a (implementation, reviewed):
   supported attributes, AST forms and semantic options; an unsupported one
   disables the whole analysis (e.g. symbol-bearing attributes, `asm`,
   `va_arg`, GNU statement expressions, computed goto, coroutines).
+- **`no_unique_address` (policy D3d-2):** only the standard, argument-free
+  `[[no_unique_address]]` spelling is supported, on a non-static, non-bit-field
+  `FieldDecl` with verified ownership by its enclosing record. Both empty and
+  nonempty member types are allowed, including template and nested records and
+  macro-produced attributes. Records retain their complete lexical contents;
+  members are never removed individually, and the attribute does not root an
+  unused record. Ordinary traversal still retains dependencies of member types,
+  initializers, constructors and destructors. Expanded tokens and the parsed
+  attribute class/context must agree: discarded attributes, arguments (even
+  `()`), other declaration/statement contexts, `msvc::no_unique_address` and
+  other scoped/vendor spellings disable pruning with `unsupported attribute`.
+  The pinned frontend headers/AttrDocs are absent from this source tree, so the
+  unaudited `__no_unique_address__` spelling remains unsupported. Safety follows
+  from preserving whole records and their dependency closure, without assuming
+  equal Clang/GCC layouts or selecting a particular `sizeof`/trait branch.
 - **Paste provenance** may be over-approximated by the whole enclosing macro
   invocation; uncertainty disables pruning.
 - **Inertness:** the whitelist is an upper bound; the implementation
