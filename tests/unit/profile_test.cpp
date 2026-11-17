@@ -347,6 +347,85 @@ TEST(profile_homebrew_provenance_is_exact_and_snapshot_only) {
   for (const auto* other : {"package", "recipe", "image"})
     badProfile(base + "\nsnapshot_compiler = { homebrew = '" + bottle + "', " + other + " = 'gcc=16.2.0' }", "snapshot_compiler:");
 }
+TEST(profile_winlibs_provenance_is_digest_pinned_and_snapshot_only) {
+  const std::string archive = "winlibs:13.2.0posix-17.0.6-11.0.1-ucrt-r4/compiler.zip@sha256:" + std::string(64, 'a');
+  const auto base = replace(allowProfile(), "build = { package = \"synthetic:fixture=14.2.0-1\" }", "");
+  const auto declaration = "\nsnapshot_compiler = { winlibs = '" + archive + "' }";
+  auto valid = synthetic(base + declaration);
+  CHECK(valid.ok());
+  if (valid.ok()) {
+    CHECK(!valid.value().build); CHECK(!valid.value().reproduced);
+    CHECK_EQ(valid.value().snapshotCompiler, (std::optional{std::pair{std::string("winlibs"), archive}}));
+  }
+  CHECK(synthetic(base + "\nsnapshot_compiler = { winlibs = '" + replace(archive, ".zip", ".7z") + "' }").ok());
+  badProfile(base + "\nbuild = { winlibs = '" + archive + "' }", "build:");
+  for (const auto& value : {replace(archive, "winlibs:", ""), replace(archive, "winlibs:", "https://github.com/"),
+                           replace(archive, "ucrt-r4/", "ucrt-r4/nested/"), replace(archive, "/compiler", "/../compiler"),
+                           replace(archive, "winlibs:13", "winlibs:/13"), replace(archive, ".zip", ".tar.gz"),
+                           archive.substr(0, archive.find('@')), archive.substr(0, archive.size() - 1), archive + "a",
+                           replace(archive, "sha256:", "sha512:"), replace(archive, std::string(64, 'a'), std::string(64, 'A')),
+                           archive + " "})
+    badProfile(base + "\nsnapshot_compiler = { winlibs = '" + value + "' }", "snapshot_compiler:");
+  for (const auto* other : {"package", "recipe", "image", "homebrew"})
+    badProfile(base + "\nsnapshot_compiler = { winlibs = '" + archive + "', " + other + " = 'gcc=13.2.0' }", "snapshot_compiler:");
+}
+TEST(profile_timus_synthetic_native_snapshot_has_no_host_cpu_facts) {
+  const std::string file = "timus-gcc13-cpp23.toml";
+  CHECK(embeddedProfileFiles().contains(file));
+  const auto text = embeddedProfileFiles().at(file);
+  const auto doc = parseProfileToml(text, file);
+  CHECK(doc.ok()); if (!doc.ok()) return;
+  const auto archive = std::get<TomlTable>(doc.value().at("snapshot_compiler").value).at("winlibs");
+  const auto builtins = specialBuiltins({CompilerFamily::gcc, 13, 2, 0});
+  const auto native = nativeDependencies({CompilerFamily::gcc, 13, 2, 0});
+  CHECK_EQ(builtins.size(), 17u); CHECK(!native.empty());
+  CHECK(!builtins.contains("__has_embed")); CHECK(!builtins.contains("__has_feature")); CHECK(!builtins.contains("__has_extension"));
+  CHECK(specialBuiltins({CompilerFamily::gcc, 13, 3, 0}).empty());
+  // In-memory protocol fixture, never a fabricated shipped snapshot.
+  std::string snapshot = "# distill-snapshot: 1\n# compiler-path: C:/synthetic/mingw64/bin/g++.exe\n"
+      "# compiler-version: synthetic GCC 13.2.0\n# gcc-version: 13.2.0\n"
+      "# dumpmachine: x86_64-w64-mingw32\n# profile-triple: x86_64-w64-mingw32\n"
+      "# build: none\n# snapshot-compiler: winlibs=" + archive + "\n# reproduced: no\n# std: c++23\n"
+      "# builtin-registry: gcc-13.2\n# native-model: gcc-13.2-x86\n"
+      "# flag: -O2\n# flag: -fno-strict-aliasing\n# flag: -march=native\n# flag: -DONLINE_JUDGE\n# end-header\n"
+      "#define __GNUC__ 13\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n"
+      "#define __cplusplus 202100L\n#define __STRICT_ANSI__ 1\n#define __x86_64__ 1\n#define _WIN32 1\n#define _WIN64 1\n"
+      "# command-operation #define ONLINE_JUDGE 1\n";
+  for (const auto& n : builtins) snapshot += "# state " + n + " defined-unknown special-builtin\n# probe " + n + " defined\n";
+  for (const auto& [n, scope] : native) { (void)scope; snapshot += "# state " + n + " unknown native-model\n"; }
+  auto load = [&](const std::string& bytes) {
+    return parseProfile(text, file, [&](const auto&) -> Result<std::string> { return bytes; });
+  };
+  const auto loaded = load(snapshot);
+  CHECK(loaded.ok()); if (!loaded.ok()) return;
+  const auto& p = loaded.value();
+  CHECK_EQ(p.alias, (std::optional<std::string>{"timus"}));
+  CHECK(!p.build); CHECK(!p.reproduced); CHECK(!p.snapshotMetadata.reproduced);
+  CHECK_EQ(p.snapshotMetadata.snapshotCompiler, "winlibs=" + archive);
+  CHECK_EQ(p.dialect.name, "c++23"); CHECK(!p.dialect.gnu);
+  CHECK_EQ(p.initialState("__cplusplus").definition->replacement, "202100L");
+  CHECK_EQ(p.initialState("__STRICT_ANSI__").definition->replacement, "1");
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").provenance.front(), FactOrigin::commandOperation);
+  CHECK_EQ(p.flags, (std::vector<std::string>{"-O2", "-fno-strict-aliasing", "-march=native", "-DONLINE_JUDGE"}));
+  CHECK_EQ(p.inert, (std::vector<std::string>{"-fno-strict-aliasing"}));
+  CHECK_EQ(p.link, (std::vector<std::string>{"-static", "-Wl,-s,--stack=67108864"}));
+  CHECK_EQ(p.libraries, (std::vector<std::string>{"mingw-w64", "libstdc++"}));
+  CHECK_EQ(p.probeSourceBytes, 60000u); CHECK_EQ(p.probeOutputBytes, 60000u);
+  for (const auto& [n, scope] : native) {
+    (void)scope;
+    CHECK_EQ(p.initialState(n).state, MacroState::unknown);
+    CHECK_EQ(p.initialState(n).provenance.front(), FactOrigin::nativeModel);
+  }
+  for (const auto* n : {"_UCRT", "__OPTIMIZE__", "__MINGW64_VERSION_STR", "__unlisted_reserved"})
+    CHECK_EQ(p.initialState(n).state, MacroState::unknown);
+  CHECK(!load(replace(snapshot, "# native-model: gcc-13.2-x86", "# native-model: none")).ok());
+  CHECK(!load(replace(snapshot, "# state __AVX2__ unknown native-model\n", "")).ok());
+  CHECK(!load(replace(snapshot, "# builtin-registry: gcc-13.2", "# builtin-registry: none")).ok());
+  CHECK(!load(replace(snapshot, "# probe __has_include defined\n", "")).ok());
+  CHECK(!load(replace(snapshot, "202100L", "202302L")).ok());
+  CHECK(!load(replace(snapshot, "# reproduced: no", "# reproduced: yes")).ok());
+  CHECK(!load(replace(snapshot, archive, archive.substr(0, archive.size() - 1) + "a")).ok());
+}
 TEST(profile_yukicoder_gcc16_synthetic_snapshots_and_dialects) {
   const std::string bottle = "homebrew:gcc=16.2.0@sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922";
   const auto builtins = specialBuiltins({CompilerFamily::gcc, 16, 2, 0});
@@ -705,9 +784,10 @@ TEST(profile_list_columns_and_order) {
   CHECK(list.find("qoj-gcc15-cpp23\tqoj\tbundled\tapproximate\t2026-11-17\t\"QOJ") != std::string::npos);
   CHECK(list.find("kattis-gcc15-gnupp23\tkattis\tbundled\tapproximate\t2026-11-17\t\"Kattis") != std::string::npos);
   CHECK(list.find("library-checker-gcc15-cpp23\tlibrary-checker\tbundled\tapproximate\t2026-11-17\t\"Library Checker") != std::string::npos);
+  CHECK(list.find("timus-gcc13-cpp23\ttimus\tbundled\tapproximate\t2026-11-17\t\"Timus") != std::string::npos);
   CHECK(list.find("yukicoder-gcc16-cpp23\tyukicoder\tbundled\tapproximate\t2026-11-17\t\"yukicoder") != std::string::npos);
   CHECK(list.find("yukicoder-gcc16-gnupp23\t-\tbundled\tapproximate\t2026-11-17\t\"yukicoder") != std::string::npos);
-  const auto count = 9;
+  const auto count = 10;
   CHECK_EQ(std::count(list.begin(), list.end(), '\n'), count);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());

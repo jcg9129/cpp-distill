@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       profiles:
-        description: all, or comma-separated full names (codeforces-gcc14-cpp23, atcoder-gcc15-gnupp23, cses-gcc13-cpp23, qoj-gcc15-cpp23, kattis-gcc15-gnupp23, library-checker-gcc15-cpp23, yukicoder-gcc16-cpp23, yukicoder-gcc16-gnupp23)
+        description: all, or comma-separated full names (codeforces-gcc14-cpp23, atcoder-gcc15-gnupp23, cses-gcc13-cpp23, qoj-gcc15-cpp23, kattis-gcc15-gnupp23, library-checker-gcc15-cpp23, timus-gcc13-cpp23, yukicoder-gcc16-cpp23, yukicoder-gcc16-gnupp23)
         default: all
         required: true
 permissions:
@@ -144,7 +144,7 @@ jobs:
           unset CPATH CPLUS_INCLUDE_PATH C_INCLUDE_PATH GCC_EXEC_PREFIX COMPILER_PATH LIBRARY_PATH
           python3 ci/profiles/probe.py "data/judges/$PROFILE.toml" --compiler /home/linuxbrew/.linuxbrew/bin/g++-16 --distill out/profile-probe/distill
       - name: Install exact MSYS2 compiler and dependency closure
-        if: runner.os == 'Windows'
+        if: matrix.acquisition == 'msys2'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -152,7 +152,7 @@ jobs:
           & C:\msys64\usr\bin\bash.exe -lc 'cd "$(/usr/bin/cygpath -u "$GITHUB_WORKSPACE")" && /usr/bin/bash ci/profiles/install-mingw.sh "$COMPILER_PROVENANCE"'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Snapshot Codeforces effective command
-        if: runner.os == 'Windows'
+        if: matrix.acquisition == 'msys2'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -162,12 +162,31 @@ jobs:
           & "$env:pythonLocation/python.exe" ci/profiles/snapshot.py data/judges/codeforces-gcc14-cpp23.toml --compiler C:/msys64/mingw64/bin/g++.exe @provenanceArgs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Produce Codeforces expected diagnostic output
-        if: runner.os == 'Windows'
+        if: matrix.acquisition == 'msys2'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           & "$env:pythonLocation/python.exe" ci/profiles/probe.py data/judges/codeforces-gcc14-cpp23.toml --compiler C:/msys64/mingw64/bin/g++.exe --distill out/profile-probe/distill.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install, verify and snapshot Timus WinLibs compiler (approximate)
+        if: matrix.acquisition == 'winlibs'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $python = "$env:pythonLocation/python.exe"
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'out/timus-winlibs'
+          $compiler = Join-Path $destination 'mingw64/bin/g++.exe'
+          & $python ci/profiles/winlibs.py "$env:COMPILER_PROVENANCE" --destination "$destination"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Exclude every runner/MSYS2 compiler and injected include/library path.
+          $env:PATH = "$(Split-Path $compiler);$env:SystemRoot\System32;$env:SystemRoot"
+          foreach ($name in @('CPATH', 'CPLUS_INCLUDE_PATH', 'C_INCLUDE_PATH', 'GCC_EXEC_PREFIX', 'COMPILER_PATH', 'LIBRARY_PATH')) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          & $python ci/profiles/snapshot.py "data/judges/$env:PROFILE.toml" --compiler "$compiler"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & $python ci/profiles/probe.py "data/judges/$env:PROFILE.toml" --compiler "$compiler" --distill out/profile-probe/distill.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
