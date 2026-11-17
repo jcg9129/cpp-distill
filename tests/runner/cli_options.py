@@ -78,6 +78,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             ['codeforces-gcc14-cpp23', 'codeforces', 'bundled']]
         expected.append(['cses-gcc13-cpp23', 'cses', 'bundled'])
         expected.append(['kattis-gcc15-gnupp23', 'kattis', 'bundled'])
+        expected.append(['library-checker-gcc15-cpp23', 'library-checker', 'bundled'])
         expected.append(['qoj-gcc15-cpp23', 'qoj', 'bundled'])
         expected.append(['yukicoder-gcc16-cpp23', 'yukicoder', 'bundled'])
         expected.append(['yukicoder-gcc16-gnupp23', '-', 'bundled'])

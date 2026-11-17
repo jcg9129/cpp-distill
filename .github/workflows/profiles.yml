@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       profiles:
-        description: all, or comma-separated full names (codeforces-gcc14-cpp23, atcoder-gcc15-gnupp23, cses-gcc13-cpp23, qoj-gcc15-cpp23, kattis-gcc15-gnupp23, yukicoder-gcc16-cpp23, yukicoder-gcc16-gnupp23)
+        description: all, or comma-separated full names (codeforces-gcc14-cpp23, atcoder-gcc15-gnupp23, cses-gcc13-cpp23, qoj-gcc15-cpp23, kattis-gcc15-gnupp23, library-checker-gcc15-cpp23, yukicoder-gcc16-cpp23, yukicoder-gcc16-gnupp23)
         default: all
         required: true
 permissions:
@@ -196,6 +196,8 @@ jobs:
     env:
       PROFILE: ${{ matrix.profile }}
       COMPILER_PROVENANCE: ${{ matrix.compiler }}
+      SNAPSHOT_CXX: ${{ matrix.cxx }}
+      SNAPSHOT_VERSION: ${{ matrix.version }}
     steps:
       # Containers run as root. Install git before checkout and provide the
       # normal C++ toolchain and Python 3.11+ used by the diagnostic CLI.
@@ -208,23 +210,25 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates git python3 cmake ninja-build g++
       # Do not replace the image's compiler with an archive package. Start with
       # sh so bash need not be present until this bootstrap has completed.
-      - name: Verify Kattis image compiler and install diagnostic tools
+      - name: Verify image compiler and install diagnostic tools
         if: matrix.acquisition == 'image'
         shell: sh
         run: |
           set -eu
-          test "$(g++-15 -dumpfullversion)" = 15.2.0
-          g++-15 -dumpmachine
+          snapshot_cxx=$(command -v "$SNAPSHOT_CXX")
+          echo "SNAPSHOT_CXX=$snapshot_cxx" >> "$GITHUB_ENV"
+          test "$("$snapshot_cxx" -dumpfullversion)" = "$SNAPSHOT_VERSION"
+          "$snapshot_cxx" -dumpmachine
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq
           # Keep the image's existing compiler, headers and runtime packages
           # unchanged. If tooling requires upgrades, fail for review instead.
           dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n' |
             awk '$2 == "installed" {print $1}' | xargs -r apt-mark hold > /dev/null
-          # ca-certificates and bash are already in the image; requesting them would
-          # upgrade held image packages, which this job forbids.
-          apt-get install -y --no-install-recommends git python3 cmake ninja-build
-          test "$(g++-15 -dumpfullversion)" = 15.2.0
+          # The GCC base image already contains some tools (including git).
+          # --no-upgrade skips installed tools; holds also protect dependencies.
+          apt-get install -y --no-upgrade --no-install-recommends git python3 cmake ninja-build
+          test "$("$snapshot_cxx" -dumpfullversion)" = "$SNAPSHOT_VERSION"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install exact Ubuntu compiler for QOJ
         if: matrix.acquisition == 'ubuntu'
@@ -232,7 +236,7 @@ jobs:
       - name: Build diagnostic distill
         run: |
           set -euo pipefail
-          if [[ "$COMPILER_PROVENANCE" == image=* ]]; then export CXX=g++-15; fi
+          if [[ "$COMPILER_PROVENANCE" == image=* ]]; then export CXX="$SNAPSHOT_CXX"; fi
           cmake -S . -B out/profile-probe -G Ninja -DCMAKE_BUILD_TYPE=Release -DDISTILL_PROFILE_ONLY=ON -DBUILD_TESTING=OFF
           cmake --build out/profile-probe --target distill --parallel 2
           python3 ci/profiles/test_probe_cli.py out/profile-probe/distill tests/unit/fixtures/profile
@@ -246,17 +250,26 @@ jobs:
         run: |
           set -euo pipefail
           python3 ci/profiles/probe.py "data/judges/$PROFILE.toml" --compiler /usr/bin/g++-15 --distill out/profile-probe/distill
-      - name: Snapshot Kattis effective command (approximate)
+      - name: Record native container CPU
+        if: matrix.acquisition == 'image' && matrix.native
+        run: |
+          set -euo pipefail
+          # Diagnostic only: native model facts never inherit this CPU's ISA.
+          grep -m1 'model name' /proc/cpuinfo || true
+          "$SNAPSHOT_CXX" -march=native -Q --help=target | grep -E '^\s+-march=' || true
+      - name: Snapshot image effective command (approximate)
         if: matrix.acquisition == 'image'
         run: |
           set -euo pipefail
-          test "$(g++-15 -dumpfullversion)" = 15.2.0
-          python3 ci/profiles/snapshot.py "data/judges/$PROFILE.toml" --compiler g++-15
-      - name: Produce Kattis expected diagnostic output
+          test "$("$SNAPSHOT_CXX" -dumpfullversion)" = "$SNAPSHOT_VERSION"
+          # Shared with AtCoder: snapshot.py sweeps named CPUs and checks the
+          # native host for variation outside the audited dependency model.
+          python3 ci/profiles/snapshot.py "data/judges/$PROFILE.toml" --compiler "$SNAPSHOT_CXX"
+      - name: Produce image expected diagnostic output
         if: matrix.acquisition == 'image'
         run: |
           set -euo pipefail
-          python3 ci/profiles/probe.py "data/judges/$PROFILE.toml" --compiler g++-15 --distill out/profile-probe/distill
+          python3 ci/profiles/probe.py "data/judges/$PROFILE.toml" --compiler "$SNAPSHOT_CXX" --distill out/profile-probe/distill
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: snapshot-${{ matrix.profile }}

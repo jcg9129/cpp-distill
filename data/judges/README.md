@@ -12,8 +12,8 @@ meaning. The shipped names are `codeforces-gcc14-cpp23` and
 `alias = "atcoder"`, respectively. Aliases use nonempty `[a-z0-9-]+` strings and
 track the newest supported GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`),
 `qoj-gcc15-cpp23` (alias `qoj`), `kattis-gcc15-gnupp23` (alias `kattis`),
-`yukicoder-gcc16-cpp23` (alias `yukicoder`) and `yukicoder-gcc16-gnupp23`
-(no alias).
+`yukicoder-gcc16-cpp23` (alias `yukicoder`), `yukicoder-gcc16-gnupp23`
+(no alias) and `library-checker-gcc15-cpp23` (alias `library-checker`).
 QOJ's published C++26 option is deferred:
 the audited A6 ADL name registry ends at C++23 and disables pruning for C++26.
 The profile schema, dialect model and standard header/macro inventories accept
@@ -446,6 +446,72 @@ conservative documented 60000-byte default output budget. The
 [custom-test page](https://yukicoder.me/run) confirms login is required.
 **UNVERIFIED:** an actual judge probe match; snapshots and expected outputs
 must be captured by branch CI before these profiles enter the bundled catalog.
+
+Library Checker's sources were re-fetched on **2026-11-17**, including the
+immutable [language entry](https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/langs/langs.toml)
+at commit `01fa3c63f036611cff8be611dc1c69a5605f6a70`. Language id `cpp` is
+"C++23", version label "GCC 15.2 + AC Library(1.6)", with this command:
+
+```text
+g++ -O2 -std=c++23 -DEVAL -DONLINE_JUDGE -march=native -o main main.cpp -I /opt/ac-library
+```
+
+The profile uses `std = "c++23"`, the ordered flags `-O2`, `-DEVAL`,
+`-DONLINE_JUDGE`, `-march=native`, and `link = []`. Its preferred compiler
+check is plain `g++`, matching the judge and docker-library image, followed by
+`g++-15`. As with AtCoder, `-I /opt/ac-library` is deliberately omitted:
+profile flags reject include paths, and ACL is a judge system header outside
+the standard-header inventory. Its includes disable pruning. The
+[Dockerfile](https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/langs/Dockerfile.GCC)
+clones ACL v1.6 and copies its `atcoder` directory into `/opt/ac-library`.
+Its final compiler stage says only `FROM gcc:15.2`, with no digest. The
+[README's Ubuntu 22.04 requirement](https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/README.md)
+describes the judge host; compilation runs inside the language container.
+
+The [Docker Hub tag API](https://hub.docker.com/v2/repositories/library/gcc/tags/15.2)
+was rechecked directly on 2026-11-17. Its index digest is unchanged from the
+2026-11-16 research:
+`sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289`,
+`last_updated` 2026-06-11. Its linux/amd64 manifest is
+`sha256:c101370f78e4a30be178c11dd18aeee64c65d617908a98157db2392ca73ab04f`.
+The same index already identifies the GCC 15.2.0 scan in
+`data/extensions/libstdc++.txt`. Use
+`snapshot_compiler.image = "docker.io/library/gcc@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289"`.
+This is **approximate**, with **no `build`**: resolving today's mutable base
+tag cannot identify the deployed judge image or its compiler build. CI must
+verify that docker-library's `15.2` compiler reports exactly `15.2.0`.
+**UNVERIFIED for the judge:** Debian trixie base, x86_64 architecture,
+`x86_64-linux-gnu` triple (inferred from docker-library's `--build=$gnuArch`
+convention), libstdc++/glibc versions and default include paths. CI records
+`-dumpmachine`; no container or compiler was run locally.
+
+The image row uses `snapshot-container` on ubuntu-24.04. The job resolves the
+profile's preferred compiler to an absolute path, checks `-dumpfullversion`
+before and after tool installation and before capture, and holds all installed
+packages while adding diagnostic tools with `--no-upgrade`. This also handles
+tools already installed in the GCC base image. Snapshot and probe use that same
+compiler, with no archive compiler substitution or reproduction claim.
+
+The judge CPU is unpublished. Native handling is exactly AtCoder's: shared
+`snapshot.py` loads `data/native/gcc-15.2-x86.txt`, sweeps every ABI-compatible
+CPU accepted by the compiler, and includes the native host dump in its check
+for variation outside the model. These regression checks never infer states
+from named presets. Every native-model name stays **unknown**, including names
+absent on the CI host, unless explicitly fixed by a command `-D`/`-U` (none
+of this profile's operations fix a model name). The container job also logs the
+CPU model and GCC's native target selection, as AtCoder's runner job does.
+`probe.py` retains the exact native argv and checks the resulting expected
+output against the conservative model. No separate sweep implementation is
+needed in the workflow; both acquisition paths call the same capture code
+(design §4.3, native fixes #33/#39).
+
+The pinned [submission handler](https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/restapi/handlers_submissions.go)
+accepts source lengths 1 through `1024*1024` bytes, so
+`probe_source_bytes = 1048576`. No global output limit is published (limits
+are per problem); retain the conservative 60000-byte default output budget.
+There is no custom-test facility: use ordinary submissions only.
+**UNVERIFIED:** probe output retrieval and an actual judge match. Snapshot and
+expected output remain pending branch CI capture; neither is fabricated locally.
 
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,

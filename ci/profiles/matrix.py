@@ -47,6 +47,10 @@ def matrix(selection='all'):
             rows[-1]['container'] = UBUNTU_26_04
         elif acquisition == 'image':
             rows[-1]['container'] = compiler.removeprefix('image=')
+            # Use the profile's preferred executable: docker-library GCC has
+            # plain g++, whereas the Kattis image supplies g++-15.
+            rows[-1]['cxx'] = p['check'][0]
+            rows[-1]['native'] = any(f in ('-march=native', '-mtune=native', '-mcpu=native') for f in p['flags'])
     return {'include': rows}
 
 

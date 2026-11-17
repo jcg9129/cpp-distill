@@ -157,7 +157,12 @@ and `yukicoder-gcc16-gnupp23`, no alias) record Homebrew GCC 16.2.0 with ISO
 and GNU C++23. Both are approximate: the judge's AVX-512 filtering plugin is
 omitted, and CI uses a digest-pinned Homebrew bottle on Ubuntu 24.04 rather
 than the judge's Ubuntu 25.04 system headers. Each dialect needs its own capture.
-The QOJ, Kattis and yukicoder snapshots and expected probe outputs must be captured by
+The D6c **Library Checker** profile (`library-checker-gcc15-cpp23`, alias
+`library-checker`) records C++23, GCC 15.2.0 and the published `-DEVAL`,
+`-DONLINE_JUDGE`, `-march=native` options. It is approximate: the judge pins
+only `gcc:15.2`; CI snapshots a digest-pinned base image. ACL 1.6 remains a
+judge system header outside the profile, and native CPU facts remain unknown.
+The QOJ, Kattis, Library Checker and yukicoder snapshots and expected probe outputs must be captured by
 branch CI before the PR; see
 [Adding a profile](data/judges/README.md#research-and-ci).
 A reproduced snapshot alone

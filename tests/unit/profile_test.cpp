@@ -704,9 +704,10 @@ TEST(profile_list_columns_and_order) {
   CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\t-\n") != std::string::npos);
   CHECK(list.find("qoj-gcc15-cpp23\tqoj\tbundled\tapproximate\t2026-11-17\t\"QOJ") != std::string::npos);
   CHECK(list.find("kattis-gcc15-gnupp23\tkattis\tbundled\tapproximate\t2026-11-17\t\"Kattis") != std::string::npos);
+  CHECK(list.find("library-checker-gcc15-cpp23\tlibrary-checker\tbundled\tapproximate\t2026-11-17\t\"Library Checker") != std::string::npos);
   CHECK(list.find("yukicoder-gcc16-cpp23\tyukicoder\tbundled\tapproximate\t2026-11-17\t\"yukicoder") != std::string::npos);
   CHECK(list.find("yukicoder-gcc16-gnupp23\t-\tbundled\tapproximate\t2026-11-17\t\"yukicoder") != std::string::npos);
-  const auto count = 8;
+  const auto count = 9;
   CHECK_EQ(std::count(list.begin(), list.end(), '\n'), count);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());
