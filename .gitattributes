@@ -13,6 +13,7 @@
 # Profile content digests include exact TOML and snapshot bytes.
 /data/judges/*.toml -text
 /data/judges/*-predefined.txt -text
+/data/judges/*-probe-expected.txt -text
 
 # Probe fixtures must retain their exact captured bytes on every platform.
 tests/unit/fixtures/** -text

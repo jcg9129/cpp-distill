@@ -6,7 +6,6 @@ command. Link-only profile options are excluded, just as in snapshot.py;
 this program needs only the compiler's C runtime, not judge-installed libraries.
 """
 import argparse
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -76,10 +75,11 @@ def main():
     try:
         if args.build_distill:
             build = args.distill.resolve().parent
+            # Local convenience only; CI builds in its own step. Never use the
+            # judge compiler here: distill needs the platform's normal toolchain.
             subprocess.run(['cmake', '-S', '.', '-B', str(build), '-G', 'Ninja',
                             '-DCMAKE_BUILD_TYPE=Release', '-DDISTILL_PROFILE_ONLY=ON',
-                            '-DBUILD_TESTING=OFF',
-                            *(['-DCMAKE_CXX_COMPILER=' + args.compiler] if os.name == 'nt' else [])], check=True, timeout=120)
+                            '-DBUILD_TESTING=OFF'], check=True, timeout=120)
             subprocess.run(['cmake', '--build', str(build), '--target', 'distill',
                             '--parallel', '2'], check=True, timeout=900)
             subprocess.run([sys.executable, 'ci/profiles/test_probe_cli.py',
@@ -87,8 +87,12 @@ def main():
                            check=True, timeout=60)
         print(capture(args.profile, args.compiler, args.distill))
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
-        detail = getattr(error, 'stderr', b'') or b''
-        parser.exit(1, f'expected probe failed: {error}\n{detail.decode(errors="replace")}\n')
+        out = getattr(error, 'stdout', b'') or b''
+        err = getattr(error, 'stderr', b'') or b''
+        detail = (out + b'\n' + err) if isinstance(out, bytes) else str(out) + '\n' + str(err)
+        if isinstance(detail, bytes):
+            detail = detail.decode(errors='replace')
+        parser.exit(1, f'expected probe failed: {error}\n{detail}\n')
 
 
 if __name__ == '__main__':
