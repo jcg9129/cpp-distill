@@ -324,14 +324,19 @@ dependency model**: every macro the compiler can derive from the CPU it runs
 on, from its target code (`gcc/config/i386/i386-c.cc` for x86: ISA feature
 macros, `__tune_*`, CPU-name macros) and its common code
 (`c-family/c-cppbuiltin.cc`: `__FP_FAST_FMA*`, `__GCC_DESTRUCTIVE_SIZE`,
-`__GCC_CONSTRUCTIVE_SIZE`, …). The snapshot step evaluates the effective
-command (later options and macro operations included) for every CPU
-configuration the model allows and joins the results per name: absent
-everywhere is *undefined*, the same definition everywhere is known, present
-everywhere with differing definitions is *defined, definition unknown*,
-otherwise *unknown*. `-mtune=native` alone varies only tuning-derived macros. A
-sweep over the compiler's `-march=` values is a regression check of the model,
-not its proof.
+`__GCC_CONSTRUCTIVE_SIZE`, …). The configurations a native option allows are
+the CPUID feature masks and cache parameters the driver can detect, not the
+named `-march=` values: the driver enables ISA options no named CPU carries
+(`-mshstk`, `-mrtm`, …) and passes measured cache sizes. Every model name is
+therefore *unknown* under a native option, unless a command macro operation
+(`-D`/`-U`, applied after the target's builtins) fixes it on every CPU; those
+names take the joined state (absent everywhere *undefined*, one definition
+known, differing definitions *defined, definition unknown*, otherwise
+*unknown*). `-mtune=native` alone varies only tuning-derived macros. A sweep
+over the compiler's `-march=` values is a regression check that nothing outside
+the model varies, never a source of states (fixed 2026-11-17 after the AtCoder
+probe found `__SHSTK__` defined on a runner while the sweep-based snapshot
+recorded it as undefined).
 
 **Facts** a profile supplies, each with its provenance recorded:
 

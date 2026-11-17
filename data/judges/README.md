@@ -177,10 +177,13 @@ names are probed with `#ifdef` under that same argv. The x86 native model cites
 GCC's target, common frontend and native-driver source for each audited release.
 For native flags, the compiler's option diagnostic supplies every CPU spelling;
 each ABI-compatible `-march`/`-mtune` combination replaces native **in place**,
-retaining later options and macro operations. Only model names are joined:
-absent everywhere → undefined; identical definition → known; always present but
-differing → defined-unknown; otherwise → unknown. Any variation outside the model
-fails with the names. With only `-mtune=native`, only `tune` names may vary.
+retaining later options and macro operations. Any variation outside the model
+fails with the names. The sweep never supplies a state: every model name is
+recorded as unknown, because `-march=native` takes ISA bits (`-mshstk`, `-mrtm`,
+…) and cache parameters from CPUID, beyond any named preset. Only a model name
+fixed by a command `-D`/`-U` is joined (absent everywhere → undefined; identical
+definition → known; always present but differing → defined-unknown; otherwise →
+unknown). With only `-mtune=native`, only `tune` names may vary.
 The source audit bounds the dependency inventory; named-CPU sweeps are regression
 checks, not a claim that named CPU presets exhaust physical feature masks.
 The initial implementation supports the shipped x86_64 ABI for native profiles;

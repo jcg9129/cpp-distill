@@ -143,12 +143,18 @@ predefined = "fixture-predefined.txt"
 
     def test_native_four_state_join_and_outside_model_failure(self):
         model = {'A': 'isa', 'B': 'isa', 'C': 'isa', 'D': 'isa', 'T': 'tune'}
-        results = join_native([{'A': 'a', 'B': 'b', 'C': 'c'}, {'A': 'a', 'B': 'other'}], model)
+        dumps = [{'A': 'a', 'B': 'b', 'C': 'c'}, {'A': 'a', 'B': 'other'}]
+        # Native options take CPU bits from CPUID, so the named-CPU sweep never
+        # establishes a state: constant and absent model names are unknown too.
+        self.assertEqual(join_native(dumps, model), {n: ('unknown', None) for n in model})
+        # Only command-line macro operations fix a model name on every CPU.
+        results = join_native(dumps, model, fixed=frozenset(model))
         self.assertEqual(results, {'A': ('known', 'a'), 'B': ('defined-unknown', None), 'C': ('unknown', None), 'D': ('undefined', None), 'T': ('undefined', None)})
         with self.assertRaisesRegex(ValueError, 'OUTSIDE'):
             join_native([{}, {'OUTSIDE': '1'}], model)
         with self.assertRaisesRegex(ValueError, 'A'):
             join_native([{}, {'A': '1'}], model, tune_only=True)
+        self.assertEqual(join_native([{'A': 'a'}, {'A': 'a'}], model, True), {'T': ('unknown', None)})
         self.assertEqual(join_native([{'A': 'a'}, {'A': 'a', 'T': '1'}], model, True), {'T': ('unknown', None)})
         with self.assertRaises(ValueError):
             join_native([], model)
@@ -162,8 +168,8 @@ predefined = "fixture-predefined.txt"
         with patch('snapshot.cpu_values', return_value=['cpu1', 'cpu2']), patch('snapshot.run', side_effect=dump):
             joined, accepted = native_runs('g++', ['-x', 'c++', '-march=native', '-DCPU=7'], Path('/empty.cpp'), {'CPU': 'isa', 'A': 'isa'})
         self.assertEqual(len(calls), 2)
-        self.assertEqual(joined['CPU'], ('known', '#define CPU 7'))
-        self.assertEqual(joined['A'], ('defined-unknown', None))
+        self.assertEqual(joined['CPU'], ('known', '#define CPU 7'))  # fixed by -DCPU=7
+        self.assertEqual(joined['A'], ('unknown', None))  # CPU-derived: never taken from the sweep
         self.assertEqual(native_runs('unused', ['-O2'], None, {}), ({}, []))
 
     def test_cpu_values_uses_compilers_complete_list(self):
