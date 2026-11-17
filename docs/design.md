@@ -336,9 +336,13 @@ therefore *unknown* under a native option, unless a command macro operation
 (`-D`/`-U`, applied after the target's builtins) fixes it on every CPU; those
 names take the joined state (absent everywhere *undefined*, one definition
 known, differing definitions *defined, definition unknown*, otherwise
-*unknown*). `-mtune=native` alone varies only tuning-derived macros. A sweep
-over the compiler's `-march=` values is a regression check that nothing outside
-the model varies, never a source of states (fixed 2026-11-17 after the AtCoder
+*unknown*). `-mtune=native` alone varies only tuning-derived macros. Names the
+source audit shows depend only on ABI options or nothing, listed in the model
+file header, are outside the model and keep their snapshot state. The x86-64
+SSE baseline stays in the model because CPUID bits can be masked
+(2026-11-17, user). The regression sweep over the compiler's `-march=` values
+plus the native run already fails a snapshot if a name outside the model
+varies; it never supplies states (fixed 2026-11-17 after the AtCoder
 probe found `__SHSTK__` defined on a runner while the sweep-based snapshot
 recorded it as undefined).
 

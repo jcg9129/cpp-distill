@@ -4,11 +4,28 @@
 # https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/config/i386/i386-c.cc
 # https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/c-family/c-cppbuiltin.cc
 # https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/config/i386/driver-i386.cc
-# All target macro spellings plus common FP, atomic, alignment and interference facts.
+# CPU-dependent target macro spellings plus common FP, atomic, alignment and interference facts.
 # isa includes target capability dependencies; tune includes CPU scheduling/cache dependencies.
 # Native feature masks need not match a named CPU; this source audit bounds the inventory.
 # Named-CPU sweeps are regression checks, not the completeness argument.
-_ILP32 isa
+# Audited CPU-independent (not in the model; ordinary snapshot state):
+# __amd64: i386-c.cc:858, TARGET_64BIT
+# __amd64__: i386-c.cc:859, TARGET_64BIT
+# __x86_64: i386-c.cc:860, TARGET_64BIT
+# __x86_64__: i386-c.cc:861, TARGET_64BIT
+# _ILP32: i386-c.cc:864,873, x32 / 32-bit
+# __ILP32__: i386-c.cc:865,874, x32 / 32-bit
+# __code_model_small__: i386-c.cc:505, ix86_cmodel
+# __code_model_medium__: i386-c.cc:509, ix86_cmodel
+# __code_model_large__: i386-c.cc:513, ix86_cmodel
+# __code_model_32__: i386-c.cc:516, ix86_cmodel
+# __code_model_kernel__: i386-c.cc:519, ix86_cmodel
+# __SEG_FS: i386-c.cc:914, unconditional
+# __SEG_GS: i386-c.cc:915, unconditional
+# __SIZEOF_FLOAT128__: i386-c.cc:901, unconditional 16
+# SSE baseline macros (__MMX__, __SSE__, __SSE2__, __FXSR__, __SSE_MATH__,
+# __SSE2_MATH__) stay isa: GCC reads each CPUID bit separately (VMs can mask it).
+# __SIZEOF_FLOAT80__ stays isa pending a layout audit.
 _SOFT_FLOAT isa
 __3dNOW_A__ isa
 __3dNOW__ isa
@@ -113,7 +130,6 @@ __GCC_IEC_559_COMPLEX isa
 __GFNI__ isa
 __HAVE_SPECULATION_SAFE_VALUE isa
 __HRESET__ isa
-__ILP32__ isa
 __KL__ isa
 __LAHF_SAHF__ isa
 __LONG_DOUBLE_128__ isa
@@ -139,14 +155,11 @@ __RDPID__ isa
 __RDRND__ isa
 __RDSEED__ isa
 __RTM__ isa
-__SEG_FS isa
-__SEG_GS isa
 __SERIALIZE__ isa
 __SGX__ isa
 __SHA512__ isa
 __SHA__ isa
 __SHSTK__ isa
-__SIZEOF_FLOAT128__ isa
 __SIZEOF_FLOAT80__ isa
 __SM3__ isa
 __SM4__ isa
@@ -181,8 +194,6 @@ __XSAVES__ isa
 __XSAVE__ isa
 __alderlake isa
 __alderlake__ isa
-__amd64 isa
-__amd64__ isa
 __amdfam10 isa
 __amdfam10__ isa
 __arrowlake isa
@@ -214,11 +225,6 @@ __cascadelake isa
 __cascadelake__ isa
 __clearwaterforest isa
 __clearwaterforest__ isa
-__code_model_32__ isa
-__code_model_kernel__ isa
-__code_model_large__ isa
-__code_model_medium__ isa
-__code_model_small__ isa
 __cooperlake isa
 __cooperlake__ isa
 __core2 isa
@@ -370,8 +376,6 @@ __tune_znver2__ tune
 __tune_znver3__ tune
 __tune_znver4__ tune
 __tune_znver5__ tune
-__x86_64 isa
-__x86_64__ isa
 __yongfeng isa
 __yongfeng__ isa
 __znver1 isa

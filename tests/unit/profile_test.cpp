@@ -155,9 +155,14 @@ TEST(profile_embedded_shipped_atcoder_snapshot) {
   CHECK_EQ(p.snapshotMetadata.dumpmachine, "x86_64-pc-linux-gnu");
   for (const auto* name : {"__linux__", "_OPENMP", "_REENTRANT", "__OPTIMIZE__", "__cpp_modules"})
     CHECK_EQ(p.initialState(name).state, MacroState::known);
-  // Every native-model spelling is unknown under -march=native (design §4.3),
-  // including ABI-fixed ones; an audited ABI scope is a planned refinement.
-  for (const auto* name : {"__x86_64__", "__SSE2__", "__SHSTK__", "__GCC_DESTRUCTIVE_SIZE"}) {
+  // Audited CPU-independent names keep their ordinary snapshot definitions.
+  for (const auto* name : {"__x86_64__", "__code_model_small__"}) {
+    const auto fact = p.initialState(name);
+    CHECK_EQ(fact.state, MacroState::known);
+    CHECK(fact.definition.has_value());
+  }
+  // Every native-model spelling is unknown under -march=native (design §4.3).
+  for (const auto* name : {"__SSE2__", "__SHSTK__", "__GCC_DESTRUCTIVE_SIZE"}) {
     const auto fact = p.initialState(name);
     CHECK_EQ(fact.state, MacroState::unknown);
     CHECK_EQ(fact.provenance, (std::vector{FactOrigin::nativeModel}));
