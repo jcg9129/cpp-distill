@@ -454,6 +454,74 @@ nothing about unlisted names: A4 and A5 remain assumptions. A fact mismatch or
 contradicted assumption on a shipped profile blocks the next release until it
 is investigated; there is no automatic downgrade.
 
+### 4.3.2 Profile maintenance (drift check)
+
+Added 2026-11-17 (user), after a Codex review of the first draft. Three
+separate claims are monitored separately, because success in one says little
+about the others: the judge still matches the profile (**evidence**), the
+pinned toolchain still reproduces the shipped snapshot (**reproduction**), and
+the pinned artifacts are still obtainable (**availability**). None of them
+advances `updated`, which stays the date of the last human review (A4).
+
+**No binary mirror** (user, 2026-11-17). Republishing judge compilers is
+GPL/LGPL redistribution with full corresponding-source obligations for every
+mirrored item (including all Docker layers). Instead acquisition uses durable
+upstreams (exact Ubuntu packages through `snapshot.ubuntu.com` at a recorded
+timestamp, registries by digest, GNU archives) and records exact locks and
+source links. A vanished artifact is an availability issue: shipped snapshots
+stay valid (they are committed); the profile is re-snapshotted from a
+successor artifact by PR, or documented as no longer regenerable.
+
+**Evidence watch.** `data/judges/watch/<profile>.toml` lists each evidence
+source: URL, kind (`deployment`: what the judge runs; `availability`: a package
+or release listing, never evidence of adoption), an extractor
+(`ci/drift/extractors/`, tested against saved pages including changed, missing,
+duplicated and challenge pages) and the expected structured facts (language
+ID, compiler family and version, ordered compile arguments with exact macro
+text, runtime/library notes), plus the original-language excerpt for review.
+Moving deployment URLs are watched; pinned commit URLs stay as historical
+evidence. Each fetch is classified: same facts; different facts (candidate
+drift); extractor failure (zero or multiple matches, missing fields); fetch
+failure (login/challenge page with HTTP 200); evidence unavailable (403,
+timeout, rate limit). Only "same facts" counts as a pass. A source unavailable
+for four consecutive weekly windows becomes a manual-review issue with a
+deadline; it is never silently green.
+
+**Availability.** Every pinned artifact is fully downloaded (registry index,
+selected child manifest and blobs for images) and its digest verified; Ubuntu
+packages through the pinned snapshot URL. Metadata reachability alone is not a
+pass. A digest mismatch is an integrity alert.
+
+**Reproduction** (monthly, and on demand). `profiles.yml` regenerates every
+profile from a cold start; outputs must be byte-identical to the shipped files.
+No normalization is applied (reruns of Kattis, Codeforces and both
+Linux runner paths were byte-identical on 2026-11-17, runner paths included).
+Native-model names are already `unknown` in snapshots, so host CPUs do not
+enter them; a sweep or host-check failure is a reproduction failure. Any other
+difference, a skipped probe, or a missing artifact is a failure, never a pass.
+
+**Schedule.** Evidence and availability weekly; reproduction monthly; both by
+`workflow_dispatch` too. Fetch, download and build jobs have read-only
+permissions and treat fetched text and binaries as untrusted data (never
+interpolated into shell or scripts). A separate reporting job alone has
+`issues: write`.
+
+**Reporting.** One issue per profile and claim (`drift: <profile>:
+evidence|availability|reproduction`), plus one aggregated issue when a shared
+upstream (Homebrew, GitHub, Docker Hub) fails for several profiles. The issue
+body carries a machine-readable state block (consecutive failures per source,
+last success), so history survives ephemeral runners. Comments only on state
+transitions. Availability issues close automatically after a verified
+recovery; evidence and reproduction issues stay open until a human closes
+them. A cancelled, skipped or partial run changes no state. Runs are serialized
+(`concurrency`).
+
+**Heartbeat.** GitHub disables schedules in public repositories after 60 days
+without activity, so the run cannot vouch for itself. The user-side signal is
+independent of CI: `distill --judge X` prints a stderr note when the profile's
+`updated` is older than 180 days, suggesting `--judge-check` (§4.3.1). It does
+not change any fact or exit code.
+
 ### 4.4 Inliner (text level)
 
 Textual substitution, not preprocessing:
