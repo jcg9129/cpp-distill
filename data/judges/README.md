@@ -199,6 +199,8 @@ run detects startup headers from line markers (not `-H`); only `stdc-predef.h`
 is accepted. Its definitions are marked as header facts. All special registry
 names are probed with `#ifdef` under that same argv. The x86 native model cites
 GCC's target, common frontend and native-driver source for each audited release.
+Names audited as depending only on ABI options or nothing, listed in the model
+file header, are outside the model and keep their ordinary snapshot state.
 For native flags, the compiler's option diagnostic supplies every CPU spelling;
 each ABI-compatible `-march`/`-mtune` combination replaces native **in place**,
 retaining later options and macro operations. Any variation outside the model

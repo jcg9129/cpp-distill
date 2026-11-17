@@ -123,7 +123,7 @@ def join_native(dumps, model, tune_only=False, fixed=frozenset()):
     return result
 
 
-def native_runs(compiler, argv, empty, model):
+def native_runs(compiler, argv, empty, model, host=None):
     indices = [i for i, f in enumerate(argv) if f in ('-march=native', '-mtune=native', '-mcpu=native')]
     if not indices:
         return {}, []
@@ -142,6 +142,9 @@ def native_runs(compiler, argv, empty, model):
             raise
         dumps.append(dump)
         accepted.append(command)
+    # The native run on this host joins the regression check: a name outside
+    # the model that differs from the sweep is a model error (design §4.3).
+    checked = dumps + [host] if host is not None and dumps else dumps
     # -D/-U operations apply after the target's builtins, on every CPU.
     fixed, pending = set(), False
     for f in argv:
@@ -151,7 +154,7 @@ def native_runs(compiler, argv, empty, model):
             pending = True
         elif f.startswith(('-D', '-U')):
             fixed.add(re.split(r'[(=]', f[2:], maxsplit=1)[0])
-    return join_native(dumps, model, '-march' not in options, frozenset(fixed)), accepted
+    return join_native(checked, model, '-march' not in options, frozenset(fixed)), accepted
 
 
 def capture(profile_file, compiler, reproduced_build=None):
@@ -199,7 +202,7 @@ def capture(profile_file, compiler, reproduced_build=None):
         macros = inventory(run(compiler, *argv, '-dM', '-E', str(empty)))
         origins = startup_origins(run(compiler, *argv, '-dD', '-E', str(empty)), empty)
         probes = probe(compiler, argv, Path(directory) / 'probe.cpp', builtins) if builtins else {}
-        joined, accepted = native_runs(compiler, argv, empty, model)
+        joined, accepted = native_runs(compiler, argv, empty, model, macros)
     if '__clang__' in macros:
         raise ValueError('Clang is not GCC')
     # Independently identify the binary; effective -D/-U may override identity macros.

@@ -155,9 +155,14 @@ TEST(profile_embedded_shipped_atcoder_snapshot) {
   CHECK_EQ(p.snapshotMetadata.dumpmachine, "x86_64-pc-linux-gnu");
   for (const auto* name : {"__linux__", "_OPENMP", "_REENTRANT", "__OPTIMIZE__", "__cpp_modules"})
     CHECK_EQ(p.initialState(name).state, MacroState::known);
-  // Every native-model spelling is unknown under -march=native (design §4.3),
-  // including ABI-fixed ones; an audited ABI scope is a planned refinement.
-  for (const auto* name : {"__x86_64__", "__SSE2__", "__SHSTK__", "__GCC_DESTRUCTIVE_SIZE"}) {
+  // Audited CPU-independent names keep their ordinary snapshot definitions.
+  for (const auto* name : {"__x86_64__", "__code_model_small__"}) {
+    const auto fact = p.initialState(name);
+    CHECK_EQ(fact.state, MacroState::known);
+    CHECK(fact.definition.has_value());
+  }
+  // Every native-model spelling is unknown under -march=native (design §4.3).
+  for (const auto* name : {"__SSE2__", "__SHSTK__", "__GCC_DESTRUCTIVE_SIZE"}) {
     const auto fact = p.initialState(name);
     CHECK_EQ(fact.state, MacroState::unknown);
     CHECK_EQ(fact.provenance, (std::vector{FactOrigin::nativeModel}));
@@ -637,7 +642,7 @@ TEST(profile_digest_sha256_vectors_and_exact_input_bytes) {
   CHECK_EQ(lookupProfile("codeforces").value().provenance.contentDigest,
            "95171947eee3866811e9991b7bb409663dd3bbf2a26583ab4901f45723dc1668");
   CHECK_EQ(lookupProfile("atcoder").value().provenance.contentDigest,
-           "87f950dd750954b4c12f0636eeb351083803d5e512cb624b2dcef2ae5536e205");
+           "26a21770a045edf07df92a474347be1b16e7fcd0fbe0d4ebf206ac157585e14a");
   const auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
   const auto snapshot = test::read(profileFixture("mingw-predefined.txt"));
   auto p = synthetic(text); CHECK(p.ok()); if (!p.ok()) return;

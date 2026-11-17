@@ -240,6 +240,16 @@ predefined = "fixture-predefined.txt"
         self.assertEqual(joined['A'], ('unknown', None))  # CPU-derived: never taken from the sweep
         self.assertEqual(native_runs('unused', ['-O2'], None, {}), ({}, []))
 
+    def test_native_host_run_joins_regression_check(self):
+        dump = lambda compiler, *args: '#define CPU 7\n#define ABI 1\n'
+        with patch('snapshot.cpu_values', return_value=['cpu1']), patch('snapshot.run', side_effect=dump):
+            joined, _ = native_runs('g++', ['-march=native'], Path('/empty.cpp'), {'CPU': 'isa'},
+                                    {'CPU': '#define CPU 8', 'ABI': '#define ABI 1'})
+            self.assertEqual(joined['CPU'], ('unknown', None))
+            with self.assertRaisesRegex(ValueError, 'native dependency model error: ABI'):
+                native_runs('g++', ['-march=native'], Path('/empty.cpp'), {'CPU': 'isa'},
+                            {'CPU': '#define CPU 7', 'ABI': '#define ABI 2'})
+
     def test_cpu_values_uses_compilers_complete_list(self):
         diagnostic = "cc1plus: note: valid arguments to ‘-march=’ switch are: a b native c; did you mean a?\n"
         with patch('snapshot.subprocess.run', return_value=subprocess.CompletedProcess([], 1, '', diagnostic)):
