@@ -32,7 +32,8 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
 | D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
 | D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
-| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42), Library Checker (#44) shipped; Luogu, Timus remain (see D6 section) |
+| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42), Library Checker (#44), Timus (#48) shipped; Luogu parked (see D6 section) |
+| Profile maintenance | design §4.3.2; drift check (weekly evidence/availability, monthly reproduction) in the drift PR; no binary mirror |
 
 ## D1 findings (2026-11-15)
 
@@ -399,8 +400,6 @@ Remaining D6c profiles, in this order; research in
 1. Luogu: GCC 15.3.0 from Nix flake `luogu-dev/judge-env` (live rev
    unconfirmed); patched GCC disables `#pragma`/`__attribute__` optimize;
    `-march=native`.
-2. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
-   WinLibs release and CRT (UCRT/MSVCRT) unknown.
 
 Done 2026-11-17 (user decisions):
 
@@ -472,7 +471,36 @@ model's HARMLESS options include some that change predefined macros
 `-pedantic`). Probably safe because local configurations are probed and the
 `-O` names are feature names, but check that every such fact is invalidated.
 
-Next: Timus (item 2 above).
+Timus (#48, `b262327`, 2026-11-17): `timus-gcc13-cpp23` (alias `timus`),
+approximate. A live probe by the user (compilation-error log of a failing
+submission to problem 1000 with `#pragma message` lines) confirmed strict
+C++23 (`__cplusplus` 202100L, `__STRICT_ANSI__`), UCRT (`__MSVCRT_VERSION__`
+0xE00), MinGW-w64 11.0.1, POSIX threads, SEH; no AVX2/AVX-512/SHSTK on that
+host (observation only). Snapshot compiler: WinLibs
+`13.2.0posix-17.0.6-11.0.1-ucrt-r4` zip by sha256 (new snapshot-only
+`winlibs` provenance). New audited GCC 13.2 native model (checked against
+`i386-c.cc`) and builtin registry (17 names). The compilation-error channel is
+the way to probe Timus.
+
+`__cpp_lib_*` regression tests (#47): no bug; reserved-name invalidation
+already makes header-defined feature macros unknown after system includes.
+Shipped-profile resolve cases must avoid arithmetic `#if` (the test GCC
+oracle cannot represent other platforms' integer models).
+
+Profile maintenance (2026-11-17, design §4.3.2, user decisions): drift check
+with weekly evidence watch (`data/judges/watch/`, extractors in
+`ci/drift/extractors/`) and availability (full digest-verified downloads),
+monthly cold reproduction with byte equality, per-profile/claim issues with a
+state block; CLI note after 180 days without review. No binary mirror (GPL
+corresponding-source burden); Ubuntu packages come from `snapshot.ubuntu.com`
+(timestamps in `ci/profiles/ubuntu-snapshots.txt`; CSES/QOJ reruns
+byte-identical). `drift.yml` can first run after merge (workflow_dispatch on
+main).
+
+Next: macOS auto-retry workflow for jobs cancelled before any step (user
+asked; at most two reruns), then the user-facing README rewrite (quick start,
+judge table, troubleshooting; provenance prose moves to data/judges/README.md;
+Codex writes, Claude reviews against the CLI).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
