@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. Patch .0 is the profile’s documented inference from the 14.2 release label; no language ID is published.
+schema = 1
+
+[[sources]]
+id = "codeforces"
+url = "https://codeforces.com/blog/entry/133046?mobile=false"
+kind = "deployment"
+extractor = "codeforces"
+excerpt = "GNU G++23 14.2 (64 bit, msys2)\nYour solutions will be compiled using the following command line: g++ -Wall -Wextra -Wconversion -static -DONLINE_JUDGE -Wl,--stack=268435456 -O2 -std=c++23 program.cpp -lstdc++exp"
+[sources.expected]
+language_id = "GNU G++23 14.2 (64 bit, msys2)"
+compiler_family = "gcc"
+compiler_version = "14.2.0"
+compile_arguments = ["g++", "-Wall", "-Wextra", "-Wconversion", "-static", "-DONLINE_JUDGE", "-Wl,--stack=268435456", "-O2", "-std=c++23", "program.cpp", "-lstdc++exp"]
+runtime_notes = []
+library_notes = []
+language_label = "GNU G++23 14.2 (64 bit, msys2)"

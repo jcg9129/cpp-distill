@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. PJudge is a mirror per the profile research, not independently authenticated. Preserve the published XX template; C++23 is explicitly listed. No form ID is known.
+schema = 1
+
+[[sources]]
+id = "qoj"
+url = "https://qoj.ac/blog/221"
+kind = "deployment"
+extractor = "qoj"
+excerpt = "All C++ submissions are compiled using GCC 15.2.0.\ng++ -o answer -x c++ answer.code -lm -O2 -DONLINE_JUDGE -std=c++XX\nThe -std=c++XX flag will be set according to your chosen standard (98, 11, 14, 17, 20, 23, or 26).\nOS: Ubuntu 26.04.1 LTS\nCPU: Intel(R) Xeon(R) Platinum 8573C"
+[sources.expected]
+language_id = "C++23"
+compiler_family = "gcc"
+compiler_version = "15.2.0"
+compile_arguments = ["g++", "-o", "answer", "-x", "c++", "answer.code", "-lm", "-O2", "-DONLINE_JUDGE", "-std=c++XX"]
+runtime_notes = ["OS: Ubuntu 26.04.1 LTS", "CPU: Intel(R) Xeon(R) Platinum 8573C"]
+library_notes = []
+language_label = "C++23"
+
+[[sources]]
+id = "pjudge"
+url = "https://pjudge.ac/blog/221"
+kind = "deployment"
+extractor = "qoj"
+excerpt = "All C++ submissions are compiled using GCC 15.2.0.\ng++ -o answer -x c++ answer.code -lm -O2 -DONLINE_JUDGE -std=c++XX\nThe -std=c++XX flag will be set according to your chosen standard (98, 11, 14, 17, 20, 23, or 26).\nOS: Ubuntu 26.04.1 LTS\nCPU: Intel(R) Xeon(R) Platinum 8573C"
+[sources.expected]
+language_id = "C++23"
+compiler_family = "gcc"
+compiler_version = "15.2.0"
+compile_arguments = ["g++", "-o", "answer", "-x", "c++", "answer.code", "-lm", "-O2", "-DONLINE_JUDGE", "-std=c++XX"]
+runtime_notes = ["OS: Ubuntu 26.04.1 LTS", "CPU: Intel(R) Xeon(R) Platinum 8573C"]
+library_notes = []
+language_label = "C++23"

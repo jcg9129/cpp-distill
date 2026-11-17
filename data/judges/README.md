@@ -637,7 +637,8 @@ However, `--judge-probe` currently emits runtime stdout with manifests, hex
 encoding and checksums. It cannot be used unchanged through compilation-error
 logs, nor can manual pragma messages be passed to `--judge-check` as protocol
 output. A full runtime probe match on Timus and its output retrieval remain
-UNVERIFIED. Both snapshot and expected-output artifacts await branch CI.
+UNVERIFIED. Both snapshot and expected-output artifacts are shipped and included
+in monthly reproduction comparisons.
 
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,
@@ -759,3 +760,46 @@ for review; they are evidence, not authenticated execution. Updating observation
 or expectations does not change a profile digest. Rebuild to display newly
 stored observations. User profiles use the same embedded observations only when
 their name and digest match.
+
+## Maintenance
+
+The serialized [profile maintenance workflow](../../.github/workflows/drift.yml)
+checks evidence and complete artifact downloads weekly, and regenerates profiles
+from a cold start monthly. Dispatch can select claims and full profile names.
+All nine shipped profiles, including Timus, participate in availability,
+reproduction and evidence checks. Timus availability downloads the complete
+pinned WinLibs zip and verifies its SHA-256 without extraction or compiler
+execution. Monthly reproduction compares both Timus outputs byte for byte,
+and its evidence watch compares the published Russian C/C++ help page.
+Issues named `drift: <profile>: evidence|availability|reproduction` describe
+separate claims: deployment/listing facts, obtainability with digest verification,
+and byte equality with both shipped snapshot and probe output. Shared host
+outages also appear in `drift: upstream: <host>`. Read the per-source status,
+last success and failure counters in the body; only `same facts` passes evidence.
+Listing availability never proves judge adoption. Closed tracking issues retain
+state; do not delete their machine-readable comments. Availability alerts close
+after verified recovery; evidence/reproduction alerts require human closure.
+Four unavailable weekly windows require manual review by the recorded deadline.
+
+Investigate changes against the original-language sources and run a judge probe
+where possible. If the acquisition artifact vanished, submit a re-snapshot PR
+using a successor artifact, documenting provenance and reviewing all byte
+changes, or mark the profile **not regenerable** with the reason in its profile
+comments and this README. Committed snapshots remain usable. A judge compiler or
+option upgrade gets a **new profile name**; preserve the old name's meaning and
+document alias moves. Do not refresh `updated` for an automated pass: it records
+human review. The CLI suggests `--judge-check` after more than 180 days.
+
+The [framework documentation](../../ci/drift/README.md) defines watch/result
+schemas, the extractor interface and issue state model. After a reviewed profile
+change, update its `watch/<profile>.toml` expectations and original-language
+excerpt from the moving deployment source, retaining exact argument order,
+duplicates and macro text. New shipped profiles must have availability plans,
+both reproduction outputs and evidence watches; tests derive required coverage
+from `data/judges/*.toml`. Refresh the dated parser fixture and its changed,
+missing, duplicated and challenge variants, run
+`python3 -m unittest discover -s ci/drift -p 'test_*.py'`, then run
+`python3 ci/drift/evidence.py --output results/evidence.json` and review every
+source classification. Keep availability listings separate from judge adoption;
+never adjust expectations solely to make an automated drift result pass.
+Ubuntu acquisition uses [recorded snapshot timestamps](../../ci/profiles/ubuntu-snapshots.md).

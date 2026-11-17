@@ -123,6 +123,7 @@ int run(const std::vector<std::string>& args) {
     profile = take(lookupProfile(*parsed.judge, lookup));
     for (const auto& warning : profile->warnings) std::cerr << warning << '\n';
     std::cerr << profileSelectionLine(*profile);
+    std::cerr << profileStalenessNote(*profile);
   }
   const auto cwd = std::filesystem::current_path();
   const auto command = take(parseCompileCommand(parsed.compile, cwd));

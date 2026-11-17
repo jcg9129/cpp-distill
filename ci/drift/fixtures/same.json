@@ -1,0 +1,1 @@
+{"entries": [{"language_id": "42", "compiler_family": "gcc", "compiler_version": "15.2.0", "compile_arguments": ["-std=gnu++23", "-DNAME=\"exact text\"", "-O2"], "runtime_notes": ["Linux amd64"], "library_notes": ["libstdc++"]}]}

@@ -27,7 +27,7 @@ class WinlibsTests(unittest.TestCase):
                         winlibs.download(destination)
                         self.assertEqual(destination.read_bytes(), payload)
                     else:
-                        with self.assertRaisesRegex(ValueError, 'SHA-256 mismatch'):
+                        with self.assertRaisesRegex(winlibs.DigestError, 'SHA-256 mismatch'):
                             winlibs.download(destination)
                         self.assertFalse(destination.exists())
                     fetch.assert_called_once_with(winlibs.URL, timeout=60)

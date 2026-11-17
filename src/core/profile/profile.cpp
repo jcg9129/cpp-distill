@@ -356,6 +356,16 @@ std::string renderProfileList(const ProfileCatalog& catalog) {
 std::string profileSelectionLine(const Profile& profile) {
   return "judge: " + profile.provenance.selector + " -> " + profile.name + "\n";
 }
+std::string profileStalenessNote(const Profile& profile, std::chrono::sys_days today) {
+  const auto& date = profile.provenance.updated; // Already calendar-validated by parseProfile.
+  const std::chrono::year_month_day reviewed{std::chrono::year{std::stoi(date.substr(0, 4))},
+      std::chrono::month{static_cast<unsigned>(std::stoi(date.substr(5, 2)))},
+      std::chrono::day{static_cast<unsigned>(std::stoi(date.substr(8, 2)))}};
+  const auto age = (today - std::chrono::sys_days{reviewed}).count();
+  if (age <= 180) return {};
+  return "distill: note: judge profile " + profile.name + " was last reviewed " + date +
+      " (" + std::to_string(age) + " days ago); consider --judge-check\n";
+}
 Result<Profile> lookupProfile(std::string_view nameOrFile, const ProfileLookup& lookup, const ProfileFiles& embedded) {
   try {
     if (nameOrFile.find_first_of("/\\") != nameOrFile.npos || nameOrFile.ends_with(".toml")) {

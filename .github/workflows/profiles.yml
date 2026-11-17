@@ -1,6 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 name: Judge macro snapshots
 on:
+  workflow_call:
+    inputs:
+      profiles:
+        description: all, or comma-separated full profile names
+        type: string
+        default: all
+        required: false
+      cold_start:
+        description: Ignore the AtCoder compiler cache for maintenance reproduction
+        type: boolean
+        default: true
+        required: false
   workflow_dispatch:
     inputs:
       profiles:
@@ -83,12 +95,12 @@ jobs:
           curl --fail --location --retry 3 https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml -o atcoder-published.toml
           echo "$(cat ci/profiles/atcoder-recipe.sha256)  atcoder-published.toml" | sha256sum --check
       - name: Cache GCC built from AtCoder recipe
-        if: matrix.acquisition == 'atcoder'
+        if: matrix.acquisition == 'atcoder' && inputs.cold_start != true
         id: gcc-cache
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: ${{ github.workspace }}/out/atcoder-gcc
-          key: atcoder-gcc-ubuntu-24.04-${{ hashFiles('ci/profiles/atcoder-recipe.sh', 'ci/profiles/atcoder-recipe.sha256') }}
+          key: atcoder-gcc-ubuntu-24.04-${{ hashFiles('ci/profiles/atcoder-recipe.sh', 'ci/profiles/atcoder-recipe.sha256', 'ci/profiles/atcoder-source.sha512') }}
       - name: Build GCC 15.2.0 with AtCoder configure options
         if: matrix.acquisition == 'atcoder' && steps.gcc-cache.outputs.cache-hit != 'true'
         run: |

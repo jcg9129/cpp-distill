@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. C++23 identifies the published flags option, not an unverified submission-form ID; no full command is published.
+schema = 1
+
+[[sources]]
+id = "cses"
+url = "https://cses.fi/howto"
+kind = "deployment"
+extractor = "cses"
+excerpt = "C++\ng++ 13.3.0\n-std=c++23 -O2 -Wall"
+[sources.expected]
+language_id = "C++23"
+compiler_family = "gcc"
+compiler_version = "13.3.0"
+compile_arguments = ["-std=c++23", "-O2", "-Wall"]
+runtime_notes = []
+library_notes = []
+language_label = "C++23"

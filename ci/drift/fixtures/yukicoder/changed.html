@@ -1,0 +1,269 @@
+<h4 class="shadow">実行OS環境</h4>
+        <p>
+            Ubuntu 25.04 (Plucky)<br>
+        </p>
+        <table class="table">
+            <thead>
+            <tr>
+                <th>言語</th>
+                <th>バージョン</th>
+                <th>言語ID</th>
+                <th>コンパイルコマンド</th>
+                <th>コンパイル内部コマンド</th>
+                <th>実行コマンド</th>
+                <th>実行内部コマンド</th>
+            </tr>
+            </thead>
+            <tbody>
+            
+
+            <tr>
+                <td>C&#43;&#43;23(gcc16)</td>
+                <td>gcc 99.9.9 &#43; boost 1.92.0 &#43; ACL</td>
+                <td>cpp23_gcc16</td>
+                <td>g&#43;&#43;-16 -O2 -fplugin=/usr/lib/yukicoder/noavx512-gcc16.so -lm -std=c&#43;&#43;23 -Wuninitialized -DONLINE_JUDGE -o a.out _filename_</td>
+                <td></td>
+                <td>./a.out</td>
+                <td></td>
+            </tr>
+
+            
+
+            <tr>
+                <td>C&#43;&#43;23(gnu拡張gcc16)</td>
+                <td>gcc 99.9.9 &#43; boost 1.92.0 &#43; ACL</td>
+                <td>cpp23_gnu_gcc16</td>
+                <td>g&#43;&#43;-16 -O2 -fplugin=/usr/lib/yukicoder/noavx512-gcc16.so -lm -std=gnu&#43;&#43;23 -Wuninitialized -DONLINE_JUDGE -o a.out _filename_</td>
+                <td></td>
+                <td>./a.out</td>
+                <td></td>
+            </tr>
+
+            
+
+            <tr>
+                <td>C&#43;&#43;23</td>
+                <td>gcc 15.3.0 &#43; boost 1.92.0 &#43; ACL</td>
+                <td>cpp23</td>
+                <td>g&#43;&#43;-15 -O2 -fplugin=/usr/lib/yukicoder/noavx512-gcc15.so -lm -std=c&#43;&#43;23 -Wuninitialized -DONLINE_JUDGE -o a.out _filename_</td>
+                <td></td>
+                <td>./a.out</td>
+                <td></td>
+            </tr>
+</tbody></table>
+<pre>&#43; g&#43;&#43; --version
+g&#43;&#43; (Ubuntu 14.2.0-19ubuntu2) 14.2.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; gcc --version
+gcc (Ubuntu 14.2.0-19ubuntu2) 14.2.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; g&#43;&#43;-16 --version
+g&#43;&#43;-16 (Homebrew GCC 99.9.9) 99.9.9
+Copyright (C) 2026 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; g&#43;&#43;-15 --version
+g&#43;&#43;-15 (Homebrew GCC 15.3.0) 15.3.0
+Copyright (C) 2025 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; g&#43;&#43;-12 --version
+g&#43;&#43;-12 (Ubuntu 12.4.0-5ubuntu1) 12.4.0
+Copyright (C) 2022 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; gcc-15 --version
+gcc-15 (Homebrew GCC 15.3.0) 15.3.0
+Copyright (C) 2025 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; gcc-12 --version
+gcc-12 (Ubuntu 12.4.0-5ubuntu1) 12.4.0
+Copyright (C) 2022 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+&#43; clang&#43;&#43; --version
+Homebrew clang version 23.1.5
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /home/linuxbrew/.linuxbrew/Cellar/llvm/23.1.5_1/bin
+&#43; awk &#39;/^#define BOOST_VERSION / {v = $3; printf &#34;boost %d.%d.%d\n&#34;, int(v / 100000), int(v / 100) % 1000, v % 100}&#39; /usr/local/include/boost/version.hpp
+boost 1.92.0
+&#43; java -version
+openjdk version &#34;27.0.1.0.3&#34; 2026-10-24
+OpenJDK Runtime Environment Homebrew (build 27.0.1.0.3)
+OpenJDK 64-Bit Server VM Homebrew (build 27.0.1.0.3, mixed mode, sharing)
+&#43; dotnet --version
+10.0.404
+&#43; csc -version
+&#43; head -n2
+3.9.0-6.21124.20 (db94f4cc)
+&#43; mono --version
+&#43; head -n2
+Mono JIT compiler version 6.12.0.200 (tarball Tue Jul 11 21:37:50 UTC 2023)
+Copyright (C) 2002-2014 Novell, Inc, Xamarin Inc and Contributors. www.mono-project.com
+&#43; mcs --version
+&#43; head -n2
+Mono C# compiler version 6.12.0.200
+&#43; perl -version
+&#43; head -n2
+
+This is perl 5, version 44, subversion 0 (v5.44.0) built for x86_64-linux-thread-multi
+&#43; raku -version
+Welcome to Rakudo™ v2026.09.
+Implementing the Raku® Programming Language v6.d.
+Built on MoarVM version 2026.09.
+&#43; php --version
+PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)
+Copyright (c) The PHP Group
+Built by Homebrew
+Zend Engine v4.5.12, Copyright (c) Zend Technologies
+    with Zend OPcache v8.5.12, Copyright (c), by Zend Technologies
+&#43; python2x --version
+Python 2.7.18
+&#43; python3 --version
+Python 3.15.2
+&#43; cat
+&#43; python3 ver.py
+numpy: 2.5.4
+scipy: 1.18.1
+&#43; pypy2 --version
+Python 2.7.18 (c8e5dc4b395b, Jul 03 2025, 08:04:34)
+[PyPy 7.3.20 with GCC 10.2.1 20210130 (Red Hat 10.2.1-11)]
+&#43; pypy3 --version
+Python 3.12.15 (d90944c94ad6, Oct 21 2026, 06:13:18)
+[PyPy 8.0.1 with GCC 13.3.0]
+&#43; ruby --version
+ruby 4.0.9 (2026-10-23 revision 3e93b23afc) &#43;PRISM [x86_64-linux]
+&#43; dmd --version
+DMD64 D Compiler v2.114.0
+Copyright (C) 1999-2026 by The D Language Foundation, All Rights Reserved written by Walter Bright
+&#43; go version
+go version go1.27.4 linux/amd64
+&#43; ghc --version
+The Glorious Glasgow Haskell Compilation System, version 9.14.1
+&#43; scalac -version
+Scala compiler version 3.10.1 -- Copyright 2002-2026, LAMP/EPFL
+&#43; nim --version
+&#43; head -n2
+Nim Compiler Version 2.4.0 [Linux: amd64]
+Compiled at 2026-10-28
+&#43; rustc --version
+rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)
+&#43; kotlinc -version
+info: kotlinc-jvm 2.4.21 (JRE 27.0.1.0.3)
+&#43; gosh -V
+Gauche scheme shell, version 0.9.15 [utf-8,pthreads], x86_64-pc-linux-gnu
+(version &#34;0.9.15&#34;)
+(command &#34;gosh&#34;)
+(scheme.id gauche)
+(languages scheme r5rs r7rs)
+(encodings utf-8)
+(website &#34;https://practical-scheme.net/gauche&#34;)
+(build.platform &#34;x86_64-pc-linux-gnu&#34;)
+(build.configure &#34;--enable-multibyte=utf-8&#34; &#34;--with-ca-bundle=/home/linuxbrew/.linuxbrew/share/ca-certificates/cacert.pem&#34; &#34;--disable-debug&#34; &#34;--disable-dependency-tracking&#34; &#34;--prefix=/home/linuxbrew/.linuxbrew/Cellar/gauche/0.9.15_1&#34; &#34;--libdir=/home/linuxbrew/.linuxbrew/Cellar/gauche/0.9.15_1/lib&#34; &#34;CC=gcc-12&#34;)
+(scheme.path &#34;/home/linuxbrew/.linuxbrew/Cellar/gauche/0.9.15_1/share/gauche-0.98/site/lib&#34; &#34;/home/linuxbrew/.linuxbrew/Cellar/gauche/0.9.15_1/share/gauche-0.98/0.9.15/lib&#34;)
+(threads pthreads)
+(gauche.net.tls mbedtls)
+&#43; crystal -v
+Crystal 1.22.3 (2026-11-13)
+
+LLVM: 23.1.5
+Default target: x86_64-unknown-linux-gnu
+&#43; swiftc --version
+Swift version 6.4.2 (swift-6.4.2-RELEASE)
+Target: x86_64-unknown-linux-gnu
+&#43; ocamlfind ocamlopt -version
+ocamlfind: [WARNING] Cannot read directory ./stublibs which is mentioned in ld.conf
+5.5.2
+&#43; clojure -e &#39;(clojure-version)&#39;
+WARNING: Implicit use of clojure.main with options is deprecated, use -M -e (clojure-version)
+&#34;1.12.6&#34;
+&#43; dotnet fsi --version
+
+Welcome to .NET 10.0!
+---------------------
+SDK Version: 10.0.404
+
+Telemetry
+---------
+The .NET tools collect usage data in order to help us improve your experience. It is collected by Microsoft and shared with the community. You can opt-out of telemetry by setting the DOTNET_CLI_TELEMETRY_OPTOUT environment variable to &#39;1&#39; or &#39;true&#39; using your favorite shell.
+
+Read more about .NET CLI Tools telemetry: https://aka.ms/dotnet-cli-telemetry
+
+----------------
+Installed an ASP.NET Core HTTPS development certificate.
+To trust the certificate, run &#39;dotnet dev-certs https --trust&#39;
+Learn about HTTPS: https://aka.ms/dotnet-https
+
+----------------
+Write your first app: https://aka.ms/dotnet-hello-world
+Find out what&#39;s new: https://aka.ms/dotnet-whats-new
+Explore documentation: https://aka.ms/dotnet-docs
+Report issues and find source on GitHub: https://github.com/dotnet/core
+Use &#39;dotnet --help&#39; to see available commands or visit: https://aka.ms/dotnet-cli
+--------------------------------------------------------------------------------------
+Microsoft (R) F# Interactive version 15.2.404.0 for F# 10.0
+&#43; luajit -v
+LuaJIT 2.1.1794386141 -- Copyright (C) 2005-2026 Mike Pall. https://luajit.org/
+&#43; julia --version
+julia version 1.13.3
+&#43; gfortran-16 --version
+&#43; head -n2
+GNU Fortran (Homebrew GCC 99.9.9) 99.9.9
+Copyright (C) 2026 Free Software Foundation, Inc.
+&#43; node --version
+v26.13.1
+&#43; tsc --version
+Version 7.0.2
+&#43; bun --version
+1.4.3
+&#43; fix --version
+fix 1.6.1 (62aba7e)
+&#43; sbcl --version
+SBCL 2.6.10
+&#43; mlton_wrapper
+MLton 20241230
+&#43; vim --version
+&#43; head -n2
+VIM - Vi IMproved 9.2 (2026 Feb 14, compiled Nov 12 2026 20:17:39)
+Included patches: 1-1342
+&#43; bash --version
+&#43; head -n2
+GNU bash, version 5.2.37(1)-release (x86_64-pc-linux-gnu)
+Copyright (C) 2022 Free Software Foundation, Inc.
+&#43; cat --version
+&#43; head -n2
+cat (GNU coreutils) 9.5
+Copyright (C) 2024 Free Software Foundation, Inc.
+&#43; elixir -v
+warning: the VM is running with native name encoding of latin1 which may cause Elixir to malfunction as it expects utf8. Please ensure your locale is set to UTF-8 (which can be verified by running &#34;locale&#34; in your shell) or set the ELIXIR_ERL_OPTIONS=&#34;&#43;fnu&#34; environment variable
+Erlang/OTP 29 [erts-17.1.1] [source] [64-bit] [smp:2:2] [ds:2:2:10] [async-threads:1] [jit:ns]
+
+Elixir 1.20.5 (compiled with Erlang/OTP 29)
+&#43; /usr/bin/kuinc_core -v
+Kuin Programming Language v.2021.9.17
+(C)Kuina-chan
+&#43; nasm -v
+NASM version 3.02 compiled on Jun 29 2026
+&#43; echo &#39;&#39;
+&#43; sed -n 9p
+&#43; clay
+// cLay version 20250308-1
+&#43;&#43; sed -n &#39;s/^version = &#34;\(.*\)&#34;/\1/p&#39; /whitespace-rs/Cargo.toml
+&#43;&#43; head -1
+&#43;&#43; git -C /whitespace-rs log -1 &#39;--format=%h %cd&#39; --date=short
+&#43; echo &#39;whitespacers 1.3.0 (5e496ec 2025-03-18)&#39;
+whitespacers 1.3.0 (5e496ec 2025-03-18)
+</pre>

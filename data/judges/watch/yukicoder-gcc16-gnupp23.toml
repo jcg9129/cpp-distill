@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. Keep the published plugin argument although the approximate snapshot omits it. Homebrew listing is not judge adoption.
+schema = 1
+
+[[sources]]
+id = "yukicoder"
+url = "https://yukicoder.me/help/environments"
+kind = "deployment"
+extractor = "yukicoder"
+excerpt = "実行OS環境 Ubuntu 25.04 (Plucky)\n言語 C++23(gnu拡張gcc16)\nバージョン gcc 16.2.0 + boost 1.92.0 + ACL\n言語ID cpp23_gnu_gcc16\nコンパイルコマンド g++-16 -O2 -fplugin=/usr/lib/yukicoder/noavx512-gcc16.so -lm -std=gnu++23 -Wuninitialized -DONLINE_JUDGE -o a.out _filename_\n実行コマンド ./a.out\ng++-16 (Homebrew GCC 16.2.0) 16.2.0"
+[sources.expected]
+language_id = "cpp23_gnu_gcc16"
+compiler_family = "gcc"
+compiler_version = "16.2.0"
+compile_arguments = ["g++-16", "-O2", "-fplugin=/usr/lib/yukicoder/noavx512-gcc16.so", "-lm", "-std=gnu++23", "-Wuninitialized", "-DONLINE_JUDGE", "-o", "a.out", "_filename_"]
+runtime_notes = ["Ubuntu 25.04 (Plucky)", "./a.out", "g++-16 (Homebrew GCC 16.2.0) 16.2.0"]
+library_notes = ["boost 1.92.0 + ACL"]
+language_label = "C++23(gnu拡張gcc16)"
+
+[[sources]]
+id = "homebrew"
+url = "https://formulae.brew.sh/api/formula/gcc.json"
+kind = "availability"
+extractor = "homebrew"
+excerpt = "\"name\":\"gcc\", \"versions\":{\"stable\":\"16.2.0\"}, \"revision\":0; bottle stable rebuild 1; x86_64_linux sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922"
+[sources.expected]
+language_id = "gcc"
+compiler_family = "gcc"
+compiler_version = "16.2.0"
+compile_arguments = []
+runtime_notes = ["revision 0", "bottle rebuild 1", "x86_64_linux sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922"]
+library_notes = []
