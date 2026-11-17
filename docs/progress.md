@@ -497,10 +497,22 @@ corresponding-source burden); Ubuntu packages come from `snapshot.ubuntu.com`
 byte-identical). `drift.yml` can first run after merge (workflow_dispatch on
 main).
 
-Next: macOS auto-retry workflow for jobs cancelled before any step (user
-asked; at most two reruns), then the user-facing README rewrite (quick start,
-judge table, troubleshooting; provenance prose moves to data/judges/README.md;
-Codex writes, Claude reviews against the CLI).
+Done 2026-11-17 (evening):
+- Drift check merged (#49) and fixed after its first run (#52): expected probe
+  outputs of `-march=native` profiles recorded the CI runner's CPU; the probe
+  now has an expected-only mode writing a `native` marker for exactly the
+  facts `--judge-check` treats as native-model permitted (AtCoder, Timus,
+  Library Checker regenerated). Report wiring fixed. Second full run
+  44179368628 green end to end; the reporter created issues #53–#79 (one per
+  profile and claim, closed while passing) that hold the state blocks.
+- macOS jobs that never get a runner are rerun automatically (#50,
+  `retry-unassigned.yml`, at most two reruns; real failures left for a human).
+  Don't rerun an outdated run after `gh pr update-branch`: spike's
+  cancel-in-progress group lets it cancel the current run.
+- User README rewritten (#51): quick start, troubleshooting, judge table.
+
+Open: Luogu (parked, needs a Luogu account for the probe); the HARMLESS-option
+check from the Luogu review; user corpus measurement (D4/D5).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
