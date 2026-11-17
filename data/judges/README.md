@@ -245,6 +245,15 @@ other host-dependent targets are rejected rather than sampled on this host.
 
 ## Research and CI
 
+All nine bundled profiles now ship a snapshot and
+`<name>-probe-expected.txt`. Codeforces, CSES, QOJ, Kattis, both yukicoder
+dialects, Library Checker and Timus are approximate; AtCoder has a reproduced
+build. The per-judge provenance and caveats below are the maintainer record
+for the user README's profile table. A snapshot compiler's package, container,
+bottle or archive identity does not by itself identify the deployed judge build.
+The initial branch-capture status is historical; adding or replacing artifacts
+still requires the branch CI review described under **Adding a profile** below.
+
 Codeforces publishes its [command and compiler label](https://codeforces.com/blog/entry/133046?mobile=false),
 "GNU G++23 14.2 (64 bit, msys2)", but no MSYS2 package revision. PBOX's
 bundle revision and a matching MSYS2 source tree do not establish the judge's
@@ -365,7 +374,9 @@ manifest. The existing CSES, AtCoder and Codeforces rows stay in the runner job
 with their original acquisition steps. `job_matrices()` partitions dispatch
 rows; job-level conditions skip empty partitions before matrix expansion.
 Thus runner jobs have no `container` key, avoiding an invalid empty container.
-The QOJ snapshot and expected output remain pending branch CI capture.
+The QOJ snapshot and expected output were pending branch CI capture at initial
+research; both are now shipped as `qoj-gcc15-cpp23-predefined.txt` and
+`qoj-gcc15-cpp23-probe-expected.txt`.
 
 Kattis's [C++ language page](https://open.kattis.com/languages/cpp) returned
 HTTP 403 to both the web reader and direct fetcher on 2026-11-17. UNVERIFIED:
@@ -397,7 +408,10 @@ headers and runtimes; required upgrades fail for review. The diagnostic CLI uses
 `g++-15`; snapshot/probe drivers use that same image compiler. Version or triple
 mismatches fail, with no compiler substitution or reproduction claim. Existing
 QOJ package installation and all runner acquisition steps remain unchanged.
-The Kattis snapshot and expected output remain pending branch CI capture.
+The Kattis snapshot and expected output were pending branch CI capture at initial
+research; both are now shipped as `kattis-gcc15-gnupp23-predefined.txt` and
+`kattis-gcc15-gnupp23-probe-expected.txt`. Judge adoption of the image and the
+transcribed command remain UNVERIFIED.
 
 yukicoder's [environment page](https://yukicoder.me/help/environments), fetched
 2026-11-17, dates its environment listings 2026-11-14 11:08:09. It lists
@@ -457,8 +471,9 @@ limit of 128KB (131,072 bytes), so `probe_source_bytes = 131072`. It gives an
 output limit of 20MB (slightly less in practice), including stderr. Keep the
 conservative documented 60000-byte default output budget. The
 [custom-test page](https://yukicoder.me/run) confirms login is required.
-**UNVERIFIED:** an actual judge probe match; snapshots and expected outputs
-must be captured by branch CI before these profiles enter the bundled catalog.
+**UNVERIFIED:** an actual judge probe match. Each dialect required its own
+branch CI capture before entering the bundled catalog; both now ship independent
+`yukicoder-gcc16-cpp23` and `yukicoder-gcc16-gnupp23` snapshots and expected outputs.
 
 Library Checker's sources were re-fetched on **2026-11-17**, including the
 immutable [language entry](https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/langs/langs.toml)
@@ -523,8 +538,10 @@ accepts source lengths 1 through `1024*1024` bytes, so
 `probe_source_bytes = 1048576`. No global output limit is published (limits
 are per problem); retain the conservative 60000-byte default output budget.
 There is no custom-test facility: use ordinary submissions only.
-**UNVERIFIED:** probe output retrieval and an actual judge match. Snapshot and
-expected output remain pending branch CI capture; neither is fabricated locally.
+**UNVERIFIED:** probe output retrieval and an actual judge match. The snapshot
+and expected output were pending branch CI capture at initial research; both are
+now shipped as `library-checker-gcc15-cpp23-predefined.txt` and
+`library-checker-gcc15-cpp23-probe-expected.txt`. They must not be fabricated locally.
 
 Timus's [C/C++ help](https://acm.timus.ru/help.aspx?topic=cpp), re-fetched
 2026-11-17, lists Microsoft Visual C++ 2022 17.8, GCC 13.2.0 and Clang 17.0.6.
@@ -640,8 +657,11 @@ output. A full runtime probe match on Timus and its output retrieval remain
 UNVERIFIED. Both snapshot and expected-output artifacts are shipped and included
 in monthly reproduction comparisons.
 
-**Adding a profile:** a TOML names its snapshot and expected probe output, and
-the embedded catalog requires both. Push the TOML and CI job on a branch,
+**Adding a profile:** a TOML names its snapshot with `predefined`; the expected
+output is its sibling `<name>-probe-expected.txt`. Both artifacts are required for
+every shipped profile. This includes QOJ, Kattis, Library Checker, Timus and
+each yukicoder dialect: capture them with branch CI before the PR.
+Push the TOML and CI job on a branch,
 dispatch `profiles.yml` on that branch for the new profile (it loads the TOML by
 path), review the two uploaded artifacts, and commit them byte for byte to the
 same branch before opening the PR, recording the run URL. Never edit the TOML
@@ -659,7 +679,11 @@ A1 inventories, and review their diffs together. See design §4.6: validation mu
 record its actual argv and omissions, probe that exact configuration (ordinary
 and special macros), and use consistent build options. Matching facts used by a
 resolution is weaker than target verification; local native options never confer
-target equivalence. Resolver/validation orchestration remains the next D2 work.
+target equivalence. A reproduced snapshot alone does not make an arbitrary local
+GCC equivalent: target verification also requires matching compiler facts, dialect
+and command. AtCoder's `-march=native` varies across hosts and does not establish
+target verification. A compatible cross GCC can check target builds while runtime
+comparisons are skipped when target binaries cannot run here.
 
 ## Diagnostic judge probes (D6b)
 
@@ -736,15 +760,17 @@ failures as format error, wrong compiler or option selected, contextual field,
 probe failure, fact mismatch, or contradicted assumption. Unsupported comparable
 facts fail; intentionally presence-only/coverage records are skipped and counted.
 
-`<name>-probe-expected.txt` is an optional sibling of the TOML/snapshot,
-embedded by `cmake/EmbedProfiles.cmake`. It is **excluded from the v1 content
-digest**: its own output carries that digest, so including it would be circular.
+`<name>-probe-expected.txt` is a sibling of the TOML/snapshot, optional for user
+profiles and shipped for every bundled profile, embedded by
+`cmake/EmbedProfiles.cmake`. It is **excluded from the v1 content digest**: its own output carries that digest, so including it would be circular.
 Observations are also excluded. The digest rule above remains unchanged, and
 expected headers still bind to the TOML and snapshot bytes exactly. Missing
 expectations are explicit failures: `no expected output shipped for <profile>;
-run profiles.yml`. Expectations will be committed from a reviewed CI artifact;
-none is fabricated from replacement lists. Fixture expectations only test the
-protocol.
+run profiles.yml`. `src/cli/judge.cpp` passes an empty expectation to the core
+checker when none was loaded, so missing expectations fail with checked/skipped
+counts of zero and can still be recorded with `--record`; they never pass. New
+expectations must be committed from reviewed CI artifacts, never fabricated from
+replacement lists. Fixture expectations only test the protocol.
 
 `profiles.yml` first builds the LLVM-free `DISTILL_PROFILE_ONLY` diagnostic CLI
 with the normal toolchain. Immediately after each snapshot step it runs
