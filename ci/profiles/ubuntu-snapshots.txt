@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# release codename timestamp (UTC). See ubuntu-snapshots.md for index evidence.
+24.04 noble 20261117T000000Z
+26.04 resolute 20261117T000000Z

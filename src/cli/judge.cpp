@@ -16,6 +16,7 @@ int runJudgeDiagnostic(const CliOptions& options) {
   auto profile = take(lookupProfile(options.judgeProbe ? *options.judgeProbe : *options.judgeCheck,lookup));
   for (const auto& warning : profile.warnings) std::cerr << warning << '\n';
   std::cerr << profileSelectionLine(profile);
+  std::cerr << profileStalenessNote(profile);
   std::cerr << "judge digest: " << profile.provenance.contentDigest << "\norigin: " << profile.provenance.origin << ' ' << pathToUtf8(profile.provenance.file) << '\n';
   if (options.judgeProbe) {
     auto part = options.part ? take(parseJudgeProbePart(*options.part)) : JudgeProbePart{};

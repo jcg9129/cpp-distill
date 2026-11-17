@@ -759,3 +759,32 @@ for review; they are evidence, not authenticated execution. Updating observation
 or expectations does not change a profile digest. Rebuild to display newly
 stored observations. User profiles use the same embedded observations only when
 their name and digest match.
+
+## Maintenance
+
+The serialized [profile maintenance workflow](../../.github/workflows/drift.yml)
+checks evidence and complete artifact downloads weekly, and regenerates profiles
+from a cold start monthly. Dispatch can select claims and full profile names.
+Issues named `drift: <profile>: evidence|availability|reproduction` describe
+separate claims: deployment/listing facts, obtainability with digest verification,
+and byte equality with both shipped snapshot and probe output. Shared host
+outages also appear in `drift: upstream: <host>`. Read the per-source status,
+last success and failure counters in the body; only `same facts` passes evidence.
+Listing availability never proves judge adoption. Closed tracking issues retain
+state; do not delete their machine-readable comments. Availability alerts close
+after verified recovery; evidence/reproduction alerts require human closure.
+Four unavailable weekly windows require manual review by the recorded deadline.
+
+Investigate changes against the original-language sources and run a judge probe
+where possible. If the acquisition artifact vanished, submit a re-snapshot PR
+using a successor artifact, documenting provenance and reviewing all byte
+changes, or mark the profile **not regenerable** with the reason in its profile
+comments and this README. Committed snapshots remain usable. A judge compiler or
+option upgrade gets a **new profile name**; preserve the old name's meaning and
+document alias moves. Do not refresh `updated` for an automated pass: it records
+human review. The CLI suggests `--judge-check` after more than 180 days.
+
+The [framework documentation](../../ci/drift/README.md) defines watch/result
+schemas, the extractor interface and issue state model. Part 2 adds real watch
+files and per-judge extractors; currently evidence reports `no sources`.
+Ubuntu acquisition uses [recorded snapshot timestamps](../../ci/profiles/ubuntu-snapshots.md).

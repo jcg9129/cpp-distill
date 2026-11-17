@@ -34,6 +34,10 @@ def run(*argv):
                           env=clean_environment(), timeout=900).stdout.strip()
 
 
+class DigestError(ValueError):
+    """Downloaded bottle failed its pinned digest."""
+
+
 def download(destination, digest):
     # Anonymous registry token, not a GitHub credential. Never print it.
     with urlopen('https://ghcr.io/token?scope=repository:homebrew/core/gcc:pull', timeout=60) as response:
@@ -47,7 +51,7 @@ def download(destination, digest):
             output.write(chunk)
     if checksum.hexdigest() != digest:
         destination.unlink()
-        raise ValueError('Homebrew bottle SHA-256 mismatch; refusing installation')
+        raise DigestError('Homebrew bottle SHA-256 mismatch; refusing installation')
 
 
 def install(provenance):

@@ -4,11 +4,13 @@
 # Source: https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml
 # Only prefix, temporary directories, sudo and parallelism differ from the recipe.
 set -euo pipefail
+source_digest=$(cut -d " " -f 1 "$(dirname "$0")/atcoder-source.sha512")
 prefix=$1
 work=$2
 mkdir -p "$prefix" "$work"
 cd "$work"
-curl --fail --location --retry 3 'http://ftp.tsukuba.wide.ad.jp/software/gcc/releases/gcc-15.2.0/gcc-15.2.0.tar.gz' -o gcc.tar.gz
+curl --fail --location --retry 3 'https://ftp.gnu.org/gnu/gcc/gcc-15.2.0/gcc-15.2.0.tar.gz' -o gcc.tar.gz
+echo "$source_digest  gcc.tar.gz" | sha512sum --check
 mkdir -p gcc
 tar -xzf gcc.tar.gz -C gcc --strip-components=1
 cd gcc
