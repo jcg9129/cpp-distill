@@ -884,3 +884,15 @@ TEST(profile_list_embeds_observations_for_exact_digest) {
   auto catalog=listProfiles(lookup,files); CHECK(catalog.ok());
   CHECK(renderProfileList(catalog.value()).find("-2026-11-16-10.txt: user-reported failure")!=std::string::npos);
 }
+
+TEST(profile_staleness_note) {
+  Profile profile;
+  profile.name = "test-gcc15-cpp23";
+  profile.provenance.updated = "2024-02-29";
+  const auto reviewed = std::chrono::sys_days{std::chrono::year{2024}/2/29};
+  CHECK(profileStalenessNote(profile, reviewed + std::chrono::days{180}).empty());
+  CHECK_EQ(profileStalenessNote(profile, reviewed + std::chrono::days{181}),
+      "distill: note: judge profile test-gcc15-cpp23 was last reviewed 2024-02-29 (181 days ago); consider --judge-check\n");
+  CHECK(profileStalenessNote(profile, reviewed).empty());
+  CHECK(profileStalenessNote(profile, reviewed - std::chrono::days{1}).empty());
+}

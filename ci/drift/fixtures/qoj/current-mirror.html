@@ -1,0 +1,31 @@
+<article>
+					<p><em>Last Updated: June 2026</em></p>
+<h3>Judgehost Specification</h3>
+<p>The judgehosts of QOJ are all hosted on Microsoft Azure. All judgehosts have the identical specifications:</p>
+<ul>
+<li>OS: Ubuntu 26.04.1 LTS</li>
+<li>RAM: 8 GiB</li>
+<li>CPU: Intel(R) Xeon(R) Platinum 8573C</li>
+</ul>
+<h3>Language Details</h3>
+<p>Unless specified in the problem meta page, you may submit your solution in any of our supported languages. Note that IOI and most other Olympiads support C++ exclusively, so problems with graders typically only support C++. Always check the problem meta information before starting!</p>
+<ul>
+<li>C</li>
+<li>C++</li>
+<li>D</li>
+<li>Fortran</li>
+<li>Go</li>
+<li>Haskell</li>
+<li>Java</li>
+<li>Kotlin</li>
+<li>Lean 4.23.0</li>
+<li>Pascal</li>
+<li>Python 3 (CPython 3.13 or PyPy 3.11)</li>
+<li>Ruby</li>
+<li>Rust</li>
+</ul>
+<h4>C++ (C++98, C++11, C++14, C++17, C++20, C++23, C++26)</h4>
+<p>All C++ submissions are compiled using GCC 15.2.0. The detailed compilation tag is as follows:</p>
+<pre><code class="sh_bash">g++ -o answer -x c++ answer.code -lm -O2 -DONLINE_JUDGE -std=c++XX</code></pre>
+<p>The <code>-std=c++XX</code> flag will be set according to your chosen standard (98, 11, 14, 17, 20, 23, or 26).</p>
+<h4>C (C99, C11)</h4></article>

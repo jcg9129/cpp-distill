@@ -2,6 +2,7 @@
 #pragma once
 #include "core/probe/probe.h"
 #include <functional>
+#include <chrono>
 #include <set>
 
 namespace distill {
@@ -83,6 +84,9 @@ Result<ProfileCatalog> listProfiles(const ProfileLookup& lookup = {},
                                    const ProfileFiles& embedded = embeddedProfileFiles());
 std::string renderProfileList(const ProfileCatalog& catalog);
 std::string profileSelectionLine(const Profile& profile);
+// UTC calendar days; callers can inject today without changing the process clock.
+std::string profileStalenessNote(const Profile& profile, std::chrono::sys_days today =
+    std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now()));
 Result<Profile> lookupProfile(std::string_view nameOrFile, const ProfileLookup& lookup = {},
                               const ProfileFiles& embedded = embeddedProfileFiles());
 } // namespace distill

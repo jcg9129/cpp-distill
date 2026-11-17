@@ -96,6 +96,10 @@ to those profiles; aliases may move to a judge's newest GCC option in later
 releases. Use a full name to pin an option. Every selection prints
 `judge: <selector> -> <resolved name>` on stderr. `--report` also records the
 selector, resolved name, origin and SHA-256 profile content digest.
+A selected profile last reviewed more than 180 days ago prints a one-line
+stderr note suggesting `--judge-check`. Its facts, output and exit status stay
+the same. Weekly evidence/availability checks and monthly snapshot reproduction
+track maintenance separately; see [profile maintenance](data/judges/README.md#maintenance).
 
 User profiles live in `$XDG_CONFIG_HOME/distill/judges` (when absolute), otherwise
 `~/.config/distill/judges`, or `%APPDATA%\distill\judges` on Windows. A user name

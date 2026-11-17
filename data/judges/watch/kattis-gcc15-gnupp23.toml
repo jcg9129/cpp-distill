@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. Image API does not publish a compiler version or prove grading adoption; compiler facts there are “not published”.
+schema = 1
+
+[[sources]]
+id = "kattis"
+url = "https://open.kattis.com/languages/cpp"
+kind = "deployment"
+extractor = "kattis"
+excerpt = "C++\nWe use g++-15 15.2.0 to compile your program with the following command:\ng++-15 -g -O2 -o {executable} -std=gnu++23 -static -lrt -Wl,-u,_IO_wfile_doallocate -Wl,--whole-archive -lpthread -Wl,--no-whole-archive {files}"
+[sources.expected]
+language_id = "cpp"
+compiler_family = "gcc"
+compiler_version = "15.2.0"
+compile_arguments = ["g++-15", "-g", "-O2", "-o", "{executable}", "-std=gnu++23", "-static", "-lrt", "-Wl,-u,_IO_wfile_doallocate", "-Wl,--whole-archive", "-lpthread", "-Wl,--no-whole-archive", "{files}"]
+runtime_notes = []
+library_notes = []
+language_label = "C++"
+
+[[sources]]
+id = "docker-kattis"
+url = "https://hub.docker.com/v2/repositories/kattis/judge-cpp/tags/latest"
+kind = "availability"
+extractor = "docker_hub"
+excerpt = "\"name\": \"latest\", \"digest\": \"sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d\"; linux/amd64 \"digest\": \"sha256:22da737c95a5510f0ee58d039f070e9405856c72bb3c1202d04855addac880b9\""
+[sources.expected]
+language_id = "kattis/judge-cpp:latest"
+compiler_family = "not published"
+compiler_version = "not published"
+compile_arguments = []
+runtime_notes = ["linux/amd64", "index sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d", "manifest sha256:22da737c95a5510f0ee58d039f070e9405856c72bb3c1202d04855addac880b9"]
+library_notes = []

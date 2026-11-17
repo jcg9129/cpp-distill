@@ -1,0 +1,86 @@
+{
+  "codeforces/current.html": {
+    "url": "https://codeforces.com/blog/entry/133046?mobile=false",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 529295,
+    "original_sha256": "7e7af4f715f12d1606416cff05c3674cbd2ab5c405e9c60ce73110b107c42da1"
+  },
+  "atcoder/current.html": {
+    "url": "https://img.atcoder.jp/file/language-update/2025-10/language-list.html",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 324938,
+    "original_sha256": "781c93a73c58bc2a76ecd7b1ab6e200023a5426676a0f4a7ceb4fbc9bd358075"
+  },
+  "cses/current.html": {
+    "url": "https://cses.fi/howto",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 6999,
+    "original_sha256": "f5c43b1cdf0d42aae13bbbcd532e511950a0a036a15b5e6c86f7f129d86f9987"
+  },
+  "qoj/current.html": {
+    "url": "https://qoj.ac/blog/221",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 28818,
+    "original_sha256": "79479c88068432dde87c8e971d4770c8b807a8fe5fea0a39b6b7f2248445f6a8"
+  },
+  "qoj/current-mirror.html": {
+    "url": "https://pjudge.ac/blog/221",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 27475,
+    "original_sha256": "73029e46ea56c1ea0bf014b9d72e94ab80f4a08610ba9656dcbdd90a02fca62f"
+  },
+  "kattis/current.html": {
+    "url": "https://open.kattis.com/languages/cpp",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 17292,
+    "original_sha256": "7f7bdcda1097db556b7ae9f00b32c4bfd66a3b535184285a1979487824a474a1"
+  },
+  "library_checker/current.toml": {
+    "url": "https://raw.githubusercontent.com/yosupo06/library-checker-judge/master/langs/langs.toml",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 5343,
+    "original_sha256": "cdc4bac6837bf4e670bd3b1d5025cc7eaf0e14fba498631f1bad48c54aa28539"
+  },
+  "yukicoder/current.html": {
+    "url": "https://yukicoder.me/help/environments",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 71077,
+    "original_sha256": "d579b523b2709b658fb0599024c9ba14e33dd84cd9d228679469f232304bfe1a"
+  },
+  "homebrew/current.json": {
+    "url": "https://formulae.brew.sh/api/formula/gcc.json",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 5130,
+    "original_sha256": "a24a7de57ab5231e17275b7219dd2903e1f69881228e54e2df8bccf6ea010020"
+  },
+  "docker_hub/current.json": {
+    "url": "https://hub.docker.com/v2/repositories/library/gcc/tags/15.2",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 4276,
+    "original_sha256": "df33b539839d69f854354fbacc6fad2285dd00055b3d52cec85dfc7b38a868d0"
+  },
+  "docker_hub/current-kattis.json": {
+    "url": "https://hub.docker.com/v2/repositories/kattis/judge-cpp/tags/latest",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 811,
+    "original_sha256": "d1664ac128475b57c9700cece9a493ac16283de6025ee3c59dc4abe821e60570"
+  },
+  "timus/current.html": {
+    "url": "https://acm.timus.ru/help.aspx?topic=cpp&locale=ru",
+    "fetched": "2026-11-17",
+    "status": 200,
+    "original_bytes": 13695,
+    "original_sha256": "51ee512ef73818e929e5554e1d47d3db9b0aa853826c793a397526418787995f"
+  }
+}

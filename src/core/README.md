@@ -1232,3 +1232,9 @@ python3 -m unittest discover -s ci/release -p 'test_*.py'
 macOS 14.0 minos is audited on macos-15/macOS-15 Intel; no macOS 14 execution
 claim is made. Full SDK linking, portability gates and manual dispatch remain
 CI-only; the local editing environment must never link LLVM.
+
+Profile maintenance heartbeat: `profileStalenessNote(profile, today)` compares
+the parsed `updated` date with an injectable UTC calendar day and returns one
+stderr note only after 180 days. The default clock is `system_clock`; both CLI
+selection paths print the note next to `profileSelectionLine`. This diagnostic
+never changes facts, generated output or exit status.
