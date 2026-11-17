@@ -1,9 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import io
+import json
+import os
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
-from common import envelope, result
+import report
+
+from common import ROOT, envelope, result
 from report import apply, prepare
 from state import aggregate, body, decode, disposition, empty, transition, upstream_state
 
@@ -172,3 +180,32 @@ class ReportTests(unittest.TestCase):
         q, _ = transition(empty('q', 'evidence'), batch('evidence', 'same facts', names=('q',)))
         recovered = upstream_state('upstream.test', aggregate([p, q])['upstream.test'], '2')
         self.assertEqual(disposition(recovered, True, True, True), 'open')
+
+
+class ReportDiagnosticTests(unittest.TestCase):
+    def test_output_retains_plan_if_apply_fails_and_records_completion(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output = Path(directory) / 'report.json'
+            args = ['--claims', 'reproduction', '--profiles', 'all',
+                    '--artifacts', directory, '--output', str(output)]
+            operations = [(None, 'drift: p: reproduction', {'status': 'failure'}, True)]
+            with patch.object(report, 'claims', return_value=[]), \
+                    patch.object(report, 'GitHub'), \
+                    patch.object(report, 'prepare', return_value=operations), \
+                    patch.dict(os.environ, GITHUB_RUN_ID='123'), \
+                    patch.object(report, 'apply', side_effect=OSError('synthetic API failure')), \
+                    patch('sys.stdout', new_callable=io.StringIO):
+                with self.assertRaises(OSError):
+                    report.main(args)
+                data = json.loads(output.read_text())
+                self.assertEqual(data['status'], 'prepared')
+                self.assertEqual(data['operations'][0]['title'], 'drift: p: reproduction')
+                self.assertEqual(data['run_id'], '123')
+            with patch.object(report, 'claims', return_value=[]), \
+                    patch.object(report, 'GitHub'), \
+                    patch.object(report, 'prepare', return_value=operations), \
+                    patch.dict(os.environ, GITHUB_RUN_ID='123'), \
+                    patch.object(report, 'apply'), \
+                    patch('sys.stdout', new_callable=io.StringIO):
+                report.main(args)
+                self.assertEqual(json.loads(output.read_text())['status'], 'applied')

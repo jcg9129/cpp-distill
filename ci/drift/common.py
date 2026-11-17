@@ -86,6 +86,14 @@ def write(path, data):
     path.write_text(json.dumps(data, ensure_ascii=True, indent=2) + '\n')
 
 
+def summarize(data):
+    """Keep classified failures visible in job logs as well as JSON artifacts."""
+    for row in data['results']:
+        print(f"{row['profile']}: {row['source']}: {row['status']}")
+        if row['status'] not in PASSES:
+            print(row['detail'])
+
+
 def validate(data, claim, selected, expected, run_id):
     """Validate the entire artifact before any issue mutation. expected is a trusted plan."""
     keys = {'schema', 'claim', 'profiles', 'run_id', 'timestamp', 'window', 'complete', 'results'}

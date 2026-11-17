@@ -9,7 +9,7 @@ import tempfile
 import tomllib
 from urllib.parse import quote
 
-from common import ROOT, IntegrityError, arguments, download, envelope, fetch, host, profiles, result, verify_stream, write
+from common import ROOT, IntegrityError, arguments, download, envelope, fetch, host, profiles, result, summarize, verify_stream, write
 from provenance import identity
 import homebrew
 import ubuntu
@@ -208,6 +208,12 @@ def run(selected):
     return envelope('availability', selected, rows)
 
 
+def build_parser():
+    return arguments(__doc__)
+
+
 if __name__ == '__main__':
-    args = arguments(__doc__).parse_args()
-    write(args.output, run(profiles(args.profiles)))
+    args = build_parser().parse_args()
+    data = run(profiles(args.profiles))
+    write(args.output, data)
+    summarize(data)

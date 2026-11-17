@@ -496,6 +496,8 @@ pass. A digest mismatch is an integrity alert.
 profile from a cold start; outputs must be byte-identical to the shipped files.
 No normalization is applied (reruns of Kattis, Codeforces and both
 Linux runner paths were byte-identical on 2026-11-17, runner paths included).
+Expected outputs record native-model facts with the host-independent `native`
+marker, so reproduction stays byte-exact without normalization.
 Native-model names are already `unknown` in snapshots, so host CPUs do not
 enter them; a sweep or host-check failure is a reproduction failure. Any other
 difference, a skipped probe, or a missing artifact is a failure, never a pass.

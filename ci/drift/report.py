@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 import availability
 import evidence
 import reproduction
-from common import arguments, profiles, validate
+from common import arguments, profiles, validate, write
 from plan import claims
 from state import aggregate, body, decode, disposition, empty, transition, upstream_state
 
@@ -111,11 +111,15 @@ def apply(api, operations):
                 api.request('POST', '/issues/' + number + '/comments', {'body': 'Maintenance state transition: **' + state['status'] + '**. Run ' + state['last_run_id'] + '. See the issue body for per-source status and review deadlines.'})
 
 
-if __name__ == '__main__':
+def build_parser():
     parser = arguments(__doc__)
     parser.add_argument('--claims', required=True)
     parser.add_argument('--artifacts', type=Path, required=True)
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     selected = profiles(args.profiles)
     batches = []
     modules = {'availability': availability, 'evidence': evidence, 'reproduction': reproduction}
@@ -127,4 +131,18 @@ if __name__ == '__main__':
         data = json.loads(path.read_text())
         batches.append(validate(data, claim, selected, modules[claim].expected(selected), os.environ['GITHUB_RUN_ID']))
     api = GitHub()
-    apply(api, prepare(batches, api.issues()))
+    operations = prepare(batches, api.issues())
+    diagnostic = dict(run_id=os.environ['GITHUB_RUN_ID'], status='prepared', operations=[
+        dict(issue=issue['number'] if issue else None, title=title, state=state, changed=changed)
+        for issue, title, state, changed in operations])
+    # Persist the validated plan before writes so partial API failures are debuggable.
+    write(args.output, diagnostic)
+    print(f'report: {len(operations)} issue updates prepared', flush=True)
+    apply(api, operations)
+    diagnostic['status'] = 'applied'
+    write(args.output, diagnostic)
+    print('report: issue updates applied')
+
+
+if __name__ == '__main__':
+    main()

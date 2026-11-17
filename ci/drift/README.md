@@ -5,6 +5,8 @@
 the first of each month, and selected claims/profiles on dispatch. Only its
 report job can write issues. Every external action is pinned to a commit.
 Python 3.12 and the standard library suffice for every `ci/drift` command.
+Workflow tests additionally use `pip install -r ci/drift/requirements-test.txt`
+for YAML parsing.
 All nine shipped profiles, including Timus, have availability, reproduction
 and evidence coverage. Selection is derived from `data/judges/*.toml`; tests
 require every shipped profile to have all three claims.
@@ -109,7 +111,13 @@ HTTP metadata requests use `cpp-distill-drift/1`, a 30-second timeout and a
 
 ## Result artifacts and durable issue state
 
-Each job writes `<claim>.json` in artifact `drift-<claim>`. Envelopes contain
+Each classified check prints per-profile/source status and failure details in
+its job log. Reproduction includes the first differing line and a byte-preserving
+unified diff capped at 40 lines. The reporter writes `out/drift/report.json`
+with its validated issue-update plan before API writes and marks it applied
+on completion; `drift-report` uploads it even after an API failure.
+
+Each check job writes `<claim>.json` in artifact `drift-<claim>`. Envelopes contain
 exactly `schema` (1), `claim`, full selected `profiles`, numeric-string `run_id`,
 UTC ISO `timestamp`, ISO `[year, week]` `window`, boolean `complete`, and
 `results`. Each row contains exactly `profile`, stable `source`, `host`, `kind`,
