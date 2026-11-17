@@ -47,6 +47,10 @@ def startup_origins(trace, empty):
         marker = re.fullmatch(r'# \d+ "((?:\\.|[^"\\])*)"(?: \d+)*', line)
         if marker:
             current = marker[1].replace('\\\\', '/')
+            # With -g, GCC's -E output names the working directory once, as
+            # "<cwd>//" (-fworking-directory); it is not a header.
+            if current.endswith('//') and Path(current[:-2]) == Path.cwd():
+                continue
             if current not in ('<built-in>', '<command-line>', str(empty).replace('\\', '/')):
                 if Path(current).name != 'stdc-predef.h':
                     raise ValueError('unexpected startup header: ' + current)

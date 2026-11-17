@@ -10,8 +10,9 @@ that would otherwise collide. Full names pin a compiler option and never change
 meaning. The shipped names are `codeforces-gcc14-cpp23` and
 `atcoder-gcc15-gnupp23`, with optional `alias = "codeforces"` and
 `alias = "atcoder"`, respectively. Aliases use nonempty `[a-z0-9-]+` strings and
-track the newest supported GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`)
-and `qoj-gcc15-cpp23` (alias `qoj`). QOJ's published C++26 option is deferred:
+track the newest supported GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`),
+`qoj-gcc15-cpp23` (alias `qoj`) and `kattis-gcc15-gnupp23` (alias `kattis`).
+QOJ's published C++26 option is deferred:
 the audited A6 ADL name registry ends at C++23 and disables pruning for C++26.
 The profile schema, dialect model and standard header/macro inventories accept
 C++26; GCC 15.2's `__cplusplus = 202400L` already matches the dialect model.
@@ -67,15 +68,27 @@ inventory grants no protection. Without a selection, the union of all sets appli
 
 `build` has exactly one key: `package` (exact package and revision) or `recipe`
 (the published source/configure recipe URL). Reproduction relies on amended A4,
-not version/triple similarity. `snapshot_compiler` has the same one-key form
-and names the compiler used for an approximate snapshot when the judge build
-is unknown or differs. Package values require `name=version` (including the
+not version/triple similarity. `snapshot_compiler` accepts those one-key forms
+and a snapshot-only `image` form, and names the compiler used for an approximate
+snapshot when the judge build is unknown or differs. Package values require `name=version` (including the
 exact distribution revision and a distribution prefix where applicable); recipe values require an HTTP(S) URL.
 Ubuntu packages use `ubuntu-YY.MM:name=version-revision`, for example
 `ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1`. The release, package name, upstream
 version and nonempty Debian revision are required; an optional numeric epoch
 precedes the upstream version. Both the C++ schema and `ci/profiles/provenance.py`
 reject missing revisions, malformed releases, whitespace and wildcard versions.
+Image values must match
+`docker\.io/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}`
+in full: explicit Docker Hub registry, at least namespace/repository, no tag,
+and a lowercase 64-hex manifest or index digest. Both schema implementations
+reject mutable tags, abbreviated/uppercase digests, whitespace and mixed keys.
+`image` is forbidden in `build`: an image chosen for snapshot acquisition does
+not establish the judge's build identity. For Kattis, for example:
+
+```toml
+snapshot_compiler = { image = "docker.io/kattis/judge-cpp@sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d" }
+```
+
 For Codeforces, omit `build` and use:
 
 ```toml
@@ -138,7 +151,8 @@ field (including omitted GNU Linux vendors); both spellings are recorded.
 The fragment illustrates record syntax, not a complete valid snapshot. All
 registered names need probes and corresponding facts. `build` is
 `package=<value>`, `recipe=<url>` or `none`. When present, `snapshot-compiler`
-must exactly match the profile's `snapshot_compiler` identity in the same form.
+must exactly match the profile's `snapshot_compiler` identity as `package=<value>`,
+`recipe=<url>` or `image=<digest-pinned-reference>`.
 An approximate Codeforces snapshot has these header lines:
 
 ```text
@@ -323,6 +337,38 @@ rows; job-level conditions skip empty partitions before matrix expansion.
 Thus runner jobs have no `container` key, avoiding an invalid empty container.
 The QOJ snapshot and expected output remain pending branch CI capture.
 
+Kattis's [C++ language page](https://open.kattis.com/languages/cpp) returned
+HTTP 403 to both the web reader and direct fetcher on 2026-11-17. UNVERIFIED:
+the supplied 2026-11-16 transcription lists option `C++` (`cpp`), GCC 15.2.0,
+GNU C++23, compile flags `-g -O2`, and the ordered link options recorded in the
+TOML. It has no `-D` (including `ONLINE_JUDGE`), `-march` or include paths.
+The command model already accepts `-g`, so no `inert` entry is required.
+UNVERIFIED: judge OS, libc, x86_64 triple and libraries; the selected
+libstdc++/glibc inventories describe an inferred GNU/Linux environment.
+Source/output limits are unconfirmed, so both probe budgets use the documented
+60000-byte defaults. No custom-test or output-retrieval channel is known.
+
+Kattis's public [Docker Hub latest-tag API](https://hub.docker.com/v2/repositories/kattis/judge-cpp/tags/latest),
+fetched directly on 2026-11-17, reports OCI index digest
+`sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d`,
+last pushed 2026-11-02, with a linux/amd64 manifest
+`sha256:22da737c95a5510f0ee58d039f070e9405856c72bb3c1202d04855addac880b9`.
+Use the index pin as `snapshot_compiler.image`, never `build`; UNVERIFIED:
+Kattis does not document that this image is used for grading. Docker was not
+run locally; its compiler and shell/package-manager compatibility remain
+UNVERIFIED until CI. No confirmed incompatibility warrants the Ubuntu package
+fallback at this stage.
+
+The Kattis row joins `snapshot-container` on ubuntu-24.04. It runs as root,
+bootstraps with `sh`, and requires `g++-15 -dumpfullversion` to print exactly
+`15.2.0` before setup and again before snapshot capture. Existing installed
+packages are held while adding diagnostic tools, preserving the image compiler,
+headers and runtimes; required upgrades fail for review. The diagnostic CLI uses
+`g++-15`; snapshot/probe drivers use that same image compiler. Version or triple
+mismatches fail, with no compiler substitution or reproduction claim. Existing
+QOJ package installation and all runner acquisition steps remain unchanged.
+The Kattis snapshot and expected output remain pending branch CI capture.
+
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,
 dispatch `profiles.yml` on that branch for the new profile (it loads the TOML by
@@ -348,7 +394,7 @@ target equivalence. Resolver/validation orchestration remains the next D2 work.
 
 The optional strict-schema TOML integer keys `probe_source_bytes` and
 `probe_output_bytes` each accept 1024 through 16777216 inclusive. Both default
-to **60000 bytes**. Codeforces, AtCoder and QOJ currently use this conservative
+to **60000 bytes**. Codeforces, AtCoder, QOJ and Kattis currently use this conservative
 fallback: no published source/output limit has been established here, and these
 values are not claims about those judges' limits. An override must cite the
 judge's published limit in a comment. Probe output has a conservative static

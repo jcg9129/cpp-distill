@@ -31,6 +31,8 @@ def matrix(selection='all'):
             raise ValueError(f'{name}: Windows snapshot requires an exact MSYS2 GCC package')
         if windows:
             acquisition = 'msys2'
+        elif compiler.startswith('image='):
+            acquisition = 'image'
         elif re.match(r'package=ubuntu-(24\.04|26\.04):g\+\+-', compiler):
             acquisition = 'ubuntu'
         elif compiler == 'recipe=https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml':
@@ -41,6 +43,8 @@ def matrix(selection='all'):
                          build='' if build == 'none' else build, compiler=compiler, acquisition=acquisition))
         if compiler.startswith('package=ubuntu-26.04:'):
             rows[-1]['container'] = UBUNTU_26_04
+        elif acquisition == 'image':
+            rows[-1]['container'] = compiler.removeprefix('image=')
     return {'include': rows}
 
 

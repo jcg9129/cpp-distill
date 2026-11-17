@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exact distro package identities; no compiler or package manager is executed."""
+"""Exact package/image identities; no compiler or package manager is executed."""
 import unittest
 from provenance import identity
 
@@ -20,6 +20,27 @@ class UbuntuProvenance(unittest.TestCase):
                             'ubuntu-24.04:g++-13=13.3.0-1 extra', 'ubuntu-24.04:g++-13=13.3.0-1\n'):
                 with self.subTest(key=key, package=package), self.assertRaisesRegex(ValueError, key):
                     identity({key: {'package': package}}, key)
+
+
+class ImageProvenance(unittest.TestCase):
+    def test_snapshot_only_digest_pinned_image(self):
+        image = 'docker.io/kattis/judge-cpp@sha256:' + 'a' * 64
+        self.assertEqual(identity({'snapshot_compiler': {'image': image}}, 'snapshot_compiler'), 'image=' + image)
+        with self.assertRaisesRegex(ValueError, 'build'):
+            identity({'build': {'image': image}}, 'build')
+
+    def test_tags_inexact_digests_and_malformed_images_rejected(self):
+        image = 'docker.io/kattis/judge-cpp@sha256:' + 'a' * 64
+        for value in ('kattis/judge-cpp@sha256:' + 'a' * 64,
+                      'docker.io/kattis/judge-cpp', 'docker.io/kattis/judge-cpp:latest',
+                      image.replace('@', ':latest@'), image[:-1], image + 'a',
+                      image.replace('sha256:', 'sha512:'), image.replace('a' * 64, 'A' * 64),
+                      image.replace('/kattis/', '/Kattis/'), image.replace('/kattis/', '//'),
+                      image.replace('/kattis/', '/../'), image + ' ', image + '\n', '', 12):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                identity({'snapshot_compiler': {'image': value}}, 'snapshot_compiler')
+        with self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+            identity({'snapshot_compiler': {'image': image, 'package': 'gcc=15.2.0'}}, 'snapshot_compiler')
 
 
 if __name__ == '__main__':

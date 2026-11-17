@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Researched 2026-11-17: https://open.kattis.com/languages/cpp returned HTTP
+# 403 to both the web reader and direct fetcher. UNVERIFIED: the supplied
+# 2026-11-16 transcription lists option "C++" (slug cpp), g++-15 15.2.0:
+# g++-15 -g -O2 -o {executable} -std=gnu++23 -static -lrt
+#   -Wl,-u,_IO_wfile_doallocate -Wl,--whole-archive -lpthread
+#   -Wl,--no-whole-archive {files}
+# No -D (including ONLINE_JUDGE), -march/-mtune or -I in that command.
+# std holds -std=; flags retain -g then -O2; link retains the published order.
+# -g is already accepted by the command model (no inert declaration needed).
+name = "kattis-gcc15-gnupp23"
+alias = "kattis"
+description = "Kattis C++ (GCC 15.2.0, GNU C++23), approximate image snapshot"
+# UNVERIFIED: judge OS, libc and triple are not published in the transcription.
+# Docker Hub reports linux/amd64 for the candidate snapshot image; this does
+# not establish judge architecture. CI checks the actual -dumpmachine.
+triple = "x86_64-linux-gnu"
+compiler = { family = "gcc", version = "15.2.0" }
+std = "gnu++23"
+flags = ["-g", "-O2"]
+link = ["-static", "-lrt", "-Wl,-u,_IO_wfile_doallocate", "-Wl,--whole-archive", "-lpthread", "-Wl,--no-whole-archive"]
+# APPROXIMATE, no build: Kattis does not document this image as the grading
+# environment. UNVERIFIED: judge compiler package revision/build identity.
+# Snapshot provenance only: Docker Hub's public latest-tag API, fetched
+# 2026-11-17, reports this OCI index digest (last pushed 2026-11-02) and its
+# linux/amd64 manifest sha256:22da737c95a5510f0ee58d039f070e9405856c72bb3c1202d04855addac880b9.
+# https://hub.docker.com/v2/repositories/kattis/judge-cpp/tags/latest
+# UNVERIFIED locally: image compiler version and container shell/tools;
+# Docker is prohibited here. CI must check g++-15 -dumpfullversion == 15.2.0
+# before installing tools and again before capture; no compiler substitution.
+snapshot_compiler = { image = "docker.io/kattis/judge-cpp@sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d" }
+# UNVERIFIED: judge library identities; use the libstdc++/glibc A1 inventories
+# for the inferred GNU/Linux environment, not as evidence of judge capture.
+libraries = ["libstdc++", "glibc"]
+# Produced only by profiles.yml; never generate these files locally.
+predefined = "kattis-gcc15-gnupp23-predefined.txt"
+check = ["g++-15", "g++"]
+# UNVERIFIED: source/output limits were not found; both probe budgets use
+# documented 60000-byte defaults, not asserted judge limits (including 128 KB).
+# UNVERIFIED: no known custom-test channel or output retrieval; the probe has
+# not been run on the judge.
+updated = "2026-11-17"
+sources = ["https://open.kattis.com/languages/cpp", "https://hub.docker.com/v2/repositories/kattis/judge-cpp/tags/latest"]

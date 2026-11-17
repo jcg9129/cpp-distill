@@ -9,6 +9,8 @@ from snapshot import (capture, inventory, startup_origins, join_native, native_r
 from flags import operations
 from matrix import matrix, job_matrices, UBUNTU_26_04
 
+KATTIS_IMAGE = 'docker.io/kattis/judge-cpp@sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d'
+
 
 class SnapshotTests(unittest.TestCase):
     def profile(self, directory):
@@ -101,6 +103,37 @@ predefined = "fixture-predefined.txt"
             with self.assertRaisesRegex(ValueError, 'provenance'):
                 capture(profile, 'g++-13', 'package=ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1')
 
+    def test_kattis_image_snapshot_flags_and_approximate_metadata(self):
+        original = ROOT / 'data/judges/kattis-gcc15-gnupp23.toml'
+        calls = []
+
+        def compiler_run(compiler, *args):
+            calls.append(args)
+            if args[0] == '-dumpfullversion':
+                return '15.2.0'
+            if args[0] == '-dumpmachine':
+                return 'x86_64-linux-gnu'
+            if args[0] == '--version':
+                return 'g++ (synthetic image fixture) 15.2.0'
+            self.assertEqual(args[:5], ('-x', 'c++', '-std=gnu++23', '-g', '-O2'))
+            self.assertFalse(any(a.startswith(('-Wl,', '-l')) or a == '-static' for a in args))
+            if args[-1].endswith('probe.cpp'):
+                return ''.join(f'DISTILL_PROBE_{i} 1\n' for i in range(len(data('builtins', 'gcc-15.2'))))
+            return '#define __GNUC__ 15\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n#define __cplusplus 202302L\n'
+
+        with tempfile.TemporaryDirectory(dir='.') as temp, patch('snapshot.shutil.which', return_value='/usr/bin/g++-15'), \
+                patch('snapshot.run', side_effect=compiler_run):
+            profile = Path(temp) / original.name
+            profile.write_bytes(original.read_bytes())
+            output = capture(profile, 'g++-15').read_text()
+            self.assertIn('# snapshot-compiler: image=' + KATTIS_IMAGE, output)
+            self.assertIn('# build: none\n# reproduced: no', output)
+            self.assertIn('# flag: -g\n# flag: -O2\n', output)
+            self.assertNotIn('ONLINE_JUDGE', output)
+            self.assertTrue(any(args[-1].endswith('probe.cpp') for args in calls))
+            with self.assertRaisesRegex(ValueError, 'provenance'):
+                capture(profile, 'g++-15', 'image=' + KATTIS_IMAGE)
+
     def test_mismatches_clang_and_other_startup_headers_rejected(self):
         for option, value in [('-dumpfullversion', '15.3.0'), ('-dumpmachine', 'aarch64-linux-gnu'),
                               ('-dM', '#define __clang__ 1\n'), ('-dD', '# 1 "/judge/settings.h" 1\n')]:
@@ -169,6 +202,12 @@ predefined = "fixture-predefined.txt"
         self.assertEqual(inventory('#define F(x) x\n#define EMPTY\n')['EMPTY'], '#define EMPTY ')
         origins = startup_origins('# 0 "<built-in>"\n#define X 1\n# 0 "<command-line>"\n#define Y 2\n# 1 "/usr/include/stdc-predef.h" 1 3 4\n#define Z 3\n', Path('/empty.cpp'))
         self.assertEqual(origins, {'X': 'compiler-builtin', 'Y': 'command-operation', 'Z': 'startup-header'})
+        # -g adds GCC's working-directory marker; only the actual cwd is accepted.
+        cwd = str(Path.cwd()).replace('\\', '/')
+        traced = startup_origins(f'# 0 "/empty.cpp"\n# 0 "{cwd}//"\n# 0 "<built-in>"\n#define X 1\n', Path('/empty.cpp'))
+        self.assertEqual(traced, {'X': 'compiler-builtin'})
+        with self.assertRaisesRegex(ValueError, 'unexpected startup header'):
+            startup_origins('# 0 "/somewhere/else//"\n#define X 1\n', Path('/empty.cpp'))
 
     def test_native_four_state_join_and_outside_model_failure(self):
         model = {'A': 'isa', 'B': 'isa', 'C': 'isa', 'D': 'isa', 'T': 'tune'}
@@ -254,7 +293,7 @@ predefined = "fixture-predefined.txt"
 
     def test_matrix_selection_builds_and_bad_input(self):
         rows = matrix()['include']
-        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23'})
+        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23', 'kattis-gcc15-gnupp23'})
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['version'], '15.2.0')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['runner'], 'windows-2025')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['build'], '')
@@ -267,6 +306,10 @@ predefined = "fixture-predefined.txt"
                          dict(profile='qoj-gcc15-cpp23', version='15.2.0', runner='ubuntu-24.04',
                               build='', compiler='package=ubuntu-26.04:g++-15=15.2.0-16ubuntu1',
                               acquisition='ubuntu', container=UBUNTU_26_04))
+        self.assertEqual(matrix('kattis-gcc15-gnupp23')['include'][0],
+                         dict(profile='kattis-gcc15-gnupp23', version='15.2.0', runner='ubuntu-24.04',
+                              build='', compiler='image=' + KATTIS_IMAGE,
+                              acquisition='image', container=KATTIS_IMAGE))
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['acquisition'], 'atcoder')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['acquisition'], 'msys2')
         with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '14.2.0'}, 'triple': 'x86_64-w64-mingw32',
@@ -277,6 +320,10 @@ predefined = "fixture-predefined.txt"
                    'triple': 'x86_64-linux-gnu', 'snapshot_compiler': {'package': 'other:gcc=13.3.0-1'}}):
             with self.assertRaisesRegex(ValueError, 'unsupported compiler acquisition'):
                 matrix('cses-gcc13-cpp23')
+        with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '15.2.0'},
+                   'triple': 'x86_64-linux-gnu', 'snapshot_compiler': {'image': 'docker.io/kattis/judge-cpp:latest'}}):
+            with self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                matrix('kattis-gcc15-gnupp23')
         for selection in ['', 'typo', 'atcoder-gcc15-gnupp23,', 'all,atcoder-gcc15-gnupp23']:
             with self.assertRaises(ValueError):
                 matrix(selection)
@@ -288,7 +335,7 @@ predefined = "fixture-predefined.txt"
         self.assertEqual(all_jobs['runner_matrix']['include'],
                          matrix('atcoder-gcc15-gnupp23,codeforces-gcc14-cpp23,cses-gcc13-cpp23')['include'])
         self.assertTrue(all('container' not in row for row in all_jobs['runner_matrix']['include']))
-        self.assertEqual(all_jobs['container_matrix'], matrix('qoj-gcc15-cpp23'))
+        self.assertEqual(all_jobs['container_matrix'], matrix('kattis-gcc15-gnupp23,qoj-gcc15-cpp23'))
         container_only = job_matrices('qoj-gcc15-cpp23,qoj-gcc15-cpp23')
         self.assertFalse(container_only['has_runner'])
         self.assertEqual(container_only['runner_matrix'], {'include': []})
@@ -297,6 +344,11 @@ predefined = "fixture-predefined.txt"
         self.assertFalse(runner_only['has_container'])
         self.assertEqual(runner_only['container_matrix'], {'include': []})
         self.assertEqual(runner_only['runner_matrix'], matrix('cses-gcc13-cpp23'))
+        image_only = job_matrices('kattis-gcc15-gnupp23,kattis-gcc15-gnupp23')
+        self.assertFalse(image_only['has_runner'])
+        self.assertTrue(image_only['has_container'])
+        self.assertEqual(image_only['runner_matrix'], {'include': []})
+        self.assertEqual(image_only['container_matrix'], matrix('kattis-gcc15-gnupp23'))
 
 
 if __name__ == '__main__':
