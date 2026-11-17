@@ -32,7 +32,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
 | D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
 | D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
-| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42) shipped; Library Checker, Luogu, Timus remain (see D6 section) |
+| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42), Library Checker (#44) shipped; Luogu, Timus remain (see D6 section) |
 
 ## D1 findings (2026-11-15)
 
@@ -396,12 +396,10 @@ them to the branch; then open the PR and merge when all checks are green.
 Remaining D6c profiles, in this order; research in
 [`d6-judge-research.md`](d6-judge-research.md) (claims, re-check sources):
 
-1. Library Checker: GCC 15.2 (Docker `gcc:15.2`), `-std=c++23 -DEVAL
-   -DONLINE_JUDGE -march=native`, ACL 1.6 via `-I`.
-2. Luogu: GCC 15.3.0 from Nix flake `luogu-dev/judge-env` (live rev
+1. Luogu: GCC 15.3.0 from Nix flake `luogu-dev/judge-env` (live rev
    unconfirmed); patched GCC disables `#pragma`/`__attribute__` optimize;
    `-march=native`.
-3. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
+2. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
    WinLibs release and CRT (UCRT/MSVCRT) unknown.
 
 Done 2026-11-17 (user decisions):
@@ -435,8 +433,16 @@ Follow-up proposed (Codex review): regression test that allow-listed
 `__cpp_lib_*` names become unknown after `#include <version>` / system headers
 in approximate profiles (`__cpp_[a-z0-9_]+` in the allow-list also matches them).
 
-Next: Library Checker (item 1 above; it uses `-march=native`, covered by the
-existing GCC 15.2 native model).
+Library Checker (#44, `37439a0`, 2026-11-17): `library-checker-gcc15-cpp23`
+(alias `library-checker`), approximate: the judge's Dockerfile pins only
+`gcc:15.2`; snapshot in the official image by digest `3ae15afe…` (run
+44057015622). Flags `-O2 -DEVAL -DONLINE_JUDGE -march=native`; `-I
+/opt/ac-library` omitted (judge system header). The container snapshot job now
+takes the compiler from `check[0]`; the Kattis rerun was byte-identical.
+
+Next: Luogu (item 1 above). Open points: the live judge-env flake revision,
+and GCC 15.3 needs its own builtin registry and native model audit (Luogu uses
+`-march=native`).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
