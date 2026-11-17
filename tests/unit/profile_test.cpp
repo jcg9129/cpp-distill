@@ -228,6 +228,65 @@ TEST(profile_snapshot_compiler_is_approximate_and_cannot_claim_reproduction) {
   for (const auto* value : {"{}", "{package=''}", "{package='gcc'}", "{package='gcc=1 2'}", "{recipe='not-url'}", "{typo='x'}", "{package='gcc=1',recipe='https://x'}", "[]"})
     badProfile(allowProfile() + "\nsnapshot_compiler = " + value, "snapshot_compiler:");
 }
+TEST(profile_gcc13_cpp23_draft_cplusplus_value) {
+  auto text = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
+  text = replace(text, "mingw-gcc14-cpp23", "mingw-gcc13-cpp23");
+  text = replace(text, "version = \"14.2\"", "version = \"13.3.0\"");
+  text = replace(text, "build = { package = \"synthetic:fixture=14.2.0-1\" }", "");
+  // Synthetic protocol fixture only; never a captured or shipped CSES snapshot.
+  const std::string snapshot = R"snapshot(# distill-snapshot: 1
+# compiler-path: /synthetic/g++
+# compiler-version: synthetic GCC 13.3.0
+# gcc-version: 13.3.0
+# dumpmachine: x86_64-w64-mingw32
+# profile-triple: x86_64-w64-mingw32
+# build: none
+# reproduced: no
+# std: c++23
+# builtin-registry: none
+# native-model: none
+# flag: -DONLINE_JUDGE
+# end-header
+#define __GNUC__ 13
+#define __GNUC_MINOR__ 3
+#define __GNUC_PATCHLEVEL__ 0
+#define __cplusplus 202100L
+#define __STRICT_ANSI__ 1
+#define __x86_64__ 1
+#define _WIN32 1
+#define _WIN64 1
+# command-operation #define ONLINE_JUDGE 1
+)snapshot";
+  auto load = [&](const std::string& contents) {
+    return parseProfile(text, "mingw-gcc13-cpp23.toml", [&](const auto&) -> Result<std::string> { return contents; });
+  };
+  const auto valid = load(snapshot);
+  CHECK(valid.ok());
+  if (valid.ok()) {
+    CHECK(!valid.value().reproduced);
+    CHECK_EQ(valid.value().initialState("__cplusplus").definition->replacement, "202100L");
+  }
+  CHECK(!load(replace(snapshot, "202100L", "202002L")).ok());
+  CHECK(!load(replace(snapshot, "202100L", "202302L")).ok());
+}
+TEST(profile_ubuntu_package_provenance_requires_release_and_revision) {
+  for (const auto* key : {"build", "snapshot_compiler"}) {
+    const auto base = replace(allowProfile(), "build = { package = \"synthetic:fixture=14.2.0-1\" }", "");
+    const auto text = base + "\n" + key + " = { package = 'ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1' }";
+    auto valid = synthetic(text);
+    CHECK(valid.ok());
+    if (valid.ok()) {
+      CHECK(!valid.value().reproduced); // package identity alone never affirms reproduction
+      const auto& identity = std::string_view(key) == "build" ? valid.value().build : valid.value().snapshotCompiler;
+      CHECK(identity.has_value());
+      if (identity) CHECK_EQ(identity->second, "ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1");
+    }
+    for (const auto* package : {"ubuntu:g++-13=13.3.0-1", "ubuntu-24:g++-13=13.3.0-1",
+                                "ubuntu-24.04:=13.3.0-1", "ubuntu-24.04:g++-13=13.3.0",
+                                "ubuntu-24.04:g++-13=13.3.0-", "ubuntu-24.04:g++-13=13.3.0-*"})
+      badProfile(base + "\n" + key + " = { package = '" + package + "' }", std::string(key) + ":");
+  }
+}
 TEST(profile_schema_required_unknown_types_and_values) {
   auto text = allowProfile(); auto doc = parseProfileToml(text, "test").value();
   for (const auto& [key, entry] : doc) {
@@ -464,6 +523,15 @@ TEST(profile_alias_shadowing_and_user_identifier_collisions) {
     CHECK(!listProfiles(lookup, bundled).ok());
   }
 }
+TEST(profile_cses_bundled_approximate_snapshot) {
+  CHECK(embeddedProfileFiles().contains("cses-gcc13-cpp23.toml"));
+  const auto alias = lookupProfile("cses"), full = lookupProfile("cses-gcc13-cpp23");
+  CHECK(alias.ok()); CHECK(full.ok()); if (!alias.ok() || !full.ok()) return;
+  CHECK_EQ(alias.value().name, "cses-gcc13-cpp23");
+  CHECK_EQ(alias.value().provenance.contentDigest, full.value().provenance.contentDigest);
+  CHECK(!alias.value().reproduced); CHECK(!alias.value().build);
+  CHECK_EQ(alias.value().initialState("ONLINE_JUDGE").state, MacroState::undefined);
+}
 TEST(profile_list_columns_and_order) {
   test::TempDirectory temp;
   ProfileLookup lookup; lookup.userDirectory = temp.path;
@@ -474,10 +542,11 @@ TEST(profile_list_columns_and_order) {
   CHECK(list.starts_with("atcoder-gcc15-gnupp23\tatcoder\tbundled\treproduced\t2026-11-15\t\"AtCoder"));
   CHECK(list.find("codeforces-gcc14-cpp23\tcodeforces\tbundled\tapproximate\t2026-11-15\t\"Codeforces") != std::string::npos);
   CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\t-\n") != std::string::npos);
-  CHECK_EQ(std::count(list.begin(), list.end(), '\n'), 3);
+  const auto count = 4;
+  CHECK_EQ(std::count(list.begin(), list.end(), '\n'), count);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());
-  CHECK_EQ(std::count(escaped.begin(), escaped.end(), '\n'), 3);
+  CHECK_EQ(std::count(escaped.begin(), escaped.end(), '\n'), count);
 }
 TEST(profile_digest_sha256_vectors_and_exact_input_bytes) {
   CHECK_EQ(detail::sha256(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");

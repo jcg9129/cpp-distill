@@ -138,7 +138,12 @@ Output/report paths must differ from the input and each other.
 
 The bundled **Codeforces** profile is approximate: the judge's GCC label is
 known, but its exact MSYS2 package revision is not. **AtCoder** has a reproduced
-GCC build and snapshot from its published recipe. A reproduced snapshot alone
+GCC build and snapshot from its published recipe. The D6c **CSES** profile
+(`cses-gcc13-cpp23`, alias `cses`) records GCC 13.3.0 with C++23 and is
+approximate: CSES publishes only the GCC version and flags, and its snapshot
+comes from the exact Ubuntu 24.04 `g++-13` package that its other tool versions
+point to.
+A reproduced snapshot alone
 does not make an arbitrary local GCC equivalent: target verification also needs
 matching compiler facts, dialect and command. AtCoder's `-march=native` facts
 vary across hosts, so that command does not establish target verification.

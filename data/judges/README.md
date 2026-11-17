@@ -10,7 +10,8 @@ that would otherwise collide. Full names pin a compiler option and never change
 meaning. The shipped names are `codeforces-gcc14-cpp23` and
 `atcoder-gcc15-gnupp23`, with optional `alias = "codeforces"` and
 `alias = "atcoder"`, respectively. Aliases use nonempty `[a-z0-9-]+` strings and
-track the newest GCC option; future alias moves belong in release notes. Required fields are
+track the newest GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`).
+Future alias moves belong in release notes. Required fields are
 `name`, `description`, `compiler = { family = "gcc", version = "major.minor[.patch]" }`,
 `triple`, `std`, `flags`, `libraries`, `check`, `updated` and nonempty HTTP(S)
 `sources`. Optional fields are `link`, `inert`, `build`, `snapshot_compiler`,
@@ -66,6 +67,11 @@ not version/triple similarity. `snapshot_compiler` has the same one-key form
 and names the compiler used for an approximate snapshot when the judge build
 is unknown or differs. Package values require `name=version` (including the
 exact distribution revision and a distribution prefix where applicable); recipe values require an HTTP(S) URL.
+Ubuntu packages use `ubuntu-YY.MM:name=version-revision`, for example
+`ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1`. The release, package name, upstream
+version and nonempty Debian revision are required; an optional numeric epoch
+precedes the upstream version. Both the C++ schema and `ci/profiles/provenance.py`
+reject missing revisions, malformed releases, whitespace and wildcard versions.
 For Codeforces, omit `build` and use:
 
 ```toml
@@ -241,7 +247,44 @@ The profile keeps the published preprocessing options in order, including module
 OpenMP, pthread, optimization and native tuning. AtCoder's `-I<install>/include`
 exposes ACL, Boost, etc. as judge system headers outside the standard-header list.
 
-Both jobs upload snapshots for review; they never commit or publish changes.
+CSES's [official how-to](https://cses.fi/howto), reread 2026-11-17, lists
+`g++ 13.3.0`, C++23 with `-std=c++23 -O2 -Wall`, and a source limit of 128 kB.
+It publishes no full command, link options, macros, output limit, OS or package
+revision. The profile therefore has **no `build`** and remains **approximate**.
+UNVERIFIED: Ubuntu 24.04, x86_64, `x86_64-linux-gnu`, libstdc++ and glibc on the
+judge are inferred from its language versions. Its submission-form label and
+custom-test availability have not been confirmed. Plan to run the probe as an
+ordinary submission; obtaining the output from that UI is also UNVERIFIED.
+The source budget is conservatively 128000 bytes (the page's kB conversion is
+UNVERIFIED); the unpublished output limit uses the documented 60000-byte default.
+
+The CSES snapshot compiler is the exact Ubuntu package
+`ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1`. On 2026-11-17 the official
+[noble-updates package page](https://packages.ubuntu.com/noble-updates/g++-13)
+and [amd64 compiler download listing](https://packages.ubuntu.com/noble-updates/amd64/g++-13-x86-64-linux-gnu/download)
+confirmed that revision, also present in the [live archive listing](https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-13/). `install-ubuntu.sh` checks the runner release and amd64
+architecture, checks every pinned compiler/development package revision with
+`apt-cache madison`, installs with exact `package=revision` arguments, and
+verifies installed versions. Missing archive revisions fail explicitly without
+fallback. Other runtime packages follow the runner; this is not a judge manifest.
+We use the existing **ubuntu-24.04 runner**, rather than a container, to retain
+its normal CMake/Ninja compiler for diagnostic distill and the shared Windows/Linux
+job structure. Only the snapshot and probe use `/usr/bin/g++-13`. CI records its
+actual `-dumpmachine`; both triple comparators permit vendor-only differences.
+GCC 13.3's [release source](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/libcpp/init.cc)
+sets `__cplusplus` to `202100L` for C++23. The loader checks that draft value for
+GCC 13 while retaining the nominal C++23 dialect. There is currently no audited
+GCC 13 special-builtin registry; snapshots record `builtin-registry: none`, so
+they cannot establish exhaustive builtin facts.
+
+**Adding a profile:** a TOML names its snapshot and expected probe output, and
+the embedded catalog requires both. Push the TOML and CI job on a branch,
+dispatch `profiles.yml` on that branch for the new profile (it loads the TOML by
+path), review the two uploaded artifacts, and commit them byte for byte to the
+same branch before opening the PR, recording the run URL. Never edit the TOML
+after capture without regenerating: the expected output binds its digest.
+
+All jobs upload snapshots for review; they never commit or publish changes.
 The two shipped snapshots are validated by embedded-profile tests. The four
 shipped A1 inventories in `data/extensions/` come byte for byte from the merged
 artifacts of [`extensions.yml` run 43768709866](https://github.com/jcg9129/cpp-distill/actions/runs/43768709866);
@@ -325,16 +368,16 @@ run profiles.yml`. Expectations will be committed from a reviewed CI artifact;
 none is fabricated from replacement lists. Fixture expectations only test the
 protocol.
 
-Immediately after each snapshot step, `profiles.yml` builds the LLVM-free
-`DISTILL_PROFILE_ONLY` diagnostic CLI and runs `ci/profiles/probe.py` with that
-job's snapshot compiler. This loads the freshly generated snapshot by explicit
+`profiles.yml` first builds the LLVM-free `DISTILL_PROFILE_ONLY` diagnostic CLI
+with the normal toolchain. Immediately after each snapshot step it runs
+`ci/profiles/probe.py` with that job's snapshot compiler. This loads the freshly generated snapshot by explicit
 TOML path, finds a partition satisfying both budgets for every part, compiles
 and runs all probes, checks the complete result, and uploads the expected file
 alongside the snapshot. It uses the snapshot's exact `-x c++ -std=<std> <flags>`
 argv, retaining ordered macro operations and native options. Linker-only
 `link` options are excluded as in snapshot capture: no judge-installed external
-library is needed by this diagnostic. Both the AtCoder recipe build and the
-Codeforces exact MinGW package job follow this path. Do not substitute a local
+library is needed by this diagnostic. The AtCoder recipe build, Codeforces exact
+MinGW package job and CSES exact Ubuntu package job follow this path. Do not substitute a local
 compiler's stringization for this output.
 
 `--judge-check <selector> <output-file>... [--record <dir>]` never changes

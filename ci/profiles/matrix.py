@@ -23,8 +23,16 @@ def matrix(selection='all'):
         compiler = build if build != 'none' else snapshot_compiler
         if windows and not compiler.startswith('package=msys2:mingw-w64-x86_64-gcc='):
             raise ValueError(f'{name}: Windows snapshot requires an exact MSYS2 GCC package')
+        if windows:
+            acquisition = 'msys2'
+        elif compiler.startswith('package=ubuntu-24.04:g++-'):
+            acquisition = 'ubuntu'
+        elif compiler == 'recipe=https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml':
+            acquisition = 'atcoder'
+        else:
+            raise ValueError(f'{name}: unsupported compiler acquisition: {compiler}')
         rows.append(dict(profile=name, version=version, runner='windows-2025' if windows else 'ubuntu-24.04',
-                         build='' if build == 'none' else build, compiler=compiler))
+                         build='' if build == 'none' else build, compiler=compiler, acquisition=acquisition))
     return {'include': rows}
 
 
