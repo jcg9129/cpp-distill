@@ -294,6 +294,118 @@ int main(int argc, char** argv) {
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"attribute macro disabled");
       check(!family(m,"f").pinned.empty(),"attribute macro not pinned");
     });
+    auto attributeCase = [&](std::string text, const std::set<std::string>& live,
+                             const std::set<std::string>& dead) {
+      m = extract(std::move(text),o); r = take(computeRetention(m));
+      check(r.disabledReasons.empty(),"no_unique_address extraction disabled");
+      for (const auto& label : live) check(kept(label),"dependency removed: " + label);
+      for (const auto& label : dead) check(!kept(label),"unrelated declaration kept: " + label);
+      check(r.removedBytes > 0,"no actual removal");
+      const auto out = take(renderSource(m,&r));
+      take(renderingInvariant(m,&r,out.provenance.text));
+      take(staticNameInvariant(m,r,out.provenance.text));
+      return out.provenance.text;
+    };
+    run("no_unique_address keeps complete record layout", [&] {
+      const std::string record = "struct Live { [[no_unique_address]] Empty empty; [[no_unique_address]] Value value; int tail; };";
+      const auto out = attributeCase("struct Empty {}; struct Value { int n; };\n" + record +
+          "\nint unused(){return 9;} int main(){return sizeof(Live)==0;}\n",
+          {"Empty","Value","Live","main"},{"unused"});
+      check(out.find(record) != out.npos,"record members or attribute spelling changed");
+      check(out.find("unused") == out.npos,"unused function text retained");
+    });
+    run("no_unique_address unused whole record", [&] {
+      const auto out = attributeCase(
+          "struct Empty {}; struct Dead { [[no_unique_address]] Empty empty; int tail; };\n"
+          "int live(){return 0;} int main(){return live();}\n",
+          {"live","main"},{"Empty","Dead"});
+      check(out.find("Dead") == out.npos && out.find("no_unique_address") == out.npos,"unused attributed record text retained");
+      check(out.find("int live(){return 0;}") != out.npos,"live function text changed");
+    });
+    run("no_unique_address templates and nested records", [&] {
+      const std::string record = "template<class T> struct Box { struct Nested { [[no_unique_address]] T empty; int n=3; }; [[no_unique_address]] T other; Nested nested; };";
+      const auto out = attributeCase("struct Empty {};\n" + record +
+          "\ntemplate<class T> struct Dead { [[no_unique_address]] T empty; };\n"
+          "int unused(){return 9;} int main(){Box<Empty> box; return box.nested.n-3;}\n",
+          {"Empty","Box","main"},{"Dead","unused"});
+      check(out.find(record) != out.npos,"nested/template members changed");
+      check(out.find("Dead") == out.npos && out.find("unused") == out.npos,"dead template/function text retained");
+    });
+    run("no_unique_address default member initializer dependency", [&] {
+      const auto out = attributeCase(
+          "int initial(){return 7;} int unused(){return 9;}\n"
+          "struct Live { [[no_unique_address]] int value=initial(); };\n"
+          "int main(){Live x; return x.value-7;}\n",
+          {"initial","Live","main"},{"unused"});
+      check(out.find("int initial(){return 7;}") != out.npos && out.find("value=initial()") != out.npos,"initializer dependency/spelling lost");
+      check(out.find("unused") == out.npos,"unused function text retained");
+    });
+    run("no_unique_address constructor and destructor dependencies", [&] {
+      const auto out = attributeCase(
+          "void construct(){} void destroy(){} int unused(){return 9;}\n"
+          "struct Member { Member(); ~Member(); };\n"
+          "Member::Member(){construct();} Member::~Member(){destroy();}\n"
+          "struct Live { [[no_unique_address]] Member member; };\n"
+          "int main(){Live x;}\n",
+          {"construct","destroy","Member","Member::Member","Member::~Member","Live","main"},{"unused"});
+      check(out.find("Member::Member(){construct();}") != out.npos && out.find("Member::~Member(){destroy();}") != out.npos,"special member definitions lost");
+      check(out.find("[[no_unique_address]] Member member;") != out.npos,"attributed field lost");
+      check(out.find("unused") == out.npos,"unused function text retained");
+    });
+    run("no_unique_address macro expansion", [&] {
+      const auto out = attributeCase(
+          "#define ATTR(name) [[name]]\n#define NUA ATTR(no_unique_address)\n"
+          "struct Empty {}; struct Live { NUA Empty empty; int n; };\n"
+          "struct Dead { NUA Empty empty; };\n"
+          "int unused(){return 9;} int main(){return sizeof(Live)==0;}\n",
+          {"Empty","Live","main"},{"Dead","unused"});
+      check(out.find("struct Live { NUA Empty empty; int n; };") != out.npos,"macro-produced field spelling lost");
+      check(out.find("Dead") == out.npos && out.find("unused") == out.npos,"macro field pinned unused record/function");
+    });
+    run("no_unique_address attribute list", [&] {
+      const auto out = attributeCase(
+          "struct Live { [[maybe_unused, no_unique_address]] int value; };\n"
+          "int unused(){return 9;} int main(){return sizeof(Live)==0;}\n",
+          {"Live","main"},{"unused"});
+      check(out.find("[[maybe_unused, no_unique_address]] int value;") != out.npos,"attribute list changed");
+      check(out.find("unused(){") == out.npos,"unused function text retained");
+    });
+    for (const auto& [name,text] : std::vector<std::pair<const char*,const char*>>{
+        {"static member","struct Bad { [[no_unique_address]] static int value; };"},
+        {"bit-field","struct Bad { [[no_unique_address]] unsigned value:1; };"},
+        {"arguments","struct Bad { [[no_unique_address(1)]] int value; };"},
+        {"empty argument list","struct Bad { [[no_unique_address()]] int value; };"},
+        {"msvc spelling","struct Bad { [[msvc::no_unique_address]] int value; };"},
+        {"unknown scope","struct Bad { [[other::no_unique_address]] int value; };"},
+        {"using scope","struct Bad { [[using msvc: no_unique_address]] int value; };"},
+        {"unaudited underscored spelling","struct Bad { [[__no_unique_address__]] int value; };"},
+        {"GNU spelling","struct Bad { __attribute__((no_unique_address)) int value; };"},
+        {"non-member","[[no_unique_address]] int value;"},
+        {"statement","int f(){ [[no_unique_address]] return 0; }"},
+        {"macro vendor spelling","#define NUA [[msvc::no_unique_address]]\nstruct Bad { NUA int value; };"},
+        {"macro arguments","#define NUA(x) [[no_unique_address(x)]]\nstruct Bad { NUA(1) int value; };"}}) {
+      run((std::string("no_unique_address rejects ") + name).c_str(), [&] {
+        // A successful control proves this worker can remove declarations;
+        // the unsupported variant must instead preserve the entire input.
+        const auto control = attributeCase(
+            "struct Live { [[no_unique_address]] int value; };\n"
+            "int unused(){return 9;} int main(){return sizeof(Live)==0;}\n",
+            {"Live","main"},{"unused"});
+        check(control.find("unused") == control.npos && control.find("[[no_unique_address]] int value;") != control.npos,"control removal/preservation failed");
+        m = extract(std::string(text) + "\nint unused(){return 9;} int main(){}\n",o);
+        r = take(computeRetention(m));
+        check(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why) {
+          return why.starts_with("unsupported attribute:");
+        }),"missing unsupported attribute refusal");
+        check(r.removedBytes == 0,"unsupported attribute permitted removal");
+        for (const auto& f : r.families) check(f.kept,"disabled extraction removed a family");
+        check(!renderSource(m,&r).ok(),"disabled extraction rendered a pruning candidate");
+        const auto out = take(renderSource(m));
+        take(renderingInvariant(m,nullptr,out.provenance.text));
+        check(out.provenance.text.find(text) != out.provenance.text.npos &&
+              out.provenance.text.find("int unused(){return 9;}") != out.provenance.text.npos,"fallback lost source text");
+      });
+    }
     run("attribute roots", [&] {
       m = extract("__attribute__((constructor(200))) void startup(){}\n"
                   "__attribute__((destructor(200))) void shutdown(){}\n"
