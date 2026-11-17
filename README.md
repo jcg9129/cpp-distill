@@ -34,10 +34,10 @@ Verify the downloaded archive **before extraction**. For example, on Linux:
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
 # Require an OK result for your downloaded archive, then:
-tar -xzf distill-0.1.0-linux-x86_64.tar.gz
+tar -xzf distill-0.1.1-linux-x86_64.tar.gz
 ```
 
-On macOS use `shasum -a 256 distill-0.1.0-macos-arm64.tar.gz` and compare its
+On macOS use `shasum -a 256 distill-0.1.1-macos-arm64.tar.gz` and compare its
 hex digest with the exact filename's entry in `SHA256SUMS`. Extract it, then
 put `distill` on `PATH`. macOS may quarantine an unsigned downloaded executable;
 after verifying and trusting the download, remove its quarantine attribute:
@@ -47,7 +47,7 @@ xattr -d com.apple.quarantine /path/to/distill
 brew install gcc
 ```
 
-On Windows compare `(Get-FileHash .\distill-0.1.0-windows-x86_64.zip -Algorithm SHA256).Hash`
+On Windows compare `(Get-FileHash .\distill-0.1.1-windows-x86_64.zip -Algorithm SHA256).Hash`
 with `SHA256SUMS`, extract the ZIP, and put `distill.exe` and your real MinGW
 GCC on `PATH` (for MSYS2 UCRT64, typically `C:\msys64\ucrt64\bin`). PowerShell
 uses `.\distill.exe` to run an executable in the current directory. Source,
