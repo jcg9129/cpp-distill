@@ -66,5 +66,29 @@ class HomebrewProvenance(unittest.TestCase):
                 identity({'snapshot_compiler': {'homebrew': value, other: 'gcc=16.2.0'}}, 'snapshot_compiler')
 
 
+class WinlibsProvenance(unittest.TestCase):
+    def test_snapshot_only_digest_pinned_archive(self):
+        for extension in ('zip', '7z'):
+            value = f'winlibs:13.2.0posix-17.0.6-11.0.1-ucrt-r4/compiler.{extension}@sha256:' + 'a' * 64
+            self.assertEqual(identity({'snapshot_compiler': {'winlibs': value}}, 'snapshot_compiler'), 'winlibs=' + value)
+            with self.assertRaisesRegex(ValueError, 'build'):
+                identity({'build': {'winlibs': value}}, 'build')
+
+    def test_missing_digest_paths_urls_and_mixed_keys_rejected(self):
+        value = 'winlibs:release/compiler.zip@sha256:' + 'a' * 64
+        for bad in (value.removeprefix('winlibs:'), value.replace('release/', ''),
+                    value.replace('release/', '../'), value.replace('compiler.zip', '../compiler.zip'),
+                    value.replace('release/', '/release/'), value.replace('release/', 'nested/release/'),
+                    value.replace('winlibs:', 'https://github.com/'), value.replace('.zip', '.tar.gz'),
+                    value.split('@')[0], value[:-1], value + 'a',
+                    value.replace('sha256:', 'sha512:'), value.replace('a' * 64, 'A' * 64),
+                    value + ' ', value + '\n', value.replace('release', 'release tag'), '', 12):
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                identity({'snapshot_compiler': {'winlibs': bad}}, 'snapshot_compiler')
+        for other in ('image', 'homebrew', 'package', 'recipe'):
+            with self.subTest(other=other), self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                identity({'snapshot_compiler': {'winlibs': value, other: 'gcc=13.2.0'}}, 'snapshot_compiler')
+
+
 if __name__ == '__main__':
     unittest.main()

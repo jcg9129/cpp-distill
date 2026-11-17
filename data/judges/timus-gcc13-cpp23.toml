@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Researched 2026-11-17; Timus cpp help re-fetched on that date.
+# Published command (GCC option since 2024-01-22):
+# g++ -x c++ -std=c++23 -O2 -fno-strict-aliasing -march=native -DONLINE_JUDGE -static -Wl,-s,--stack=67108864 -o %1.exe %1
+name = "timus-gcc13-cpp23"
+alias = "timus"
+description = "Timus GCC 13.2.0, ISO C++23, Windows WinLibs UCRT POSIX SEH (approximate)"
+# UNVERIFIED spelling on the judge; CI records the archive compiler's -dumpmachine.
+triple = "x86_64-w64-mingw32"
+compiler = { family = "gcc", version = "13.2.0" }
+std = "c++23"
+flags = ["-O2", "-fno-strict-aliasing", "-march=native", "-DONLINE_JUDGE"]
+# Unmodelled by core/command: changes optimization alias analysis, not preprocessing.
+inert = ["-fno-strict-aliasing"]
+link = ["-static", "-Wl,-s,--stack=67108864"]
+# Timus live probe, 2026-11-17, problem 1000, GCC 13.2 C++ option:
+# user submission; #pragma message values from the compilation-error log.
+# __VERSION__="13.2.0", __GNUC_PATCHLEVEL__=0, __cplusplus=202100L,
+# __STRICT_ANSI__=1: strict ISO C++23 confirmed (GCC 13's provisional value).
+# After <cstdio>: _UCRT defined empty, __MSVCRT__=1, __MSVCRT_VERSION__=0xE00,
+# __MINGW64_VERSION_STR="11" "." "0" "." "1", _WIN32_WINNT=0x0601.
+# __USING_MCFGTHREAD__ undefined, _REENTRANT=1, __SEH__=1:
+# UCRT, MinGW-w64 11.0.1, POSIX threads, SEH confirmed live.
+# ONLINE_JUDGE=1, __OPTIMIZE__=1, __clang__ undefined.
+# __AVX2__, __AVX512F__, __SHSTK__ undefined: observations ONLY, never facts.
+# Exact WinLibs revision cannot be inferred: __VERSION__ has no build string.
+# APPROXIMATE, no build. Release API checked 2026-11-17: r4 packaged/published
+# 2024-01-15, latest matching UCRT/POSIX/SEH x86_64 release before 2024-01-22;
+# r5 was published 2024-02-03. Use r4's smaller GCC-only zip (LLVM not needed).
+# Asset digest was null in the API; SHA-256 comes from the adjacent .zip.sha256.
+snapshot_compiler = { winlibs = "winlibs:13.2.0posix-17.0.6-11.0.1-ucrt-r4/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r4.zip@sha256:6e2bc5d50c9b2775193a5f9f41939de952ee5b6a550e9c3375bc52dda6162771" }
+libraries = ["mingw-w64", "libstdc++"]
+# data/native/gcc-13.2-x86.txt bounds native CPU dependencies: every model
+# name stays unknown, including features absent on every named CPU/CI host.
+# Both artifacts are produced only by profiles.yml; never fabricate locally.
+predefined = "timus-gcc13-cpp23-predefined.txt"
+check = ["x86_64-w64-mingw32-g++", "g++"]
+# No numeric source/output limits published: retain both 60000-byte defaults.
+# No custom tests. Compilation-error logs expose manual #pragma message probes;
+# --judge-probe emits runtime stdout, so that channel cannot carry its protocol.
+updated = "2026-11-17"
+sources = [
+  "https://acm.timus.ru/help.aspx?topic=cpp",
+  "https://acm.timus.ru/help.aspx?topic=judge&locale=en",
+  "https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-17.0.6-11.0.1-ucrt-r4",
+  "https://api.github.com/repos/brechtsanders/winlibs_mingw/releases",
+  "https://github.com/brechtsanders/winlibs_recipes/blob/28d7b327ad6ade3d92a124bee1e383c6c56bd46d/recipes/gcc.winlib",
+  "https://github.com/brechtsanders/winlibs_mingw/releases/download/13.2.0posix-17.0.6-11.0.1-ucrt-r4/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r4.zip.sha256",
+]

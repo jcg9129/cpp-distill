@@ -199,8 +199,9 @@ and provenance: compiler builtin, startup header, command operation, special
 builtin, native model, A5, A4 or approximate allow-list. Reproduced mode requires
 a matching named build, affirmative snapshot provenance and a complete embedded
 compiler-version registry. `snapshot_compiler` records the actual alternate
-compiler's exact package, recipe, digest-pinned Docker Hub image or Homebrew
-core GCC bottle blob (snapshot only; `image` and `homebrew` are forbidden in
+compiler's exact package, recipe, digest-pinned Docker Hub image, Homebrew
+core GCC bottle blob or official WinLibs release archive blob (snapshot only;
+`image`, `homebrew` and `winlibs` are forbidden in
 `build`); its matching `snapshot-compiler` header is
 required. A `reproduced: yes` snapshot without a profile `build` is rejected.
 Approximate mode uses only the commented data allow-list

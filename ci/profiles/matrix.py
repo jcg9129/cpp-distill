@@ -27,10 +27,12 @@ def matrix(selection='all'):
         build = identity(p, 'build')
         snapshot_compiler = identity(p, 'snapshot_compiler')
         compiler = build if build != 'none' else snapshot_compiler
-        if windows and not compiler.startswith('package=msys2:mingw-w64-x86_64-gcc='):
-            raise ValueError(f'{name}: Windows snapshot requires an exact MSYS2 GCC package')
-        if windows:
+        if windows and compiler.startswith('winlibs='):
+            acquisition = 'winlibs'
+        elif windows and compiler.startswith('package=msys2:mingw-w64-x86_64-gcc='):
             acquisition = 'msys2'
+        elif windows:
+            raise ValueError(f'{name}: Windows snapshot requires an exact MSYS2 GCC package or WinLibs archive')
         elif compiler.startswith('image='):
             acquisition = 'image'
         elif compiler.startswith('homebrew='):

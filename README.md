@@ -162,7 +162,14 @@ The D6c **Library Checker** profile (`library-checker-gcc15-cpp23`, alias
 `-DONLINE_JUDGE`, `-march=native` options. It is approximate: the judge pins
 only `gcc:15.2`; CI snapshots a digest-pinned base image. ACL 1.6 remains a
 judge system header outside the profile, and native CPU facts remain unknown.
-The QOJ, Kattis, Library Checker and yukicoder snapshots and expected probe outputs must be captured by
+The D6c **Timus** profile (`timus-gcc13-cpp23`, alias `timus`) records GCC 13.2.0,
+strict ISO C++23 and WinLibs UCRT/POSIX/SEH. It is approximate: a live probe
+confirms those properties but cannot identify the WinLibs revision. CI uses a
+digest-pinned r4 archive on Windows; the audited GCC 13.2 native model keeps
+all CPU-dependent names unknown. Timus exposes manual `#pragma message` probes
+through compilation-error logs; the runtime `--judge-probe` protocol cannot
+use that channel.
+The QOJ, Kattis, Library Checker, Timus and yukicoder snapshots and expected probe outputs must be captured by
 branch CI before the PR; see
 [Adding a profile](data/judges/README.md#research-and-ci).
 A reproduced snapshot alone

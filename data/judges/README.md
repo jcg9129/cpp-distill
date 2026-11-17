@@ -13,7 +13,8 @@ meaning. The shipped names are `codeforces-gcc14-cpp23` and
 track the newest supported GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`),
 `qoj-gcc15-cpp23` (alias `qoj`), `kattis-gcc15-gnupp23` (alias `kattis`),
 `yukicoder-gcc16-cpp23` (alias `yukicoder`), `yukicoder-gcc16-gnupp23`
-(no alias) and `library-checker-gcc15-cpp23` (alias `library-checker`).
+(no alias), `library-checker-gcc15-cpp23` (alias `library-checker`) and
+`timus-gcc13-cpp23` (alias `timus`).
 QOJ's published C++26 option is deferred:
 the audited A6 ADL name registry ends at C++23 and disables pruning for C++26.
 The profile schema, dialect model and standard header/macro inventories accept
@@ -71,7 +72,7 @@ inventory grants no protection. Without a selection, the union of all sets appli
 `build` has exactly one key: `package` (exact package and revision) or `recipe`
 (the published source/configure recipe URL). Reproduction relies on amended A4,
 not version/triple similarity. `snapshot_compiler` accepts those one-key forms
-and snapshot-only `image` and `homebrew` forms, and names the compiler used for an approximate
+and snapshot-only `image`, `homebrew` and `winlibs` forms, and names the compiler used for an approximate
 snapshot when the judge build is unknown or differs. Package values require `name=version` (including the
 exact distribution revision and a distribution prefix where applicable); recipe values require an HTTP(S) URL.
 Ubuntu packages use `ubuntu-YY.MM:name=version-revision`, for example
@@ -110,6 +111,17 @@ its snapshots record `reproduced: no`. For yukicoder:
 ```toml
 snapshot_compiler = { homebrew = "homebrew:gcc=16.2.0@sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922" }
 ```
+
+WinLibs values must fully match
+`winlibs:[A-Za-z0-9][A-Za-z0-9._+-]*/[A-Za-z0-9][A-Za-z0-9._+-]*\.(zip|7z)@sha256:[0-9a-f]{64}`.
+The two components are a release tag and asset basename in the fixed official
+`brechtsanders/winlibs_mingw` GitHub repository; the digest pins the archive
+**blob**. This scoped form avoids arbitrary URLs and ambiguous repository
+identities while permitting either published archive format. Both validators
+reject missing/uppercase/short digests, paths, whitespace and mixed keys.
+`winlibs` is forbidden in `build` and its snapshots record `reproduced: no`:
+the archive is snapshot provenance only. The installer supports only the
+audited Timus zip below and fails on any other identity, without substitution.
 
 A profile is approximate if it has no build,
 its snapshot is not from that build, or the compiler release lacks a complete
@@ -167,7 +179,8 @@ The fragment illustrates record syntax, not a complete valid snapshot. All
 registered names need probes and corresponding facts. `build` is
 `package=<value>`, `recipe=<url>` or `none`. When present, `snapshot-compiler`
 must exactly match the profile's `snapshot_compiler` identity as `package=<value>`,
-`recipe=<url>`, `image=<digest-pinned-reference>` or `homebrew=<bottle-identity>`.
+`recipe=<url>`, `image=<digest-pinned-reference>`, `homebrew=<bottle-identity>`
+or `winlibs=<archive-identity>`.
 An approximate Codeforces snapshot has these header lines:
 
 ```text
@@ -513,6 +526,119 @@ There is no custom-test facility: use ordinary submissions only.
 **UNVERIFIED:** probe output retrieval and an actual judge match. Snapshot and
 expected output remain pending branch CI capture; neither is fabricated locally.
 
+Timus's [C/C++ help](https://acm.timus.ru/help.aspx?topic=cpp), re-fetched
+2026-11-17, lists Microsoft Visual C++ 2022 17.8, GCC 13.2.0 and Clang 17.0.6.
+Its GCC/Clang x64 builds come from WinLibs; the compiler switch dates to
+2024-01-22. The published GCC C++ command is:
+
+```text
+g++ -x c++ -std=c++23 -O2 -fno-strict-aliasing -march=native -DONLINE_JUDGE -static -Wl,-s,--stack=67108864 -o %1.exe %1
+```
+
+`timus-gcc13-cpp23` (alias `timus`) keeps the preprocessing argv in published
+order, separating the dialect and linker flags. The command classifier leaves
+`-fno-strict-aliasing` unmodelled; it changes optimization alias analysis rather
+than preprocessing, so it is explicitly documented in `inert`. The existing
+link schema accepts both `-static` and this `-Wl,` option. The profile selects
+the same A1 inventories as Codeforces: `mingw-w64` and `libstdc++`.
+
+**Timus live probe, 2026-11-17:** user submission to problem 1000 with the
+GCC 13.2 C++ option, values from `#pragma message` in the compilation-error
+log (undefined names printed as themselves; no account identity recorded):
+
+```text
+__VERSION__ = "13.2.0"
+__GNUC_PATCHLEVEL__ = 0
+__cplusplus = 202100L
+__STRICT_ANSI__ = 1
+_UCRT = (defined, empty)                 [after <cstdio>]
+__MSVCRT__ = 1                          [after <cstdio>]
+__MSVCRT_VERSION__ = 0xE00               [after <cstdio>]
+__MINGW64_VERSION_STR = "11" "." "0" "." "1"
+_WIN32_WINNT = 0x0601
+__USING_MCFGTHREAD__ = undefined
+_REENTRANT = 1
+__SEH__ = 1
+ONLINE_JUDGE = 1
+__OPTIMIZE__ = 1
+__AVX2__ = undefined
+__AVX512F__ = undefined
+__SHSTK__ = undefined
+__clang__ = undefined
+```
+
+This confirms strict ISO C++23 (GCC 13 reports the provisional `202100L`), UCRT,
+MinGW-w64 11.0.1, POSIX threads and SEH. CRT/header observations do not become
+source-entry facts. The three missing ISA macros are **observations only** and
+never fix native model states. `__VERSION__` contains no WinLibs build string,
+so the exact release revision remains unknown. The profile has **no `build`**
+and is **approximate**. The judge's exact `x86_64-w64-mingw32` triple spelling
+is UNVERIFIED; CI records the archive compiler's actual `-dumpmachine`.
+
+The [GitHub releases API](https://api.github.com/repos/brechtsanders/winlibs_mingw/releases)
+was enumerated on 2026-11-17 (100 releases per page back through 2023).
+The latest matching UCRT/POSIX/SEH x86_64 revision on or before 2024-01-22 is
+[`13.2.0posix-17.0.6-11.0.1-ucrt-r4`](https://github.com/brechtsanders/winlibs_mingw/releases/tag/13.2.0posix-17.0.6-11.0.1-ucrt-r4),
+packaged and published 2024-01-15. r3 was published 2023-11-21; r5 followed
+2024-02-03, too late for the switch. The r4 tag includes both LLVM and GCC-only
+assets; choose the smaller GCC-only
+`winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r4.zip` (222024256 bytes).
+Its API `digest` is null. The adjacent
+[`.zip.sha256`](https://github.com/brechtsanders/winlibs_mingw/releases/download/13.2.0posix-17.0.6-11.0.1-ucrt-r4/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r4.zip.sha256)
+supplies `6e2bc5d50c9b2775193a5f9f41939de952ee5b6a550e9c3375bc52dda6162771`.
+The release notes confirm GCC 13.2.0, MinGW-w64 11.0.1, POSIX and UCRT;
+the asset identifies SEH. This is the closest dated snapshot choice, not proof
+that Timus deployed r4.
+
+On `windows-2025`, `ci/profiles/winlibs.py` downloads and hashes that archive
+before extraction, refuses an existing destination, and checks the absolute
+`mingw64/bin/g++.exe` for `-dumpfullversion = 13.2.0`, POSIX thread configuration,
+UCRT and the x86_64 target in `-v`. A separate preprocessing-only header check
+confirms MinGW-w64 11.0.1, UCRT, POSIX and SEH. CI logs `-v`, `--version`,
+`-dumpmachine`, `-print-search-dirs` and `-E -v -x c++ NUL` search paths.
+Snapshot and expected-output capture use that absolute executable, with PATH
+limited to its bin directory and Windows system directories and with injected
+GCC/include/library environment paths cleared. The MSYS2 installer remains
+exclusive to Codeforces; no runner compiler can be selected as a substitute.
+GCC's [documented configure option](https://gcc.gnu.org/install/configure.html)
+is `--enable-threads=posix`; the check accepts that or `--with-threads=posix`,
+requires `Thread model: posix`, and checks WinLibs' `x86_64-ucrt-posix-seh`
+package identity rather than assuming GCC prints a CRT configure option.
+The historical [WinLibs GCC recipe at 28d7b327](https://github.com/brechtsanders/winlibs_recipes/blob/28d7b327ad6ade3d92a124bee1e383c6c56bd46d/recipes/gcc.winlib)
+(2024-01-12, GCC 13.2.0) confirms that option spelling and package identity
+construction; this is a check on the snapshot compiler, not judge build proof.
+
+Without a native model, both `snapshot.py` and the loader in
+`src/core/profile/facts.cpp` reject this host-dependent command. The fallback
+in `src/core/resolve/resolve.cpp` treats all reserved names as feature names for
+invalidation when a registry is missing; that is not snapshot acquisition or
+an initial-state guarantee. Timus therefore adds
+`data/native/gcc-13.2-x86.txt`, audited from `releases/gcc-13.2.0`'s
+`i386-c.cc`, `c-cppbuiltin.cc`, `driver-i386.cc` and `cppbuiltin.cc`. Its header
+lists the CPU-independent ABI names excluded from the model, as for GCC 15.2.
+The audit includes GCC 13's Knights Landing/Mill and AVX-512 spellings that
+were later removed. Every model name is emitted **unknown**, even if always
+defined/absent in the named-CPU sweep or host dump; the sweep plus host only
+reject variation outside the audited inventory. The loader requires every
+model record and `initialState` preserves these unknowns, including overlapping
+allow-listed names such as `__SIZEOF_FLOAT80__` and `__FLOAT_WORD_ORDER__`.
+`ONLINE_JUDGE` remains an explicit command fact. No judge/CI CPU observation
+narrows this bound. `data/builtins/gcc-13.2.txt` audits all 17 `builtin_array`
+entries from the release's `libcpp/init.cc`; `__has_embed`, `__has_feature` and
+`__has_extension` are absent. GCC 13.3 has its own key: CSES remains unchanged.
+
+The [judge guide](https://acm.timus.ru/help.aspx?topic=judge&locale=en) describes
+an output limit with a large margin but supplies no numeric limit; no source
+limit was found. Both probe budgets retain the documented **60000-byte defaults**.
+There is no custom-test facility. A deliberately failing ordinary submission
+does expose `#pragma message` output in its compilation-error log, as confirmed
+by the dated live probe; the guide says the report is available for 15 minutes.
+However, `--judge-probe` currently emits runtime stdout with manifests, hex
+encoding and checksums. It cannot be used unchanged through compilation-error
+logs, nor can manual pragma messages be passed to `--judge-check` as protocol
+output. A full runtime probe match on Timus and its output retrieval remain
+UNVERIFIED. Both snapshot and expected-output artifacts await branch CI.
+
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,
 dispatch `profiles.yml` on that branch for the new profile (it loads the TOML by
@@ -538,7 +664,7 @@ target equivalence. Resolver/validation orchestration remains the next D2 work.
 
 The optional strict-schema TOML integer keys `probe_source_bytes` and
 `probe_output_bytes` each accept 1024 through 16777216 inclusive. Both default
-to **60000 bytes**. Codeforces, AtCoder, QOJ and Kattis currently use this conservative
+to **60000 bytes**. Codeforces, AtCoder, QOJ, Kattis and Timus currently use this conservative
 fallback: no published source/output limit has been established here, and these
 values are not claims about those judges' limits. An override must cite the
 judge's published limit in a comment. Probe output has a conservative static

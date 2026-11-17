@@ -306,6 +306,14 @@ reproduction without `build` is rejected. Codeforces publishes only
 "GNU G++23 14.2 (64 bit, msys2)", with no package revision, so its profile uses
 an available MSYS2 package as `snapshot_compiler` and remains approximate.
 
+A snapshot-only `winlibs` value fully matches
+`winlibs:[A-Za-z0-9][A-Za-z0-9._+-]*/[A-Za-z0-9][A-Za-z0-9._+-]*\.(zip|7z)@sha256:[0-9a-f]{64}`:
+an official `brechtsanders/winlibs_mingw` release tag, asset basename and archive
+blob digest. The scoped form fixes the repository and avoids arbitrary download
+URLs. CI hashes the downloaded bytes before extraction. Like `homebrew`, it is
+forbidden in `build`, records `reproduced: no`, and does not identify the judge's
+compiler revision. Timus uses this form for an approximate WinLibs snapshot.
+
 **Snapshot** (P2-3): the macro state at the first token of an empty source
 under `-x c++ -std=<std> <flags>` (macro operations included, in order),
 recorded per name with its provenance: compiler builtin, startup header

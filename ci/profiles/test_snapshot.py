@@ -10,6 +10,7 @@ from snapshot import (capture, inventory, startup_origins, join_native, native_r
 from flags import operations
 from matrix import matrix, job_matrices, UBUNTU_26_04
 from homebrew import PROVENANCE as HOMEBREW_PROVENANCE
+from winlibs import PROVENANCE as WINLIBS_PROVENANCE
 
 KATTIS_IMAGE = 'docker.io/kattis/judge-cpp@sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d'
 LIBRARY_CHECKER_IMAGE = 'docker.io/library/gcc@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289'
@@ -200,6 +201,76 @@ predefined = "fixture-predefined.txt"
             with self.assertRaisesRegex(ValueError, 'native dependency model error: __UNMODELLED_HOST_FEATURE__'):
                 capture(path, 'g++')
 
+    def test_timus_native_capture_never_trusts_host_presence_or_absence(self):
+        original = ROOT / 'data/judges/timus-gcc13-cpp23.toml'
+        profile = tomllib.loads(original.read_text())
+        self.assertEqual(profile['alias'], 'timus')
+        self.assertEqual(profile['libraries'], ['mingw-w64', 'libstdc++'])
+        self.assertEqual(profile['link'], ['-static', '-Wl,-s,--stack=67108864'])
+        self.assertEqual(profile['inert'], ['-fno-strict-aliasing'])
+        self.assertEqual(operations(profile['flags'], profile['inert']), [('ONLINE_JUDGE', '#define ONLINE_JUDGE 1')])
+        with self.assertRaisesRegex(ValueError, 'unmodelled'):
+            operations(profile['flags'])
+        self.assertNotIn('build', profile)
+        self.assertNotIn('probe_source_bytes', profile)
+        self.assertNotIn('probe_output_bytes', profile)
+        outside_model = False
+        calls = []
+
+        def compiler_run(compiler, *args):
+            calls.append(args)
+            if args[0] == '-dumpfullversion':
+                return '13.2.0'
+            if args[0] == '-dumpmachine':
+                return 'x86_64-w64-mingw32'
+            if args[0] == '--version':
+                return 'g++ (synthetic WinLibs fixture) 13.2.0'
+            self.assertEqual(args[:5], ('-x', 'c++', '-std=c++23', '-O2', '-fno-strict-aliasing'))
+            self.assertEqual(args[6], '-DONLINE_JUDGE')
+            self.assertNotIn('-static', args)
+            self.assertFalse(any(a.startswith('-Wl,') for a in args))
+            if args[-1].endswith('probe.cpp'):
+                source = Path(args[-1]).read_text()
+                self.assertNotIn('__has_embed', source)
+                return ''.join(f'DISTILL_PROBE_{i} 1\n' for i in range(len(data('builtins', 'gcc-13.2'))))
+            definitions = ('#define __GNUC__ 13\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n'
+                           '#define __cplusplus 202100L\n#define __STRICT_ANSI__ 1\n#define __SSE2__ 1\n')
+            if '-march=haswell' in args:
+                definitions += '#define __AVX2__ 1\n'
+            if '-march=native' in args:
+                definitions += '#define __SHSTK__ 1\n'
+                if outside_model:
+                    definitions += '#define __UNMODELLED_HOST_FEATURE__ 1\n'
+            command = '#define ONLINE_JUDGE 1\n'
+            if '-dD' in args:
+                return '# 0 "<built-in>"\n' + definitions + '# 0 "<command-line>"\n' + command
+            return definitions + command
+
+        with tempfile.TemporaryDirectory(dir='.') as temp, \
+                patch('snapshot.shutil.which', return_value='/synthetic/g++.exe'), \
+                patch('snapshot.cpu_values', return_value=['x86-64', 'haswell']), \
+                patch('snapshot.run', side_effect=compiler_run):
+            path = Path(temp) / original.name
+            path.write_text(original.read_text().replace(profile['predefined'], 'capture.txt'))
+            output = capture(path, '/synthetic/g++.exe').read_text()
+            self.assertIn('# snapshot-compiler: ' + WINLIBS_PROVENANCE, output)
+            self.assertIn('# build: none\n# reproduced: no', output)
+            self.assertIn('# std: c++23\n# builtin-registry: gcc-13.2\n# native-model: gcc-13.2-x86', output)
+            self.assertIn('#define __cplusplus 202100L', output)
+            self.assertIn('#define __STRICT_ANSI__ 1', output)
+            self.assertIn('# command-operation #define ONLINE_JUDGE 1', output)
+            for line in data('native', 'gcc-13.2-x86'):
+                self.assertIn('# state ' + line.split()[0] + ' unknown native-model\n', output)
+            # Includes host-only SHSTK, always-present SSE2 and always-absent AVX512F.
+            self.assertEqual([a[5] for a in calls if '-dM' in a],
+                             ['-march=native', '-march=x86-64', '-march=haswell'])
+            outside_model = True
+            with self.assertRaisesRegex(ValueError, 'native dependency model error: __UNMODELLED_HOST_FEATURE__'):
+                capture(path, '/synthetic/g++.exe')
+            with self.assertRaisesRegex(ValueError, 'unsupported native model/ABI'), \
+                    patch('snapshot.data', side_effect=lambda kind, key: []):
+                capture(path, '/synthetic/g++.exe')
+
     def test_yukicoder_dialects_have_independent_capture_and_homebrew_metadata(self):
         for mode, std in [('cpp23', 'c++23'), ('gnupp23', 'gnu++23')]:
             original = ROOT / f'data/judges/yukicoder-gcc16-{mode}.toml'
@@ -277,12 +348,13 @@ predefined = "fixture-predefined.txt"
                 capture(path, 'g++')
 
     def test_registry_and_model_source_coverage(self):
-        for key in ['gcc-14.2', 'gcc-15.2', 'gcc-16.2']:
+        for key in ['gcc-13.2', 'gcc-14.2', 'gcc-15.2', 'gcc-16.2']:
             builtins = data('builtins', key)
-            self.assertIn('__has_extension', builtins)
+            self.assertEqual('__has_extension' in builtins, key != 'gcc-13.2')
+            self.assertEqual('__has_feature' in builtins, key != 'gcc-13.2')
             self.assertIn('__has_c_attribute', builtins)
             self.assertIn('__FILE_NAME__', builtins)
-            self.assertEqual('__has_embed' in builtins, key != 'gcc-14.2')
+            self.assertEqual('__has_embed' in builtins, key not in ('gcc-13.2', 'gcc-14.2'))
             if key == 'gcc-16.2':
                 self.assertEqual(builtins, data('builtins', 'gcc-15.2'))
                 self.assertEqual(data('native', key + '-x86'), [])
@@ -292,6 +364,18 @@ predefined = "fixture-predefined.txt"
                 self.assertEqual(model[n], 'isa')
             for n in ['__tune_znver4__', '__GCC_DESTRUCTIVE_SIZE', '__GCC_CONSTRUCTIVE_SIZE']:
                 self.assertEqual(model[n], 'tune')
+            if key in ('gcc-13.2', 'gcc-15.2'):
+                for n in ['__amd64', '__amd64__', '__x86_64', '__x86_64__', '_ILP32', '__ILP32__',
+                          '__code_model_small__', '__code_model_medium__', '__code_model_large__',
+                          '__code_model_32__', '__code_model_kernel__', '__SEG_FS', '__SEG_GS', '__SIZEOF_FLOAT128__']:
+                    self.assertNotIn(n, model)
+        self.assertEqual(len(data('builtins', 'gcc-13.2')), 17)
+        model13 = dict(x.split() for x in data('native', 'gcc-13.2-x86'))
+        for n in ['__SHSTK__', '__AVX512F__', '__AVX512ER__', '__AVX512PF__', '__knl__', '__knm__']:
+            self.assertEqual(model13[n], 'isa')
+        # GCC 13.3 uses a distinct key; CSES remains unsupported/approximate.
+        self.assertEqual(data('builtins', 'gcc-13.3'), [])
+        self.assertEqual(data('native', 'gcc-13.3-x86'), [])
         self.assertEqual(data('builtins', 'gcc-99.0'), [])
 
     def test_builtin_undef_and_ordinary_override(self):
@@ -430,7 +514,10 @@ predefined = "fixture-predefined.txt"
 
     def test_matrix_selection_builds_and_bad_input(self):
         rows = matrix()['include']
-        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23', 'kattis-gcc15-gnupp23', 'library-checker-gcc15-cpp23', 'yukicoder-gcc16-cpp23', 'yukicoder-gcc16-gnupp23'})
+        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23', 'kattis-gcc15-gnupp23', 'library-checker-gcc15-cpp23', 'timus-gcc13-cpp23', 'yukicoder-gcc16-cpp23', 'yukicoder-gcc16-gnupp23'})
+        self.assertEqual(matrix('timus-gcc13-cpp23')['include'][0],
+                         dict(profile='timus-gcc13-cpp23', version='13.2.0', runner='windows-2025',
+                              build='', compiler=WINLIBS_PROVENANCE, acquisition='winlibs'))
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['version'], '15.2.0')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['runner'], 'windows-2025')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['build'], '')
@@ -474,7 +561,7 @@ predefined = "fixture-predefined.txt"
         self.assertTrue(all_jobs['has_runner'])
         self.assertTrue(all_jobs['has_container'])
         self.assertEqual(all_jobs['runner_matrix']['include'],
-                         matrix('atcoder-gcc15-gnupp23,codeforces-gcc14-cpp23,cses-gcc13-cpp23,yukicoder-gcc16-cpp23,yukicoder-gcc16-gnupp23')['include'])
+                         matrix('atcoder-gcc15-gnupp23,codeforces-gcc14-cpp23,cses-gcc13-cpp23,timus-gcc13-cpp23,yukicoder-gcc16-cpp23,yukicoder-gcc16-gnupp23')['include'])
         self.assertTrue(all('container' not in row for row in all_jobs['runner_matrix']['include']))
         self.assertEqual(all_jobs['container_matrix'], matrix('kattis-gcc15-gnupp23,library-checker-gcc15-cpp23,qoj-gcc15-cpp23'))
         container_only = job_matrices('qoj-gcc15-cpp23,qoj-gcc15-cpp23')
