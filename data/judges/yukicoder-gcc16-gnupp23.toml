@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Researched 2026-11-17: https://yukicoder.me/help/environments
+# The page dates its environment listings 2026-11-14 11:08:09.
+# Language cpp23_gnu_gcc16: C++23 (gnu extensions, gcc16).
+# Published command (std differs between the two language IDs):
+# g++-16 -O2 -fplugin=/usr/lib/yukicoder/noavx512-gcc16.so -lm
+#   -std=gnu++23 -Wuninitialized -DONLINE_JUDGE -o a.out _filename_
+# Banner: g++-16 (Homebrew GCC 16.2.0) 16.2.0
+# APPROXIMATE, no build: -fplugin=/usr/lib/yukicoder/noavx512-gcc16.so
+# is omitted from flags because it cannot be reproduced/loaded in CI.
+# The displayed judge/lang/gcc_plugin/noavx512.cc replaces target-pragma
+# and target-attribute hooks: avx512*/avx10* become avx2, listed AVX-512
+# arch= CPUs become arch=znver3; no-* stays intact. System-header pragmas
+# are skipped, attributes are filtered. UNVERIFIED: deployed plugin binary.
+# UNVERIFIED: judge bottle rebuild/package identity, exact triple (inferred
+# from Homebrew config.guess), libstdc++/glibc versions and default includes.
+# Judge OS is Ubuntu 25.04, x86_64. CI uses ubuntu-24.04 (25.04 is EOL):
+# runner glibc headers/stdc-predef.h are UNVERIFIED against the judge.
+# ACL /usr/include and Boost 1.92 /usr/local/include are judge system headers,
+# outside the profile, as with AtCoder. No -march=native; no GCC 16 native model.
+name = "yukicoder-gcc16-gnupp23"
+description = "yukicoder C++23 (gcc16, GNU C++23), approximate Homebrew snapshot"
+triple = "x86_64-pc-linux-gnu"
+compiler = { family = "gcc", version = "16.2.0" }
+std = "gnu++23"
+flags = ["-O2", "-Wuninitialized", "-DONLINE_JUDGE"]
+link = ["-lm"]
+# https://formulae.brew.sh/api/formula/gcc.json checked 2026-11-17:
+# gcc 16.2.0, formula revision 0, bottle rebuild 1, x86_64_linux blob.
+# Snapshot acquisition only, never reproduction of the judge build.
+snapshot_compiler = { homebrew = "homebrew:gcc=16.2.0@sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922" }
+libraries = ["libstdc++", "glibc"]
+# Captured separately under this std; never derived from the other dialect.
+predefined = "yukicoder-gcc16-gnupp23-predefined.txt"
+check = ["g++-16", "g++"]
+# https://yukicoder.me/help: 128KB (131,072 bytes). Output 20MB (slightly
+# less in practice), including stderr; retain the conservative 60000 default.
+probe_source_bytes = 131072
+# Custom tests: https://yukicoder.me/run (login required); judge match UNVERIFIED.
+updated = "2026-11-17"
+sources = ["https://yukicoder.me/help/environments", "https://yukicoder.me/help", "https://yukicoder.me/run", "https://formulae.brew.sh/api/formula/gcc.json", "https://github.com/gcc-mirror/gcc/blob/releases/gcc-16.2.0/libcpp/init.cc"]

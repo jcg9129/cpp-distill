@@ -11,7 +11,9 @@ meaning. The shipped names are `codeforces-gcc14-cpp23` and
 `atcoder-gcc15-gnupp23`, with optional `alias = "codeforces"` and
 `alias = "atcoder"`, respectively. Aliases use nonempty `[a-z0-9-]+` strings and
 track the newest supported GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`),
-`qoj-gcc15-cpp23` (alias `qoj`) and `kattis-gcc15-gnupp23` (alias `kattis`).
+`qoj-gcc15-cpp23` (alias `qoj`), `kattis-gcc15-gnupp23` (alias `kattis`),
+`yukicoder-gcc16-cpp23` (alias `yukicoder`) and `yukicoder-gcc16-gnupp23`
+(no alias).
 QOJ's published C++26 option is deferred:
 the audited A6 ADL name registry ends at C++23 and disables pruning for C++26.
 The profile schema, dialect model and standard header/macro inventories accept
@@ -69,7 +71,7 @@ inventory grants no protection. Without a selection, the union of all sets appli
 `build` has exactly one key: `package` (exact package and revision) or `recipe`
 (the published source/configure recipe URL). Reproduction relies on amended A4,
 not version/triple similarity. `snapshot_compiler` accepts those one-key forms
-and a snapshot-only `image` form, and names the compiler used for an approximate
+and snapshot-only `image` and `homebrew` forms, and names the compiler used for an approximate
 snapshot when the judge build is unknown or differs. Package values require `name=version` (including the
 exact distribution revision and a distribution prefix where applicable); recipe values require an HTTP(S) URL.
 Ubuntu packages use `ubuntu-YY.MM:name=version-revision`, for example
@@ -94,6 +96,19 @@ For Codeforces, omit `build` and use:
 ```toml
 # Judge publishes only "GNU G++23 14.2 (64 bit, msys2)"; package revision unknown.
 snapshot_compiler = { package = "msys2:mingw-w64-x86_64-gcc=14.2.0-3" }
+```
+
+Homebrew values must match
+`homebrew:gcc=[1-9][0-9]*\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}` in full.
+Only the core `gcc` formula, a three-component release (positive major), and a
+lowercase 64-hex **bottle blob** digest are accepted; tags, formula revisions in
+the version, whitespace and mixed keys are rejected by both validators. The blob
+pins the formula revision, bottle rebuild and architecture; the research notes
+record those separately. `homebrew` is forbidden in `build`, like `image`, and
+its snapshots record `reproduced: no`. For yukicoder:
+
+```toml
+snapshot_compiler = { homebrew = "homebrew:gcc=16.2.0@sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922" }
 ```
 
 A profile is approximate if it has no build,
@@ -152,7 +167,7 @@ The fragment illustrates record syntax, not a complete valid snapshot. All
 registered names need probes and corresponding facts. `build` is
 `package=<value>`, `recipe=<url>` or `none`. When present, `snapshot-compiler`
 must exactly match the profile's `snapshot_compiler` identity as `package=<value>`,
-`recipe=<url>` or `image=<digest-pinned-reference>`.
+`recipe=<url>`, `image=<digest-pinned-reference>` or `homebrew=<bottle-identity>`.
 An approximate Codeforces snapshot has these header lines:
 
 ```text
@@ -370,6 +385,67 @@ headers and runtimes; required upgrades fail for review. The diagnostic CLI uses
 mismatches fail, with no compiler substitution or reproduction claim. Existing
 QOJ package installation and all runner acquisition steps remain unchanged.
 The Kattis snapshot and expected output remain pending branch CI capture.
+
+yukicoder's [environment page](https://yukicoder.me/help/environments), fetched
+2026-11-17, dates its environment listings 2026-11-14 11:08:09. It lists
+Ubuntu 25.04, x86_64, language IDs `cpp23_gcc16` (C++23 (gcc16)) and
+`cpp23_gnu_gcc16` (GNU extensions), and the banner
+`g++-16 (Homebrew GCC 16.2.0) 16.2.0`. The strict command is:
+
+```text
+g++-16 -O2 -fplugin=/usr/lib/yukicoder/noavx512-gcc16.so -lm -std=c++23 -Wuninitialized -DONLINE_JUDGE -o a.out _filename_
+```
+
+The GNU variant changes only `-std=gnu++23`. Both profiles retain the published
+flag order `-O2`, `-Wuninitialized`, `-DONLINE_JUDGE`; `link` contains `-lm`.
+ACL under `/usr/include` and Boost 1.92 under `/usr/local/include` remain judge
+system headers outside the profile, as with AtCoder.
+
+The same page displays `judge/lang/gcc_plugin/noavx512.cc`. Its startup callback
+replaces GCC's target-pragma parser and target-attribute validator hooks. It
+maps AVX-512/AVX10 requests to AVX2 and listed AVX-512 `arch=` CPUs to `znver3`,
+preserves `no-` requests and option order, and warns on replacements. It skips
+system-header pragmas but filters attributes. **UNVERIFIED:** the deployed
+plugin binary matches this source. The plugin cannot be loaded/reproduced in
+CI, so `-fplugin=/usr/lib/yukicoder/noavx512-gcc16.so` is deliberately omitted
+from `flags`. Both profiles are **approximate**, with **no `build`**; the
+judge's precise bottle rebuild is also unknown. There is no `-march=native`
+and no GCC 16 native model; the resolver already treats reserved names as
+target-pragma dependent without a model.
+
+On 2026-11-17 the [Homebrew GCC API](https://formulae.brew.sh/api/formula/gcc.json)
+confirmed formula GCC 16.2.0, revision 0, bottle rebuild 1, `x86_64_linux`, blob
+`sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922`.
+This identifies only the snapshot compiler. **UNVERIFIED:** the judge's exact
+`x86_64-pc-linux-gnu` triple (inferred from Homebrew's config.guess), compiler
+build identity, library versions and default include paths. `ci/profiles/homebrew.py`
+fetches an anonymous GHCR pull token and the blob by digest, verifies SHA-256
+before installation, and uses `brew install --force-bottle <local bottle>` for
+relocation. Missing Linuxbrew at `/home/linuxbrew/.linuxbrew`, an existing GCC
+keg, failed installation, changed version/receipt/compiler path or banner all
+fail without substituting another compiler or building GCC from source.
+Runtime dependencies follow Homebrew; they are not a judge manifest.
+
+CI uses **ubuntu-24.04**, since Ubuntu 25.04 images are EOL. The runner supplies
+glibc headers and `stdc-predef.h`; their equivalence to the judge is
+**UNVERIFIED**. CI checks the exact banner and `-dumpfullversion`, logs `-v`,
+`-dumpmachine`, `-print-search-dirs` and `-E -v -x c++ /dev/null`, and invokes
+the compiler by absolute path. Acquisition diagnostics and snapshot/probe runs
+clear `CPATH`, `CPLUS_INCLUDE_PATH`, `C_INCLUDE_PATH`, `GCC_EXEC_PREFIX`,
+`COMPILER_PATH` and `LIBRARY_PATH`. Both dialects have independent matrix rows,
+snapshots and expected probe outputs; GNU facts are never derived from ISO facts.
+The [GCC 16.2 release source](https://github.com/gcc-mirror/gcc/blob/releases/gcc-16.2.0/libcpp/init.cc)
+was audited on 2026-11-17: `builtin_array` has the same 20 names as GCC 15.2,
+now in `data/builtins/gcc-16.2.txt`; both C++23 modes define `__cplusplus` as
+`202302L`. Registry lookup, probes and snapshot metadata use the version key.
+
+The [help page](https://yukicoder.me/help), fetched 2026-11-17, gives a source
+limit of 128KB (131,072 bytes), so `probe_source_bytes = 131072`. It gives an
+output limit of 20MB (slightly less in practice), including stderr. Keep the
+conservative documented 60000-byte default output budget. The
+[custom-test page](https://yukicoder.me/run) confirms login is required.
+**UNVERIFIED:** an actual judge probe match; snapshots and expected outputs
+must be captured by branch CI before these profiles enter the bundled catalog.
 
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,

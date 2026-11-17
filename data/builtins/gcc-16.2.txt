@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Complete GCC C++ special-builtin registry; probe availability in the effective mode.
+# Source: https://github.com/gcc-mirror/gcc/blob/releases/gcc-16.2.0/libcpp/init.cc
+# builtin_array, including conditional __STDC__; ordinary definitions win over probes.
+# Audited 2026-11-17: the 20 names match GCC 15.2; C++23 uses 202302L.
+_Pragma
+__BASE_FILE__
+__COUNTER__
+__DATE__
+__FILE_NAME__
+__FILE__
+__INCLUDE_LEVEL__
+__LINE__
+__STDC__
+__TIMESTAMP__
+__TIME__
+__has_attribute
+__has_builtin
+__has_c_attribute
+__has_cpp_attribute
+__has_embed
+__has_extension
+__has_feature
+__has_include
+__has_include_next

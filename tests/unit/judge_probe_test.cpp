@@ -192,4 +192,18 @@ TEST(judge_probe_shipped_expected_outputs_match_current_generator) {
     CHECK(check.passed);
   }
 }
+TEST(judge_probe_gcc16_uses_the_audited_special_builtin_registry) {
+  auto p = small();
+  p.name = "fixture-gcc16-gnupp23";
+  p.compiler = {CompilerFamily::gcc, 16, 2, 0};
+  const auto generated = probe(p);
+  for (const auto& name : specialBuiltins(p.compiler)) {
+    CHECK(std::any_of(generated.facts.begin(), generated.facts.end(), [&](const auto& fact) {
+      return fact.category == "presence" && fact.name == name;
+    }));
+    CHECK(std::any_of(generated.facts.begin(), generated.facts.end(), [&](const auto& fact) {
+      return fact.category == "builtin" && fact.name == name;
+    }));
+  }
+}
 

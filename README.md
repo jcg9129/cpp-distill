@@ -152,7 +152,12 @@ profile (`kattis-gcc15-gnupp23`, alias `kattis`) records GCC 15.2.0 with
 GNU C++23 and is approximate. CI uses Kattis's digest-pinned `judge-cpp` image
 only as snapshot provenance; its use in grading is UNVERIFIED. The language
 page returned 403 on recheck, so its transcribed command remains UNVERIFIED.
-The QOJ and Kattis snapshots and expected probe outputs must be captured by
+The D6c **yukicoder** profiles (`yukicoder-gcc16-cpp23`, alias `yukicoder`,
+and `yukicoder-gcc16-gnupp23`, no alias) record Homebrew GCC 16.2.0 with ISO
+and GNU C++23. Both are approximate: the judge's AVX-512 filtering plugin is
+omitted, and CI uses a digest-pinned Homebrew bottle on Ubuntu 24.04 rather
+than the judge's Ubuntu 25.04 system headers. Each dialect needs its own capture.
+The QOJ, Kattis and yukicoder snapshots and expected probe outputs must be captured by
 branch CI before the PR; see
 [Adding a profile](data/judges/README.md#research-and-ci).
 A reproduced snapshot alone

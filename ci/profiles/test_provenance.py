@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exact package/image identities; no compiler or package manager is executed."""
+"""Exact compiler identities; no compiler or package manager is executed."""
 import unittest
 from provenance import identity
 
@@ -41,6 +41,29 @@ class ImageProvenance(unittest.TestCase):
                 identity({'snapshot_compiler': {'image': value}}, 'snapshot_compiler')
         with self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
             identity({'snapshot_compiler': {'image': image, 'package': 'gcc=15.2.0'}}, 'snapshot_compiler')
+
+
+class HomebrewProvenance(unittest.TestCase):
+    def test_snapshot_only_exact_core_gcc_bottle(self):
+        value = 'homebrew:gcc=16.2.0@sha256:' + 'a' * 64
+        self.assertEqual(identity({'snapshot_compiler': {'homebrew': value}}, 'snapshot_compiler'), 'homebrew=' + value)
+        with self.assertRaisesRegex(ValueError, 'build'):
+            identity({'build': {'homebrew': value}}, 'build')
+
+    def test_inexact_or_malformed_homebrew_identity_rejected(self):
+        value = 'homebrew:gcc=16.2.0@sha256:' + 'a' * 64
+        for bad in (value.removeprefix('homebrew:'), value.replace('gcc=', 'gcc@16='),
+                    value.replace('gcc=', 'llvm='), value.replace('16.2.0', '16.2'),
+                    value.replace('16.2.0', '0.2.0'), value.replace('16.2.0', '16.2.0_1'),
+                    value.replace('16.2.0', '*'), value.split('@')[0],
+                    value.replace('@', ':latest@'), value[:-1], value + 'a',
+                    value.replace('sha256:', 'sha512:'), value.replace('a' * 64, 'A' * 64),
+                    value + ' ', value + '\n', '', 12):
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                identity({'snapshot_compiler': {'homebrew': bad}}, 'snapshot_compiler')
+        for other in ('image', 'package', 'recipe'):
+            with self.subTest(other=other), self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
+                identity({'snapshot_compiler': {'homebrew': value, other: 'gcc=16.2.0'}}, 'snapshot_compiler')
 
 
 if __name__ == '__main__':
