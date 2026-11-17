@@ -2,6 +2,7 @@
 #include "support.h"
 #include "core/resolve/resolve.h"
 #include "evaluate.h"
+#include <algorithm>
 #include <functional>
 #include <cstdlib>
 using namespace distill;
@@ -38,6 +39,37 @@ Profile profile() {
   Profile p; p.reproduced = true; p.dialect = {"gnu++20", true, 202002};
   p.compiler = {CompilerFamily::gcc, 15, 2, 0}; p.libraries = {"glibc", "libstdc++"};
   return p;
+}
+Profile featureProfile(bool reproduced = false) {
+  auto p = profile(); p.reproduced = reproduced; p.snapshot = "synthetic-empty-source.txt";
+  p.snapshotFacts["__cpp_constexpr"] = {MacroState::known, Macro{false, {}, false, "201907L"}, {FactOrigin::compilerBuiltin}};
+  // Exercise both explicit negative facts and names absent from the snapshot.
+  p.snapshotFacts["__cpp_lib_ranges"] = {MacroState::undefined, {}, {FactOrigin::compilerBuiltin}};
+  return p;
+}
+IntegerModel localIntegerModel(const std::filesystem::path& root) {
+  const auto gcc = testing::testGcc(); if (!gcc) throw test::Skip{"GCC unavailable"};
+  const auto command = parseCompileCommand({pathToUtf8(*gcc), "main.cpp", "-std=gnu++20", "-fsigned-char"}, root).value();
+  const auto probe = probeCompiler(*gcc, command, {true, {}, root});
+  if (!probe.ok()) throw std::runtime_error(probe.error().message);
+  auto p = profile();
+  for (const auto& [name, macro] : probe.value().macros)
+    p.snapshotFacts[name] = {MacroState::known, macro, {FactOrigin::compilerBuiltin}};
+  const auto model = profileRequirements(p).integers;
+  if (!model) throw std::runtime_error("unknown local integer model");
+  return *model;
+}
+const std::vector<std::string> libraryFeatureConditions{
+  "#if defined(__cpp_lib_mdspan)", "#ifdef __cpp_lib_ranges", "#ifndef __cpp_lib_mdspan",
+  "#if __cpp_lib_ranges >= 202110L", "#if defined(__cpp_lib_zzz_future)",
+  "#ifdef __cpp_lib_zzz_future", "#ifndef __cpp_lib_zzz_future",
+  "#if __cpp_lib_zzz_future >= 202110L"
+};
+std::string libraryFeatureChecks() {
+  std::string source;
+  for (const auto& condition : libraryFeatureConditions)
+    source += condition + "\npresent\n#else\nabsent\n#endif\n";
+  return source;
 }
 }
 TEST(resolve_fake_closure_and_bound_parameters) {
@@ -172,6 +204,99 @@ TEST(resolve_real_headers_and_pragmas) {
   for (auto i : {2,4,6,8}) CHECK_EQ(r.decisions[i].decision, Decision::unknown);
   r = resolve("#pragma GCC target(\"avx2\")\n#ifdef __AVX2__\nx\n#endif\n#ifdef __OPTIMIZE__\nx\n#endif\n", *e, o);
   CHECK_EQ(r.decisions[0].decision, Decision::unknown); CHECK_EQ(r.decisions[2].decision, Decision::unknown);
+}
+TEST(resolve_real_library_features_before_include) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = featureProfile();
+  ResolveOptions o; o.profile = &p; o.requirements.integers = localIntegerModel(temp.path);
+  const auto r = resolve(libraryFeatureChecks(), *e, o);
+  CHECK(r.disabledReasons.empty());
+  CHECK_EQ(r.decisions.size(), 3 * libraryFeatureConditions.size());
+  for (std::size_t i = 0; i < libraryFeatureConditions.size(); ++i) {
+    const auto& d = r.decisions.at(3 * i);
+    const bool negated = libraryFeatureConditions[i].starts_with("#ifndef");
+    CHECK_EQ(d.reason, "");
+    CHECK_EQ(d.decision, negated ? Decision::trueValue : Decision::falseValue);
+    CHECK_EQ(d.external.size(), 1u);
+    const auto& fact = d.external.at(0).fact;
+    CHECK_EQ(fact.state, MacroState::undefined);
+    CHECK(std::find(fact.provenance.begin(), fact.provenance.end(), FactOrigin::allowList) != fact.provenance.end());
+    CHECK(r.text.find(libraryFeatureConditions[i]) == std::string::npos);
+  }
+}
+TEST(resolve_fake_library_features_after_system_includes) {
+  // Reserved names are covered independently of the finite A1 inventories.
+  CHECK(!isStandardMacroName("__cpp_lib_zzz_future"));
+  for (const auto& [library, names] : embeddedExtensionLists()) {
+    (void)library;
+    CHECK(!names.contains("__cpp_lib_zzz_future"));
+  }
+  for (const bool reproduced : {false, true}) {
+    auto p = featureProfile(reproduced);
+    ResolveOptions o; o.profile = &p; o.requirements.integers = IntegerModel{};
+    for (const auto* header : {"version", "bits/stdc++.h", "vector"}) {
+      CHECK(isStandardHeader(header));
+      Fake e;
+      const auto source = "#include <" + std::string(header) + ">\n" + libraryFeatureChecks();
+      const auto r = resolve(source, e, o);
+      CHECK(r.disabledReasons.empty()); CHECK(r.unknownInUserCode);
+      CHECK_EQ(r.text, source); CHECK(e.inputs.empty());
+      CHECK_EQ(r.decisions.size(), 3 * libraryFeatureConditions.size());
+      for (std::size_t i = 0; i < libraryFeatureConditions.size(); ++i) {
+        const auto& d = r.decisions.at(3 * i);
+        CHECK_EQ(d.decision, Decision::unknown);
+        CHECK(d.reason.starts_with("unknown macro: __cpp_lib_"));
+        CHECK(d.external.empty()); // Invalidated by the header, not a snapshot use.
+      }
+    }
+  }
+}
+TEST(resolve_fake_library_features_via_user_header) {
+  test::TempDirectory temp;
+  temp.write("main.cpp", "#include \"features.h\"\n" + libraryFeatureChecks());
+  temp.write("features.h", "#include <version>\n" + libraryFeatureChecks());
+  const auto command = parseCompileCommand({"g++", "main.cpp", "-std=gnu++20"}, temp.path).value();
+  const auto search = buildIncludeSearch(command, {}).value();
+  const auto inlined = inlineSources(command, search);
+  CHECK(inlined.ok()); if (!inlined.ok()) return;
+  CHECK_EQ(inlined.value().userFiles.size(), 2u);
+  CHECK_EQ(inlined.value().systemIncludes.size(), 1u);
+  CHECK_EQ(inlined.value().systemIncludes.at(0).spelling, "version");
+  CHECK_EQ(inlined.value().systemIncludes.at(0).location.file, "features.h");
+  auto p = featureProfile();
+  ResolveOptions o; o.profile = &p; o.requirements.integers = IntegerModel{};
+  Fake e;
+  const auto resolved = resolveConditions(inlined.value(), command, e, o);
+  CHECK(resolved.ok()); if (!resolved.ok()) return;
+  const auto& r = resolved.value();
+  CHECK(r.disabledReasons.empty()); CHECK(r.unknownInUserCode); CHECK(e.inputs.empty());
+  CHECK_EQ(r.text, inlined.value().text); CHECK_EQ(r.lineMap, inlined.value().lineMap);
+  CHECK_EQ(r.decisions.size(), 6 * libraryFeatureConditions.size());
+  for (std::size_t i = 0; i < 2 * libraryFeatureConditions.size(); ++i) {
+    const auto& d = r.decisions.at(3 * i);
+    CHECK_EQ(d.decision, Decision::unknown);
+    CHECK(d.reason.starts_with("unknown macro: __cpp_lib_")); CHECK(d.external.empty());
+  }
+}
+TEST(resolve_real_language_feature_after_standard_include) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = featureProfile();
+  ResolveOptions o; o.profile = &p; o.requirements.integers = localIntegerModel(temp.path);
+  // docs/design.md A2(a) explicitly assumes standard headers preserve compiler
+  // predefines. This exemption covers __cpp_constexpr, not absent __cpp_lib_*.
+  const auto r = resolve("#include <version>\n#ifdef __cpp_constexpr\nyes\n#endif\n"
+                         "#if __cpp_constexpr == 201907L\nyes\n#endif\n"
+                         "#if __cpp_constexpr > 201907L\nno\n#endif\n", *e, o);
+  CHECK(r.disabledReasons.empty());
+  CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
+  CHECK_EQ(r.decisions.at(2).decision, Decision::trueValue);
+  CHECK_EQ(r.decisions.at(4).decision, Decision::falseValue);
+  for (const auto i : {0u, 2u, 4u}) {
+    CHECK_EQ(r.decisions.at(i).reason, "");
+    const auto& use = r.decisions.at(i).external.at(0);
+    CHECK_EQ(use.name, "__cpp_constexpr"); CHECK_EQ(use.fact.state, MacroState::known);
+    CHECK_EQ(use.fact.definition->replacement, "201907L");
+  }
 }
 TEST(resolve_real_local_and_shipped_profiles) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
