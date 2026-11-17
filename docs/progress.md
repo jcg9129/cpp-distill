@@ -408,19 +408,13 @@ Remaining D6c profiles, in this order; research in
 4. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
    WinLibs release and CRT (UCRT/MSVCRT) unknown.
 
-Open questions for the user (asked 2026-11-17, unanswered):
+Decisions (user, 2026-11-17):
 
 - Tag **v0.1.1** (AtCoder native fix, names/aliases, probe/check, CSES, QOJ,
-  Kattis)? v0.1.0 users of `--judge atcoder` have the native bug.
+  Kattis): approved; dry run on main, then tag.
 - Plan an audited `abi` scope in the native model so ABI-fixed names
   (`__x86_64__`, `__amd64__`, SSE2 baseline `__SSE__`/`__SSE2__`/`__MMX__`/
   `__FXSR__`, code-model and long-double macros) stay known under
-  `-march=native`? Today they are unknown (sound, imprecise): an unknown user
-  condition disables pruning. Affects AtCoder and the three native judges
-  above; needs a Codex challenge and user approval before code.
-
-Other follow-ups: native-dependent *expansions* are not compared by
-`--judge-check` (model lists no values); ADL registry audit for C++26.
-
-Working rules: builds and tests run in CI only (VM crash 2026-11-16); Codex
-jobs syntax-check single files at most; one Codex job at a time.
+  `-march=native`: approved to plan. Today they are unknown (sound,
+  imprecise). Needs a design amendment, a Codex challenge and user approval of
+  the amendment before code; do it before the three native judges above.
