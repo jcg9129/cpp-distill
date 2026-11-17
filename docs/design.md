@@ -293,7 +293,11 @@ by a compiler built there from that recipe: a **reproduced build**. A profile
 whose snapshot comes from another compiler of the same version and target is
 **approximate**. When the judge build is unknown, omit `build`; the optional
 `snapshot_compiler` names the actual snapshot compiler using the same exact
-`package` or published `recipe` form. It supplies provenance, not reproduction:
+`package` or published `recipe` form, or a snapshot-only
+`image = "docker.io/<namespace>/<repository>@sha256:<64 lowercase hex>"` form.
+Image references require a digest and forbid tags; `build` does not accept
+`image`. The image pin identifies snapshot acquisition without asserting that
+the judge grades in that image. It supplies provenance, not reproduction:
 the snapshot records `snapshot-compiler` and `reproduced: no`. A snapshot claiming
 reproduction without `build` is rejected. Codeforces publishes only
 "GNU G++23 14.2 (64 bit, msys2)", with no package revision, so its profile uses

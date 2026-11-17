@@ -77,6 +77,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             ['atcoder-gcc15-gnupp23', 'atcoder', 'bundled'],
             ['codeforces-gcc14-cpp23', 'codeforces', 'bundled']]
         expected.append(['cses-gcc13-cpp23', 'cses', 'bundled'])
+        expected.append(['kattis-gcc15-gnupp23', 'kattis', 'bundled'])
         expected.append(['qoj-gcc15-cpp23', 'qoj', 'bundled'])
         check(len(rows) == len(expected) and all(len(row) == 7 and row[6] == '-' for row in rows), rows)
         check([row[:3] for row in rows] == expected, rows)

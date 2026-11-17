@@ -199,7 +199,8 @@ and provenance: compiler builtin, startup header, command operation, special
 builtin, native model, A5, A4 or approximate allow-list. Reproduced mode requires
 a matching named build, affirmative snapshot provenance and a complete embedded
 compiler-version registry. `snapshot_compiler` records the actual alternate
-compiler's exact package or recipe; its matching `snapshot-compiler` header is
+compiler's exact package, recipe or digest-pinned Docker Hub image (snapshot
+only; `image` is forbidden in `build`); its matching `snapshot-compiler` header is
 required. A `reproduced: yes` snapshot without a profile `build` is rejected.
 Approximate mode uses only the commented data allow-list
 for snapshot facts; explicit command operations remain known. Unlisted names use

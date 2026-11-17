@@ -287,6 +287,39 @@ TEST(profile_ubuntu_package_provenance_requires_release_and_revision) {
       badProfile(base + "\n" + key + " = { package = '" + package + "' }", std::string(key) + ":");
   }
 }
+TEST(profile_image_provenance_is_digest_pinned_and_snapshot_only) {
+  const std::string image = "docker.io/synthetic/compiler@sha256:" + std::string(64, 'a');
+  const auto base = replace(allowProfile(), "build = { package = \"synthetic:fixture=14.2.0-1\" }", "");
+  const auto declaration = "\nsnapshot_compiler = { image = '" + image + "' }";
+  auto valid = synthetic(base + declaration);
+  CHECK(valid.ok()); if (!valid.ok()) return;
+  CHECK(!valid.value().build); CHECK(!valid.value().reproduced);
+  CHECK(valid.value().snapshotCompiler.has_value());
+  if (valid.value().snapshotCompiler) CHECK_EQ(*valid.value().snapshotCompiler, (std::pair{std::string("image"), image}));
+  badProfile(base + "\nbuild = { image = '" + image + "' }", "build:");
+  for (const auto& value : {"synthetic/compiler@sha256:" + std::string(64, 'a'),
+                           std::string("docker.io/synthetic/compiler"), std::string("docker.io/synthetic/compiler:latest"),
+                           replace(image, "@", ":latest@"), image.substr(0, image.size() - 1), image + "a",
+                           replace(image, "sha256:", "sha512:"), replace(image, std::string(64, 'a'), std::string(64, 'A')),
+                           replace(image, "/synthetic/", "/Synthetic/"), replace(image, "/synthetic/", "//"),
+                           replace(image, "/synthetic/", "/../"), image + " "})
+    badProfile(base + "\nsnapshot_compiler = { image = '" + value + "' }", "snapshot_compiler:");
+  badProfile(base + "\nsnapshot_compiler = { image = '" + image + "', package = 'gcc=14.2.0' }", "snapshot_compiler:");
+
+  // Synthetic protocol fixture only; image provenance never affirms reproduction.
+  const auto original = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
+  const auto text = replace(original, "build = { package = \"synthetic:fixture=14.2.0-1\" }", "") + declaration;
+  auto snapshot = replace(test::read(profileFixture("mingw-predefined.txt")),
+      "# build: package=synthetic:fixture=14.2.0-1", "# build: none\n# snapshot-compiler: image=" + image);
+  snapshot = replace(snapshot, "# reproduced: yes", "# reproduced: no");
+  const auto loaded = synthetic(text, snapshot);
+  CHECK(loaded.ok()); if (loaded.ok()) {
+    CHECK(!loaded.value().reproduced);
+    CHECK_EQ(loaded.value().snapshotMetadata.snapshotCompiler, "image=" + image);
+  }
+  CHECK(!synthetic(text, replace(snapshot, "# reproduced: no", "# reproduced: yes")).ok());
+  CHECK(!synthetic(text, replace(snapshot, image, image.substr(0, image.size() - 1) + "b")).ok());
+}
 TEST(profile_schema_required_unknown_types_and_values) {
   auto text = allowProfile(); auto doc = parseProfileToml(text, "test").value();
   for (const auto& [key, entry] : doc) {
@@ -551,6 +584,33 @@ TEST(profile_qoj_bundled_approximate_snapshot) {
   CHECK_EQ(p.initialState("__unlisted_reserved").state, MacroState::unknown);
   CHECK_EQ(p.probeSourceBytes, 60000u); CHECK_EQ(p.probeOutputBytes, 60000u);
 }
+TEST(profile_kattis_bundled_approximate_snapshot) {
+  CHECK(embeddedProfileFiles().contains("kattis-gcc15-gnupp23.toml"));
+  const auto alias = lookupProfile("kattis"), full = lookupProfile("kattis-gcc15-gnupp23");
+  CHECK(alias.ok()); CHECK(full.ok()); if (!alias.ok() || !full.ok()) return;
+  const auto& p = alias.value();
+  CHECK_EQ(p.name, "kattis-gcc15-gnupp23");
+  CHECK_EQ(p.provenance.contentDigest, full.value().provenance.contentDigest);
+  CHECK(!p.reproduced); CHECK(!p.build); CHECK(p.snapshot); CHECK(p.probeExpected.has_value());
+  CHECK(p.snapshotCompiler.has_value());
+  if (p.snapshotCompiler) {
+    CHECK_EQ(p.snapshotCompiler->first, "image");
+    CHECK_EQ(p.snapshotCompiler->second, "docker.io/kattis/judge-cpp@sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d");
+    CHECK_EQ(p.snapshotMetadata.snapshotCompiler, "image=" + p.snapshotCompiler->second);
+  }
+  CHECK_EQ(p.compiler.major, 15); CHECK_EQ(p.compiler.minor, 2); CHECK_EQ(p.compiler.patch, 0);
+  CHECK_EQ(p.triple, "x86_64-linux-gnu");
+  CHECK_EQ(p.dialect.name, "gnu++23");
+  CHECK_EQ(p.flags, (std::vector<std::string>{"-g", "-O2"})); CHECK(p.inert.empty());
+  CHECK_EQ(p.link, (std::vector<std::string>{"-static", "-lrt", "-Wl,-u,_IO_wfile_doallocate",
+                                         "-Wl,--whole-archive", "-lpthread", "-Wl,--no-whole-archive"}));
+  CHECK_EQ(p.libraries, (std::vector<std::string>{"libstdc++", "glibc"}));
+  CHECK(p.macroOperations.empty()); CHECK(p.judgeMacros.empty());
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").state, MacroState::undefined);
+  CHECK_EQ(p.initialState("__cplusplus").definition->replacement, "202302L");
+  CHECK_EQ(p.initialState("__unlisted_reserved").state, MacroState::unknown);
+  CHECK_EQ(p.probeSourceBytes, 60000u); CHECK_EQ(p.probeOutputBytes, 60000u);
+}
 TEST(profile_list_columns_and_order) {
   test::TempDirectory temp;
   ProfileLookup lookup; lookup.userDirectory = temp.path;
@@ -562,7 +622,8 @@ TEST(profile_list_columns_and_order) {
   CHECK(list.find("codeforces-gcc14-cpp23\tcodeforces\tbundled\tapproximate\t2026-11-15\t\"Codeforces") != std::string::npos);
   CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\t-\n") != std::string::npos);
   CHECK(list.find("qoj-gcc15-cpp23\tqoj\tbundled\tapproximate\t2026-11-17\t\"QOJ") != std::string::npos);
-  const auto count = 5;
+  CHECK(list.find("kattis-gcc15-gnupp23\tkattis\tbundled\tapproximate\t2026-11-17\t\"Kattis") != std::string::npos);
+  const auto count = 6;
   CHECK_EQ(std::count(list.begin(), list.end(), '\n'), count);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());

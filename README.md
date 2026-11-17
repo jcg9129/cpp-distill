@@ -147,8 +147,13 @@ GCC 15.2.0 with C++23 and is approximate: QOJ publishes no package revision;
 CI uses the exact Ubuntu 26.04 `g++-15` package in a digest-pinned container.
 QOJ also offers C++26. Its profile is deferred because the audited A6 ADL
 name registry currently covers only C++11 through C++23; the dialect model
-and standard header/macro inventories already cover C++26. The QOJ snapshot
-and expected probe output must be captured by branch CI before the PR; see
+and standard header/macro inventories already cover C++26. The D6c **Kattis**
+profile (`kattis-gcc15-gnupp23`, alias `kattis`) records GCC 15.2.0 with
+GNU C++23 and is approximate. CI uses Kattis's digest-pinned `judge-cpp` image
+only as snapshot provenance; its use in grading is UNVERIFIED. The language
+page returned 403 on recheck, so its transcribed command remains UNVERIFIED.
+The QOJ and Kattis snapshots and expected probe outputs must be captured by
+branch CI before the PR; see
 [Adding a profile](data/judges/README.md#research-and-ci).
 A reproduced snapshot alone
 does not make an arbitrary local GCC equivalent: target verification also needs
