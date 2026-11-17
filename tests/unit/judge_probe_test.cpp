@@ -41,7 +41,7 @@ std::string finish(std::string bytes) {
 }
 using Values = std::map<std::string,std::string>;
 std::string output(const Profile& p, JudgeProbePart part = {}, Values replacements = {},
-                   std::string missing = {}, std::string extra = {}) {
+                   std::string missing = {}, std::string extra = {}, Values raw = {}) {
   auto g = probe(p,part);
   std::string out = g.header + '\n' + g.manifest + '\n';
   for (const auto& f : g.facts) {
@@ -51,7 +51,7 @@ std::string output(const Profile& p, JudgeProbePart part = {}, Values replacemen
     if (f.category == "header") value = "1";
     if (!f.unsupported.empty()) value = "unsupported:" + f.unsupported;
     if (replacements.contains(key)) value = replacements.at(key);
-    out += key + '|' + hex(value) + '\n';
+    out += key + '|' + (raw.contains(key) ? raw.at(key) : hex(value)) + '\n';
   }
   return finish(out + extra);
 }
@@ -119,6 +119,55 @@ TEST(judge_probe_native_join_and_transitive_alias_invariants) {
   changed = output(p,{},{{"presence|ALWAYS","1"},{"presence|INVARIANT","0"}});
   CHECK(!checkJudgeProbe(p,e,{changed}).passed);
 }
+TEST(judge_probe_native_expected_marker_is_expected_only_and_model_scoped) {
+  auto p = small();
+  p.snapshotFacts["VARIABLE"] = {MacroState::unknown,{}, {FactOrigin::nativeModel}};
+  p.snapshotFacts["ALWAYS"] = {MacroState::definedUnknown,{}, {FactOrigin::nativeModel}};
+  p.snapshotFacts["INVARIANT"] = {MacroState::known,Macro{false,{},false,"1"},{FactOrigin::nativeModel}};
+  p.snapshotFacts["ABSENT"] = {MacroState::undefined,{}, {FactOrigin::nativeModel}};
+  p.predefined["NATIVE_ALIAS"] = Macro{false,{},false,"VARIABLE"};
+  p.snapshotFacts["NATIVE_ALIAS"] = {MacroState::known,p.predefined["NATIVE_ALIAS"],{FactOrigin::compilerBuiltin}};
+  const Values markers{{"presence|VARIABLE","native"}, {"presence|ALWAYS","native"},
+                       {"expansion|NATIVE_ALIAS","native"}};
+  const auto expected = output(p,{}, {}, {}, {}, markers);
+  p.probeExpected = expected;
+  CHECK(judgeProbeExpected(p).ok());
+  for (const auto* value : {"0", "1"}) {
+    auto actual = output(p,{},{{"presence|VARIABLE",value},{"presence|ALWAYS","1"},
+                              {"expansion|NATIVE_ALIAS","host-dependent"}});
+    CHECK(checkJudgeProbe(p,expected,{actual}).passed);
+  }
+  CHECK(!checkJudgeProbe(p,expected,{output(p)}).passed); // ALWAYS must be present.
+  CHECK(!checkJudgeProbe(p,expected,{expected}).passed); // Raw marker is never judge output.
+  CHECK(!checkJudgeProbe(p,expected,{output(p,{},{{"presence|ALWAYS","1"},
+      {"presence|VARIABLE","2"}})}).passed);
+  for (const auto& [key, marker] : markers) {
+    auto r = checkJudgeProbe(p,expected,{output(p,{},{{"presence|ALWAYS","1"}}, {}, {}, {{key,marker}})});
+    CHECK(!r.passed);
+    CHECK(r.report.find("native marker only allowed") != r.report.npos);
+  }
+  auto parts = output(p,{1,2},{},{},{},markers) + output(p,{2,2},{},{},{},markers);
+  CHECK(checkJudgeProbe(p,parts,{output(p,{2,2},{{"presence|ALWAYS","1"}}),
+                                output(p,{1,2},{{"presence|ALWAYS","1"}})}).passed);
+  // Encoded expansion text "native" is a real value, not the raw marker.
+  CHECK(checkJudgeProbe(p,expected,{output(p,{},{{"presence|ALWAYS","1"},
+      {"expansion|NATIVE_ALIAS","native"}})}).passed);
+  for (const auto* key : {"presence|OK", "expansion|OK", "presence|INVARIANT",
+                          "presence|ABSENT", "expansion|VARIABLE", "header|cstdio"}) {
+    p.probeExpected = output(p,{}, {}, {}, {}, {{key,"native"}});
+    CHECK(!judgeProbeExpected(p).ok());
+    CHECK(!checkJudgeProbe(p,*p.probeExpected,{output(p)}).passed);
+  }
+  const auto source = probe(p).source;
+  CHECK(source.find("presence|VARIABLE|native") != source.npos);
+  CHECK(source.find("presence|ALWAYS|native") != source.npos);
+  CHECK(source.find("expansion|NATIVE_ALIAS|native") != source.npos);
+  CHECK(source.find("presence|INVARIANT|native") == source.npos);
+  CHECK(source.find("presence|ABSENT|native") == source.npos);
+  CHECK(source.find("expansion|VARIABLE|native") == source.npos); // Presence-only reason stays fixed.
+  CHECK(source.find("--distill-expected") != source.npos);
+  CHECK(probe(small()).source.find("--distill-expected") == std::string::npos);
+}
 TEST(judge_probe_parts_manifest_complete_missing_duplicate_mixed) {
   auto p = small(); auto expected = output(p,{1,2}) + output(p,{2,2});
   CHECK(checkJudgeProbe(p,expected,{output(p,{2,2}),output(p,{1,2})}).passed);
@@ -179,17 +228,17 @@ TEST(judge_probe_cli_options_smoke) {
     {"--judge-probe","atcoder","--judge-check","codeforces","o"}}) CHECK(!parseDistillOptions(args).ok());
 }
 TEST(judge_probe_shipped_expected_outputs_match_current_generator) {
-  // A shipped expected output must parse and fully match itself under the
-  // current generator; otherwise the probe format changed without regenerating
-  // it (bump the format and rerun profiles.yml).
+  // Validate expected bytes against the current generator. Expected-only native
+  // markers cannot be supplied as judge output; the real-output path is tested
+  // separately above. Legacy hex expected files remain valid until CI recapture.
   auto catalog = listProfiles();
   CHECK(catalog.ok());
   if (!catalog.ok()) return;
   for (const auto& p : catalog.value().profiles) {
     if (!p.probeExpected) continue;
-    auto check = checkJudgeProbe(p, *p.probeExpected, {*p.probeExpected});
-    if (!check.passed) std::cerr << p.name << ":\n" << check.report;
-    CHECK(check.passed);
+    auto expected = judgeProbeExpected(p);
+    if (!expected.ok()) std::cerr << p.name << ": " << expected.error().message << '\n';
+    CHECK(expected.ok());
   }
 }
 TEST(judge_probe_gcc16_uses_the_audited_special_builtin_registry) {

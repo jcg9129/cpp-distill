@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Validate maintenance selection, shared by workflow planning and reporting."""
+import argparse
 import json
 import os
 from common import CLAIMS, profiles
@@ -12,7 +13,12 @@ def claims(selection):
     return selected
 
 
+def build_parser():
+    return argparse.ArgumentParser(description=__doc__)
+
+
 if __name__ == '__main__':
+    build_parser().parse_args()
     event = os.environ['EVENT_NAME']
     selected = claims(os.environ.get('CLAIMS', 'all')) if event == 'workflow_dispatch' else (['reproduction'] if os.environ.get('SCHEDULE') == '23 6 1 * *' else ['evidence', 'availability'])
     names = profiles(os.environ.get('PROFILES') or 'all')

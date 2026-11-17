@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+from contextlib import redirect_stderr
+import io
+import importlib
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+
+import yaml
 
 from common import ROOT, profiles
 import availability
@@ -15,6 +21,43 @@ from plan import claims
 
 
 class PlanningTests(unittest.TestCase):
+    def test_drift_commands_satisfy_their_argparse_contracts(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/drift.yml').read_text())
+        scripts = set()
+        for job in workflow['jobs'].values():
+            for step in job.get('steps', []):
+                # shlex preserves quoted shell variables as single argument values.
+                for line in step.get('run', '').splitlines():
+                    command = shlex.split(line)
+                    if len(command) < 2 or command[0] != 'python3' or not command[1].startswith('ci/drift/'):
+                        continue
+                    script = Path(command[1]).stem
+                    scripts.add(script)
+                    with self.subTest(script=script):
+                        parser = importlib.import_module(script).build_parser()
+                        variables = {'$PROFILES': 'all', '$CLAIMS': 'all', '$BUILD_RESULT': 'success'}
+                        argv = [variables.get(arg, arg) for arg in command[2:]]
+                        parser.parse_args(argv)
+                        # Prove required options come from the parser, rather than
+                        # an independent list that could drift with the workflow.
+                        for action in parser._actions:
+                            if not action.required:
+                                continue
+                            option = next(opt for opt in action.option_strings if opt in argv)
+                            incomplete = argv.copy()
+                            index = incomplete.index(option)
+                            del incomplete[index:index + 2]
+                            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                                parser.parse_args(incomplete)
+        self.assertEqual(scripts, {'plan', 'availability', 'evidence', 'reproduction', 'report'})
+
+    def test_report_diagnostic_is_uploaded_even_after_failure(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/drift.yml').read_text())
+        steps = workflow['jobs']['report']['steps']
+        upload = next(step for step in steps if step.get('with', {}).get('name') == 'drift-report')
+        self.assertIn('always()', upload['if'])
+        self.assertEqual(upload['with']['path'], 'out/drift/report.json')
+
     def test_every_shipped_profile_has_all_three_claims(self):
         shipped = {path.stem for path in (ROOT / 'data/judges').glob('*.toml')}
         selected = profiles()
