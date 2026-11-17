@@ -1045,6 +1045,44 @@ selection, equality, limits, verbose reporting, skips and fallback with injected
 process/worker models. Real CLI/extraction assertions require SDK CI.
 
 
+## Automatic CI retries
+
+[`retry-unassigned.yml`](../../.github/workflows/retry-unassigned.yml) handles
+completed runs of Core unit tests, Compatibility matrix, Distribution spike,
+Release, A1 reachable-header extension inventories, LLVM SDK and Official LLVM
+archive audit (all workflows with macOS jobs). Judge macro snapshots currently
+uses only Linux/Windows. The retry workflow becomes active only once its file
+exists on the default branch; it checks out trusted default-branch code.
+
+The Python stdlib helper lists **all pages for the triggering `run_attempt`** via
+`GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs`.
+A job is unassigned only when `conclusion == "cancelled"`, `steps == []`,
+`runner_name` is null/empty, and `runner_id` is null/0; all four fields must be
+present. See the [jobs API fields](https://docs.github.com/en/rest/actions/workflow-jobs#list-jobs-for-a-workflow-run-attempt).
+It does not infer runner assignment or queue timeout from timestamps.
+
+Only completed runs with conclusion `cancelled` or `failure`, a known non-fork
+head repository matching this repository, and `1 <= run_attempt < 3` qualify.
+At least one job must be unassigned, and every other job must have succeeded;
+real failures, started cancellations, skipped/neutral jobs, incomplete jobs or
+missing evidence stop the retry for human review. An overall `cancelled` run
+also requires at least one successful job **in that attempt**: all-unassigned
+cancellations could be a user cancelling before startup and are never retried,
+even after a 15-minute wait. No queue-timeout exception is inferred.
+
+The helper skips itself, rechecks that the current run is still eligible and on
+the event's attempt, then sends one
+`POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs` with
+`GITHUB_TOKEN` (`actions: write`, `contents: read` for checkout). Per-run
+concurrency serializes retry handlers. The attempt cap allows at most two
+automatic reruns; a cancelled retry containing no successful job is left for a
+human. Each invocation logs one JSON line with its decision and reason.
+Fixture-based tests intercept every HTTP request and run without network:
+
+```sh
+python3 -m unittest discover -s ci/retry -p 'test_*.py'
+```
+
 ## D4b compatibility matrix
 
 [Compatibility matrix](../../.github/workflows/matrix.yml) is an independent,
