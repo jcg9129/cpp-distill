@@ -5,6 +5,8 @@
 .checks/
 __pycache__/
 /build/
+/build-measure/
+/measurements/
 /sdk-work/
 /spike-work/
 /sdk-artifact/
@@ -15,3 +17,7 @@ __pycache__/
 /release-assets/
 /audit.json
 /combined-summary.json
+
+# Private user solutions are never committed.
+/tests/corpus/user/*
+!/tests/corpus/user/README.md

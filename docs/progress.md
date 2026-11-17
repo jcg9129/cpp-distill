@@ -31,7 +31,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4a runtime CLI and caide port | implemented: repeated `--verify-run`, individual assertions/reviews for all 81 caide cases; real CLI/extraction execution requires SDK CI |
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
 | D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
-| D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
+| D4/D5 remainder | user corpus measurement (keep the user's library and solutions outside the repo and measure with `ci/measure-local.sh`) and fixes from it; any remaining checker work; see design §7 |
 | D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42), Library Checker (#44), Timus (#48) shipped; Luogu parked (see D6 section) |
 | Profile maintenance | design §4.3.2; drift check (weekly evidence/availability, monthly reproduction) in the drift PR; no binary mirror |
 
@@ -230,8 +230,10 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
   and diagnostics. Resolver CI measures eligible adversarial fixtures and all 81
   copied caide case directories, and uploads TSV/Markdown/log artifacts. Original
   sources are hashed and licensed; expected-output assertions remain the D4 port.
-- `tests/corpus/user/` documents where the user will supply their library and
-  solutions. D3 is complete except this user corpus measurement, subject to SDK
+- `tests/corpus/user/README.md` documents keeping the user's library and solutions
+  outside the repo and measuring them with `ci/measure-local.sh`; solutions are
+  never committed, and only generated tables are shared.
+  D3 is complete except this user corpus measurement, subject to SDK
   CI checks; local verification cannot establish real extraction/CLI behavior.
 - PBDS remains not covered in both GCC releases. Full transitive call, macro and
   inactive-branch classification for user-associated arguments is still needed;

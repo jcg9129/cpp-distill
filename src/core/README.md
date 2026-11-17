@@ -1005,8 +1005,10 @@ back; D4a runs their assertions separately from measurements.
 
 `tests/corpus/caide/` contains all 81 directories copied from the user's GPL-3.0
 caide fork, original-file hashes and documented compile/source adapters.
-`tests/corpus/user/` is a placeholder for the user's library and solved problems;
-its measurement remains the one outstanding D3 completion item. PBDS is still
+Keep the user's library and solved problems outside the repo and measure them
+with `ci/measure-local.sh` (see `tests/corpus/user/README.md`). Solutions are never
+committed; only generated tables are shared. This corpus measurement remains
+the one outstanding D3 completion item. PBDS is still
 explicitly not covered: an exhaustive GCC 14.2/15.2 transitive lookup audit has
 not been completed, so inclusion continues to disable pruning.
 
