@@ -213,6 +213,29 @@ TEST(profile_mode_requires_matching_build_and_complete_registry) {
   CHECK(!approximateAllowed("__AVX2__")); CHECK(!approximateAllowed("__OPTIMIZE__"));
   for (const auto* n : {"__GNUC__", "_WIN32", "__SIZEOF_INT__", "__INT_MAX__", "__CHAR_UNSIGNED__", "__cplusplus"}) CHECK(approximateAllowed(n));
 }
+TEST(profile_approximate_feature_macro_snapshot_facts) {
+  Profile p; p.snapshot = "synthetic-empty-source.txt";
+  p.snapshotFacts["__cpp_constexpr"] = {MacroState::known, Macro{false, {}, false, "201907L"}, {FactOrigin::compilerBuiltin}};
+  CHECK(!p.reproduced);
+  // The allow-list's __cpp_[a-z0-9_]+ includes library features too. Their
+  // absence is evidence only for the initial, header-free environment.
+  for (const auto* name : {"__cpp_lib_mdspan", "__cpp_lib_ranges", "__cpp_lib_zzz_future"}) {
+    CHECK(approximateAllowed(name)); CHECK(!p.snapshotFacts.contains(name));
+    const auto fact = p.initialState(name);
+    CHECK_EQ(fact.state, MacroState::undefined);
+    CHECK_EQ(fact.provenance, (std::vector{FactOrigin::allowList}));
+  }
+  CHECK(approximateAllowed("__cpp_constexpr"));
+  const auto language = p.initialState("__cpp_constexpr");
+  CHECK_EQ(language.state, MacroState::known);
+  CHECK_EQ(language.definition->replacement, "201907L");
+  CHECK_EQ(language.provenance, (std::vector{FactOrigin::compilerBuiltin, FactOrigin::allowList}));
+  p.snapshot.reset();
+  CHECK_EQ(p.initialState("__cpp_lib_mdspan").state, MacroState::unknown);
+  p.reproduced = true;
+  CHECK_EQ(p.initialState("__cpp_lib_mdspan").state, MacroState::undefined);
+  CHECK_EQ(p.initialState("__cpp_lib_mdspan").provenance, (std::vector{FactOrigin::a4}));
+}
 TEST(profile_snapshot_compiler_is_approximate_and_cannot_claim_reproduction) {
   const auto original = test::read(profileFixture("mingw-gcc14-cpp23.toml"));
   const auto text = replace(original, "build = { package = \"synthetic:fixture=14.2.0-1\" }",
