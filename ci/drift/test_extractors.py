@@ -146,8 +146,8 @@ class ExtractorTests(unittest.TestCase):
         self.assertEqual(self.check(timus, text.encode('cp1251'), {'headers': {'Content-Type': 'text/html; charset=windows-1251'}}), 'same facts')
 
     def test_watch_coverage_and_reviewed_profile_facts(self):
-        self.assertEqual(set(SELECTED), set(profiles()) | {'timus-gcc13-cpp23'})
-        self.assertNotIn('timus-gcc13-cpp23', {s['profile'] for s in watches(profiles())})
+        self.assertEqual(set(SELECTED), set(profiles()))
+        self.assertEqual({s['profile'] for s in watches(profiles())}, set(profiles()))
         for path in (ROOT / 'data/judges').glob('*.toml'):
             profile = tomllib.loads(path.read_text())
             sources = [s for s in SOURCES if s['profile'] == path.stem and s['kind'] == 'deployment']

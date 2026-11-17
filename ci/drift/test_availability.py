@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import availability
+import winlibs
 from common import IntegrityError, profiles, verify_stream
 from pgp import packets, signed_digest
 
@@ -117,11 +118,49 @@ class AvailabilityTests(unittest.TestCase):
                 self.assertEqual(set(seen), {url, url + '.sig'})
 
     def test_bottle_and_zip_reuse_download_helpers_without_install(self):
-        for method, target, options in [('homebrew', 'homebrew', {}), ('winlibs', 'winlibs', {'digest': 'sha256:' + 'a' * 64})]:
-            with patch(target + '.download') as download, patch('homebrew.install') as install:
-                availability.check(dict(method=method, url='https://example.test/pin', **options), {})
-            download.assert_called_once()
-            install.assert_not_called()
+        for method in ('homebrew', 'winlibs'):
+            with self.subTest(method=method), patch(method + '.download') as download, \
+                    patch(method + '.install') as install:
+                availability.check(dict(method=method), {})
+                destination = download.call_args.args[0]
+                self.assertIsInstance(destination, Path)
+                if method == 'winlibs':
+                    download.assert_called_once_with(destination)
+                else:
+                    download.assert_called_once_with(destination, availability.homebrew.DIGEST)
+                self.assertFalse(destination.parent.exists())
+                install.assert_not_called()
+
+    def test_timus_downloads_full_pinned_zip_and_classifies_digest_failure(self):
+        name = 'timus-gcc13-cpp23'
+        self.assertEqual(availability.plan([name]), [dict(
+            profile=name, source=winlibs.PROVENANCE, url=winlibs.URL, method='winlibs')])
+        # Multiple chunks, including a partial final chunk, must all be hashed.
+        payload = b'synthetic zip bytes\x00' * 120000
+        for data, status in ((payload, 'verified'), (payload + b'X', 'integrity alert'),
+                             (payload[:-1], 'integrity alert')):
+            stream = io.BytesIO(data)
+            with self.subTest(status=status, size=len(data)), \
+                    patch('winlibs.urlopen', return_value=stream) as fetch, \
+                    patch('winlibs.DIGEST', hashlib.sha256(payload).hexdigest()), \
+                    patch('winlibs.install') as install, patch('winlibs.extract') as extract, \
+                    patch('winlibs.verify') as verify, patch('winlibs.run') as run:
+                row, = availability.run([name])['results']
+                self.assertEqual(row['status'], status)
+                self.assertEqual(row['source'], winlibs.PROVENANCE)
+                self.assertEqual(row['host'], 'github.com')
+                fetch.assert_called_once_with(winlibs.URL, timeout=60)
+                self.assertTrue(stream.closed)
+                for operation in (install, extract, verify, run):
+                    operation.assert_not_called()
+        with patch('winlibs.urlopen', side_effect=TimeoutError('timeout')):
+            self.assertEqual(availability.run([name])['results'][0]['status'], 'unavailable')
+
+    def test_unsupported_winlibs_pin_and_obsolete_recipe_are_rejected(self):
+        for compiler in (winlibs.PROVENANCE[:-1] + '0', 'recipe=' + winlibs.URL):
+            with self.subTest(compiler=compiler), patch('availability.identity', return_value=compiler), \
+                    self.assertRaisesRegex(ValueError, 'unsupported'):
+                availability.plan(['timus-gcc13-cpp23'])
 
     def test_all_profiles_have_plans_and_exact_msys_lock(self):
         names = profiles()

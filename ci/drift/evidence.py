@@ -44,8 +44,7 @@ def facts(value):
 def watches(selected, directory=ROOT / 'data/judges/watch'):
     sources = []
     paths = sorted(directory.glob('*.toml'))
-    # Watches may be staged ahead of a profile (e.g. Timus). The caller's
-    # selection still controls coverage; normal CI selects shipped profiles.
+    # The caller's selection controls coverage; normal CI selects all shipped profiles.
     for path in paths:
         name = path.stem
         if name not in selected:

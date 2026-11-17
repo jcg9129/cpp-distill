@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Evidence reviewed/fetched 2026-11-17. Staged for origin/d6c-timus:data/judges/timus-gcc13-cpp23.toml (read with git show); normal CI selects shipped profiles only.
+# Evidence reviewed/fetched 2026-11-17 against the shipped timus-gcc13-cpp23 profile; included in normal CI selection.
 # Russian locale retains original text; C++23 is the command’s dialect selector, not a claimed form ID. UCRT/POSIX/SEH are probe facts, not asserted by this page.
 schema = 1
 

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Fully download and verify every shipped acquisition input, without installing."""
-import hashlib
 import io
 import json
 import lzma
@@ -56,9 +55,10 @@ def plan(selected):
             elif compiler == 'recipe=' + RECIPE_URL:
                 add(name, 'atcoder-recipe', RECIPE_URL, 'digest', digest='sha256:' + (ROOT / 'ci/profiles/atcoder-recipe.sha256').read_text().strip())
                 add(name, 'gcc-15.2.0.tar.gz', GNU_URL, 'digest', digest='sha512:' + (ROOT / 'ci/profiles/atcoder-source.sha512').read_text().split()[0])
-            elif compiler.startswith('recipe=') and compiler.removeprefix('recipe=') in winlibs.LOCKS:
-                url = compiler.removeprefix('recipe=')
-                add(name, compiler, url, 'winlibs', digest=winlibs.LOCKS[url])
+            elif compiler.startswith('winlibs='):
+                if compiler != winlibs.PROVENANCE:
+                    raise ValueError('unsupported WinLibs pin')
+                add(name, compiler, winlibs.URL, 'winlibs')
             else:
                 raise ValueError('unsupported acquisition: ' + compiler)
     # QOJ's compiler packages also rely on this digest-pinned acquisition base.
@@ -184,7 +184,7 @@ def check(task, cache):
             if method == 'homebrew':
                 homebrew.download(destination, homebrew.DIGEST)
             else:
-                winlibs.download(task['url'], destination, task['digest'])
+                winlibs.download(destination)
     else:
         raise ValueError('unknown artifact method')
 

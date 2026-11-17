@@ -22,6 +22,10 @@ CLEAN_VARIABLES = ('CPATH', 'CPLUS_INCLUDE_PATH', 'C_INCLUDE_PATH', 'GCC_EXEC_PR
                    'COMPILER_PATH', 'LIBRARY_PATH')
 
 
+class DigestError(ValueError):
+    """Downloaded archive does not match the audited SHA-256 pin."""
+
+
 def clean_environment(compiler):
     env = {k: v for k, v in os.environ.items() if k.upper() not in (*CLEAN_VARIABLES, 'PATH')}
     # GCC's sibling programs/DLLs come only from this archive, never MSYS2 or
@@ -47,7 +51,7 @@ def download(destination):
             output.write(chunk)
     if checksum.hexdigest() != DIGEST:
         destination.unlink()
-        raise ValueError('WinLibs archive SHA-256 mismatch; refusing extraction')
+        raise DigestError('WinLibs archive SHA-256 mismatch; refusing extraction')
 
 
 def extract(archive, destination):

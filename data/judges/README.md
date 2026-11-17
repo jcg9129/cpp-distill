@@ -637,7 +637,8 @@ However, `--judge-probe` currently emits runtime stdout with manifests, hex
 encoding and checksums. It cannot be used unchanged through compilation-error
 logs, nor can manual pragma messages be passed to `--judge-check` as protocol
 output. A full runtime probe match on Timus and its output retrieval remain
-UNVERIFIED. Both snapshot and expected-output artifacts await branch CI.
+UNVERIFIED. Both snapshot and expected-output artifacts are shipped and included
+in monthly reproduction comparisons.
 
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,
@@ -765,6 +766,11 @@ their name and digest match.
 The serialized [profile maintenance workflow](../../.github/workflows/drift.yml)
 checks evidence and complete artifact downloads weekly, and regenerates profiles
 from a cold start monthly. Dispatch can select claims and full profile names.
+All nine shipped profiles, including Timus, participate in availability,
+reproduction and evidence checks. Timus availability downloads the complete
+pinned WinLibs zip and verifies its SHA-256 without extraction or compiler
+execution. Monthly reproduction compares both Timus outputs byte for byte,
+and its evidence watch compares the published Russian C/C++ help page.
 Issues named `drift: <profile>: evidence|availability|reproduction` describe
 separate claims: deployment/listing facts, obtainability with digest verification,
 and byte equality with both shipped snapshot and probe output. Shared host
@@ -788,7 +794,9 @@ The [framework documentation](../../ci/drift/README.md) defines watch/result
 schemas, the extractor interface and issue state model. After a reviewed profile
 change, update its `watch/<profile>.toml` expectations and original-language
 excerpt from the moving deployment source, retaining exact argument order,
-duplicates and macro text. Refresh the dated parser fixture and its changed,
+duplicates and macro text. New shipped profiles must have availability plans,
+both reproduction outputs and evidence watches; tests derive required coverage
+from `data/judges/*.toml`. Refresh the dated parser fixture and its changed,
 missing, duplicated and challenge variants, run
 `python3 -m unittest discover -s ci/drift -p 'test_*.py'`, then run
 `python3 ci/drift/evidence.py --output results/evidence.json` and review every

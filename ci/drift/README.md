@@ -5,34 +5,38 @@
 the first of each month, and selected claims/profiles on dispatch. Only its
 report job can write issues. Every external action is pinned to a commit.
 Python 3.12 and the standard library suffice for every `ci/drift` command.
+All nine shipped profiles, including Timus, have availability, reproduction
+and evidence coverage. Selection is derived from `data/judges/*.toml`; tests
+require every shipped profile to have all three claims.
 
 `availability.py` enumerates **both** `snapshot_compiler` and `build` where
 present. It fully streams exact MSYS2 package files, snapshot Ubuntu `.deb`s,
 registry index + unique linux/amd64 child manifest + config and every layer
 (including QOJ's pinned Ubuntu acquisition container),
-Homebrew bottle blob, and AtCoder GNU source/recipe. It verifies every digest
-before reporting `verified`; metadata reachability is insufficient. Identical
+Homebrew bottle blob, Timus WinLibs zip, and AtCoder GNU source/recipe. It verifies
+every digest before reporting `verified`; metadata reachability is insufficient. Identical
 pins shared by profiles are downloaded once per run. No package is installed,
 unpacked or executed. See [MSYS2 signing keys](msys2-keys.md) and
 [Ubuntu snapshot evidence](../profiles/ubuntu-snapshots.md). AtCoder's tarball
 SHA512 comes from [GCC's release checksums](https://gcc.gnu.org/ftp/gcc/releases/gcc-15.2.0/sha512.sum).
-Homebrew reuses `homebrew.download`; WinLibs reuses `winlibs.download`. The latter
-helper was absent when this framework was added: no shipped profile references
-WinLibs, so its explicit URL-to-SHA256 lock is empty. Add a reviewed ZIP URL and
-digest to `winlibs.LOCKS` before shipping such a recipe profile.
+Homebrew reuses `homebrew.download`; Timus's `winlibs=` provenance must match
+`winlibs.PROVENANCE` and reuses `winlibs.download(destination)` with its audited
+URL and SHA-256 pin. The entire zip is downloaded and hashed without extraction
+or compiler execution; a digest mismatch is an `integrity alert`.
 
 `reproduction.py` consumes `snapshot-<profile>/<profile>-predefined.txt` and
 `-probe-expected.txt` downloaded from the callable `profiles.yml`. It compares
-raw bytes. Missing profile/probe artifacts, any difference, and build failure
-are failures. The cold-start input disables the AtCoder compiler cache; it
+raw bytes for every selected profile, including Timus. Missing profile/probe
+artifacts, any difference, and build failure are failures. The cold-start input
+disables the AtCoder compiler cache; it
 does not change the existing dispatch behavior.
 
 ## Evidence watch schema (version 1)
 
 Files are `data/judges/watch/<full-profile-name>.toml`. Missing watch files mean
-**no sources**, not successful evidence, and create no evidence issues. Watches
-may be staged before a profile lands (currently Timus); normal CI selection is
-still limited to shipped profiles. A watch contains exactly
+**no sources**, not successful evidence, and create no evidence issues. All
+shipped profiles have watches; tests reject missing coverage. Normal CI selection
+includes Timus and every other shipped profile. A watch contains exactly
 `schema = 1` and a nonempty `sources` array. Every source has exactly the
 following fields (the example is synthetic):
 
