@@ -202,6 +202,12 @@ predefined = "fixture-predefined.txt"
         self.assertEqual(inventory('#define F(x) x\n#define EMPTY\n')['EMPTY'], '#define EMPTY ')
         origins = startup_origins('# 0 "<built-in>"\n#define X 1\n# 0 "<command-line>"\n#define Y 2\n# 1 "/usr/include/stdc-predef.h" 1 3 4\n#define Z 3\n', Path('/empty.cpp'))
         self.assertEqual(origins, {'X': 'compiler-builtin', 'Y': 'command-operation', 'Z': 'startup-header'})
+        # -g adds GCC's working-directory marker; only the actual cwd is accepted.
+        cwd = str(Path.cwd()).replace('\\', '/')
+        traced = startup_origins(f'# 0 "/empty.cpp"\n# 0 "{cwd}//"\n# 0 "<built-in>"\n#define X 1\n', Path('/empty.cpp'))
+        self.assertEqual(traced, {'X': 'compiler-builtin'})
+        with self.assertRaisesRegex(ValueError, 'unexpected startup header'):
+            startup_origins('# 0 "/somewhere/else//"\n#define X 1\n', Path('/empty.cpp'))
 
     def test_native_four_state_join_and_outside_model_failure(self):
         model = {'A': 'isa', 'B': 'isa', 'C': 'isa', 'D': 'isa', 'T': 'tune'}
