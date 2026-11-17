@@ -408,13 +408,21 @@ Remaining D6c profiles, in this order; research in
 4. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
    WinLibs release and CRT (UCRT/MSVCRT) unknown.
 
-Decisions (user, 2026-11-17):
+Done 2026-11-17 (user decisions):
 
-- Tag **v0.1.1** (AtCoder native fix, names/aliases, probe/check, CSES, QOJ,
-  Kattis): approved; dry run on main, then tag.
-- Plan an audited `abi` scope in the native model so ABI-fixed names
-  (`__x86_64__`, `__amd64__`, SSE2 baseline `__SSE__`/`__SSE2__`/`__MMX__`/
-  `__FXSR__`, code-model and long-double macros) stay known under
-  `-march=native`: approved to plan. Today they are unknown (sound,
-  imprecise). Needs a design amendment, a Codex challenge and user approval of
-  the amendment before code; do it before the three native judges above.
+- **v0.1.1 published** on `3907fee`: dry run 44023971998, release run
+  44024975423, https://github.com/jcg9129/cpp-distill/releases/tag/v0.1.1
+  (five archives + SHA256SUMS). Includes the AtCoder native fix.
+- Native ABI names (#39, `6edadc8`, after v0.1.1): 14 names GCC 15.2 defines
+  from ABI options only or unconditionally (`__x86_64__`, `__x86_64`,
+  `__amd64__`, `__amd64`, `_ILP32`, `__ILP32__`, `__code_model_*__`,
+  `__SEG_FS`, `__SEG_GS`, `__SIZEOF_FLOAT128__`) left the native model and keep
+  their snapshot state; the model file header cites each `i386-c.cc` line. The
+  native host run now joins the regression check. Codex rejected a proposed
+  "baseline" assumption: `__MMX__`, `__SSE__`, `__SSE2__`, `__FXSR__`,
+  `__SSE_MATH__`, `__SSE2_MATH__` stay in the model (GCC reads each CPUID bit;
+  VMs can mask them). `__SIZEOF_FLOAT80__` stays pending an XFmode layout audit
+  (`gcc/config/i386/i386-modes.def`). New native models (GCC 13, 16, 15.3)
+  need the same audit.
+
+Next: yukicoder (item 1 above).
