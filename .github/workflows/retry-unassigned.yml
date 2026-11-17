@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Retry unassigned jobs
+on:
+  # workflow_run requires this file to exist on the default branch.
+  workflow_run:
+    workflows:
+      - Core unit tests
+      - Compatibility matrix
+      - Distribution spike
+      - Release
+      - A1 reachable-header extension inventories
+      - LLVM SDK
+      - Official LLVM archive audit
+    types: [completed]
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: retry-unassigned-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+jobs:
+  retry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Use only trusted default-branch code, never the triggering run's head.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Retry only jobs that never acquired a runner
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 ci/retry/retry_unassigned.py
