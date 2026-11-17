@@ -134,13 +134,14 @@ struct Schema {
     for (const auto* key : {"build", "snapshot_compiler"}) if (doc.contains(key)) {
       const auto& provenance = get<TomlTable>(key);
       const bool snapshot = std::string_view(key) == "snapshot_compiler";
-      if (provenance.size() != 1 || (!provenance.contains("package") && !provenance.contains("recipe") && !(snapshot && provenance.contains("image"))))
-        fail(key, snapshot ? "requires exactly package, recipe or image" : "requires exactly package or recipe");
+      if (provenance.size() != 1 || (!provenance.contains("package") && !provenance.contains("recipe") && !(snapshot && (provenance.contains("image") || provenance.contains("homebrew")))))
+        fail(key, snapshot ? "requires exactly package, recipe, image or homebrew" : "requires exactly package or recipe");
       const auto& [kind, value] = *provenance.begin();
       if (value.empty() || !clean(value) || (kind == "recipe" && !matches(value, "https?://[^ \\t]+")) ||
           (kind == "package" && !matches(value, "[A-Za-z0-9_.:+-]+=[A-Za-z0-9_.:+~-]+")) ||
-          (kind == "image" && !matches(value, "docker\\.io/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}")))
-        fail(key, "invalid compiler provenance (package requires an exact version; image requires a digest)");
+          (kind == "image" && !matches(value, "docker\\.io/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}")) ||
+          (kind == "homebrew" && !matches(value, "homebrew:gcc=[1-9][0-9]*\\.[0-9]+\\.[0-9]+@sha256:[0-9a-f]{64}")))
+        fail(key, "invalid compiler provenance (package requires an exact version; image/homebrew require a digest)");
       if (kind == "package" && (value.starts_with("ubuntu-") || value.starts_with("ubuntu:")) &&
           !matches(value, "ubuntu-[0-9]{2}\\.[0-9]{2}:[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*-[A-Za-z0-9.+~]+"))
         fail(key, "Ubuntu package requires ubuntu-YY.MM:name=version-revision");

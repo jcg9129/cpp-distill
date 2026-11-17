@@ -33,6 +33,8 @@ def matrix(selection='all'):
             acquisition = 'msys2'
         elif compiler.startswith('image='):
             acquisition = 'image'
+        elif compiler.startswith('homebrew='):
+            acquisition = 'homebrew'
         elif re.match(r'package=ubuntu-(24\.04|26\.04):g\+\+-', compiler):
             acquisition = 'ubuntu'
         elif compiler == 'recipe=https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml':

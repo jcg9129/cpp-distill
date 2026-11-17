@@ -296,7 +296,10 @@ whose snapshot comes from another compiler of the same version and target is
 `package` or published `recipe` form, or a snapshot-only
 `image = "docker.io/<namespace>/<repository>@sha256:<64 lowercase hex>"` form.
 Image references require a digest and forbid tags; `build` does not accept
-`image`. The image pin identifies snapshot acquisition without asserting that
+`image`. A snapshot-only `homebrew` value matches
+`homebrew:gcc=[1-9][0-9]*\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}` in full:
+a core GCC version and exact bottle blob digest. It is also forbidden in `build`
+and records `reproduced: no`. The image pin identifies snapshot acquisition without asserting that
 the judge grades in that image. It supplies provenance, not reproduction:
 the snapshot records `snapshot-compiler` and `reproduced: no`. A snapshot claiming
 reproduction without `build` is rejected. Codeforces publishes only

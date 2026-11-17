@@ -2,12 +2,14 @@
 from pathlib import Path, PureWindowsPath
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 from snapshot import (capture, inventory, startup_origins, join_native, native_runs, cpu_values,
                       compatible_triple, data, run, ROOT)
 from flags import operations
 from matrix import matrix, job_matrices, UBUNTU_26_04
+from homebrew import PROVENANCE as HOMEBREW_PROVENANCE
 
 KATTIS_IMAGE = 'docker.io/kattis/judge-cpp@sha256:453998e7fefcf47fb86c094be4718f2986c0af3e7a079c7bd5696a60929d514d'
 
@@ -134,6 +136,63 @@ predefined = "fixture-predefined.txt"
             with self.assertRaisesRegex(ValueError, 'provenance'):
                 capture(profile, 'g++-15', 'image=' + KATTIS_IMAGE)
 
+    def test_yukicoder_dialects_have_independent_capture_and_homebrew_metadata(self):
+        for mode, std in [('cpp23', 'c++23'), ('gnupp23', 'gnu++23')]:
+            original = ROOT / f'data/judges/yukicoder-gcc16-{mode}.toml'
+            profile = tomllib.loads(original.read_text())
+            self.assertEqual(profile.get('alias'), 'yukicoder' if mode == 'cpp23' else None)
+            self.assertEqual(profile['predefined'], original.stem + '-predefined.txt')
+            self.assertEqual(profile['probe_source_bytes'], 131072)
+            self.assertNotIn('probe_output_bytes', profile)
+            self.assertNotIn('build', profile)
+            self.assertEqual(profile['link'], ['-lm'])
+            calls = []
+
+            def compiler_run(compiler, *args):
+                calls.append(args)
+                if args[0] == '-dumpfullversion':
+                    return '16.2.0'
+                if args[0] == '-dumpmachine':
+                    return 'x86_64-pc-linux-gnu'
+                if args[0] == '--version':
+                    return 'g++-16 (Homebrew GCC 16.2.0) 16.2.0'
+                self.assertEqual(args[:6], ('-x', 'c++', '-std=' + std, '-O2', '-Wuninitialized', '-DONLINE_JUDGE'))
+                self.assertFalse(any(a.startswith(('-fplugin', '-lm', '-march')) for a in args))
+                if args[-1].endswith('probe.cpp'):
+                    self.assertIn('#ifdef __has_embed', Path(args[-1]).read_text())
+                    return ''.join(f'DISTILL_PROBE_{i} 1\n' for i in range(len(data('builtins', 'gcc-16.2'))))
+                return ('#define __GNUC__ 16\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n'
+                        '#define __cplusplus 202302L\n#define ONLINE_JUDGE 1\n'
+                        + ('#define __STRICT_ANSI__ 1\n' if mode == 'cpp23' else ''))
+
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir='.') as temp, \
+                    patch('snapshot.shutil.which', return_value='/synthetic/g++-16'), \
+                    patch('snapshot.run', side_effect=compiler_run):
+                # Synthetic protocol output only, never a new shipped snapshot.
+                path = Path(temp) / original.name
+                path.write_text(original.read_text().replace(profile['predefined'], 'capture.txt'))
+                output = capture(path, '/synthetic/g++-16').read_text()
+                self.assertIn('# snapshot-compiler: ' + HOMEBREW_PROVENANCE, output)
+                self.assertIn('# build: none\n# reproduced: no', output)
+                self.assertIn('# std: ' + std, output)
+                self.assertIn('# builtin-registry: gcc-16.2\n# native-model: none', output)
+                self.assertIn('# flag: -O2\n# flag: -Wuninitialized\n# flag: -DONLINE_JUDGE', output)
+                self.assertIn('# command-operation #define ONLINE_JUDGE 1', output)
+                self.assertIn('# state __has_embed defined-unknown special-builtin', output)
+                self.assertEqual('#define __STRICT_ANSI__ 1' in output, mode == 'cpp23')
+                self.assertEqual(sum(a[-1].endswith('probe.cpp') for a in calls), 1)
+                with self.assertRaisesRegex(ValueError, 'provenance'):
+                    capture(path, '/synthetic/g++-16', HOMEBREW_PROVENANCE)
+
+    def test_yukicoder_matrix_rows_use_ubuntu_runner_and_separate_artifacts(self):
+        names = ['yukicoder-gcc16-cpp23', 'yukicoder-gcc16-gnupp23']
+        self.assertEqual(matrix(','.join(names))['include'], [
+            dict(profile=name, version='16.2.0', runner='ubuntu-24.04', build='',
+                 compiler=HOMEBREW_PROVENANCE, acquisition='homebrew') for name in names])
+        jobs = job_matrices(','.join(names))
+        self.assertTrue(jobs['has_runner'])
+        self.assertFalse(jobs['has_container'])
+
     def test_mismatches_clang_and_other_startup_headers_rejected(self):
         for option, value in [('-dumpfullversion', '15.3.0'), ('-dumpmachine', 'aarch64-linux-gnu'),
                               ('-dM', '#define __clang__ 1\n'), ('-dD', '# 1 "/judge/settings.h" 1\n')]:
@@ -154,12 +213,16 @@ predefined = "fixture-predefined.txt"
                 capture(path, 'g++')
 
     def test_registry_and_model_source_coverage(self):
-        for key in ['gcc-14.2', 'gcc-15.2']:
+        for key in ['gcc-14.2', 'gcc-15.2', 'gcc-16.2']:
             builtins = data('builtins', key)
             self.assertIn('__has_extension', builtins)
             self.assertIn('__has_c_attribute', builtins)
             self.assertIn('__FILE_NAME__', builtins)
-            self.assertEqual('__has_embed' in builtins, key == 'gcc-15.2')
+            self.assertEqual('__has_embed' in builtins, key != 'gcc-14.2')
+            if key == 'gcc-16.2':
+                self.assertEqual(builtins, data('builtins', 'gcc-15.2'))
+                self.assertEqual(data('native', key + '-x86'), [])
+                continue
             model = dict(x.split() for x in data('native', key + '-x86'))
             for n in ['__AVX2__', '__znver4', '__znver4__', '__k8', '__FP_FAST_FMA', '__FP_FAST_FMAF32x']:
                 self.assertEqual(model[n], 'isa')
@@ -303,7 +366,7 @@ predefined = "fixture-predefined.txt"
 
     def test_matrix_selection_builds_and_bad_input(self):
         rows = matrix()['include']
-        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23', 'kattis-gcc15-gnupp23'})
+        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23', 'kattis-gcc15-gnupp23', 'yukicoder-gcc16-cpp23', 'yukicoder-gcc16-gnupp23'})
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['version'], '15.2.0')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['runner'], 'windows-2025')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['build'], '')
@@ -343,7 +406,7 @@ predefined = "fixture-predefined.txt"
         self.assertTrue(all_jobs['has_runner'])
         self.assertTrue(all_jobs['has_container'])
         self.assertEqual(all_jobs['runner_matrix']['include'],
-                         matrix('atcoder-gcc15-gnupp23,codeforces-gcc14-cpp23,cses-gcc13-cpp23')['include'])
+                         matrix('atcoder-gcc15-gnupp23,codeforces-gcc14-cpp23,cses-gcc13-cpp23,yukicoder-gcc16-cpp23,yukicoder-gcc16-gnupp23')['include'])
         self.assertTrue(all('container' not in row for row in all_jobs['runner_matrix']['include']))
         self.assertEqual(all_jobs['container_matrix'], matrix('kattis-gcc15-gnupp23,qoj-gcc15-cpp23'))
         container_only = job_matrices('qoj-gcc15-cpp23,qoj-gcc15-cpp23')

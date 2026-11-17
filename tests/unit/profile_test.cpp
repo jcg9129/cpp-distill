@@ -325,6 +325,82 @@ TEST(profile_image_provenance_is_digest_pinned_and_snapshot_only) {
   CHECK(!synthetic(text, replace(snapshot, "# reproduced: no", "# reproduced: yes")).ok());
   CHECK(!synthetic(text, replace(snapshot, image, image.substr(0, image.size() - 1) + "b")).ok());
 }
+TEST(profile_homebrew_provenance_is_exact_and_snapshot_only) {
+  const std::string bottle = "homebrew:gcc=16.2.0@sha256:" + std::string(64, 'a');
+  const auto base = replace(allowProfile(), "build = { package = \"synthetic:fixture=14.2.0-1\" }", "");
+  auto valid = synthetic(base + "\nsnapshot_compiler = { homebrew = '" + bottle + "' }");
+  CHECK(valid.ok());
+  if (valid.ok()) {
+    CHECK(!valid.value().build); CHECK(!valid.value().reproduced);
+    CHECK(valid.value().snapshotCompiler.has_value());
+    if (valid.value().snapshotCompiler) CHECK_EQ(*valid.value().snapshotCompiler, (std::pair{std::string("homebrew"), bottle}));
+  }
+  badProfile(base + "\nbuild = { homebrew = '" + bottle + "' }", "build:");
+  for (const auto& value : {replace(bottle, "homebrew:", ""), replace(bottle, "gcc=", "llvm="),
+                           replace(bottle, "gcc=", "gcc@16="), replace(bottle, "16.2.0", "16.2"),
+                           replace(bottle, "16.2.0", "0.2.0"), replace(bottle, "16.2.0", "16.2.0_1"),
+                           replace(bottle, "16.2.0", "*"), std::string("homebrew:gcc=16.2.0"),
+                           replace(bottle, "@", ":latest@"), bottle.substr(0, bottle.size() - 1), bottle + "a",
+                           replace(bottle, "sha256:", "sha512:"), replace(bottle, std::string(64, 'a'), std::string(64, 'A')),
+                           bottle + " "})
+    badProfile(base + "\nsnapshot_compiler = { homebrew = '" + value + "' }", "snapshot_compiler:");
+  for (const auto* other : {"package", "recipe", "image"})
+    badProfile(base + "\nsnapshot_compiler = { homebrew = '" + bottle + "', " + other + " = 'gcc=16.2.0' }", "snapshot_compiler:");
+}
+TEST(profile_yukicoder_gcc16_synthetic_snapshots_and_dialects) {
+  const std::string bottle = "homebrew:gcc=16.2.0@sha256:6504ecae947061ffe79c9dea2f635791bf54b148d1063ec857873eac2a67d922";
+  const auto builtins = specialBuiltins({CompilerFamily::gcc, 16, 2, 0});
+  CHECK_EQ(builtins.size(), 20u);
+  CHECK_EQ(builtins, specialBuiltins({CompilerFamily::gcc, 15, 2, 0}));
+  CHECK(nativeDependencies({CompilerFamily::gcc, 16, 2, 0}).empty());
+  for (const bool gnu : {false, true}) {
+    const std::string name = gnu ? "yukicoder-gcc16-gnupp23" : "yukicoder-gcc16-cpp23";
+    const std::string std = gnu ? "gnu++23" : "c++23";
+    const auto file = name + ".toml";
+    CHECK(embeddedProfileFiles().contains(file));
+    const auto text = embeddedProfileFiles().at(file);
+    // Protocol-only fixture built in memory, never a captured judge snapshot.
+    std::string snapshot = "# distill-snapshot: 1\n# compiler-path: /synthetic/g++-16\n"
+        "# compiler-version: synthetic GCC 16.2.0\n# gcc-version: 16.2.0\n"
+        "# dumpmachine: x86_64-pc-linux-gnu\n# profile-triple: x86_64-pc-linux-gnu\n"
+        "# build: none\n# snapshot-compiler: homebrew=" + bottle + "\n# reproduced: no\n# std: " + std +
+        "\n# builtin-registry: gcc-16.2\n# native-model: none\n"
+        "# flag: -O2\n# flag: -Wuninitialized\n# flag: -DONLINE_JUDGE\n# end-header\n"
+        "#define __GNUC__ 16\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n"
+        "#define __cplusplus 202302L\n#define __x86_64__ 1\n#define __linux__ 1\n"
+        "# command-operation #define ONLINE_JUDGE 1\n";
+    if (!gnu) snapshot += "#define __STRICT_ANSI__ 1\n";
+    for (const auto& n : builtins) snapshot += "# state " + n + " defined-unknown special-builtin\n# probe " + n + " defined\n";
+    auto load = [&](const std::string& bytes) {
+      return parseProfile(text, file, [&](const auto& path) -> Result<std::string> {
+        if (path.filename() == name + "-predefined.txt") return bytes;
+        return Error{"no synthetic expected output"};
+      });
+    };
+    const auto loaded = load(snapshot);
+    CHECK(loaded.ok()); if (!loaded.ok()) continue;
+    const auto& p = loaded.value();
+    CHECK_EQ(p.name, name); CHECK_EQ(p.compilerVersion, "16.2.0");
+    CHECK_EQ(p.alias, gnu ? std::optional<std::string>{} : std::optional<std::string>{"yukicoder"});
+    CHECK(!p.build); CHECK(!p.reproduced); CHECK(!p.snapshotMetadata.reproduced);
+    CHECK_EQ(p.snapshotMetadata.snapshotCompiler, "homebrew=" + bottle);
+    CHECK_EQ(p.dialect.name, std); CHECK_EQ(p.dialect.gnu, gnu);
+    CHECK_EQ(p.flags, (std::vector<std::string>{"-O2", "-Wuninitialized", "-DONLINE_JUDGE"}));
+    CHECK_EQ(p.link, (std::vector<std::string>{"-lm"}));
+    CHECK_EQ(p.libraries, (std::vector<std::string>{"libstdc++", "glibc"}));
+    CHECK_EQ(p.check, (std::vector<std::string>{"g++-16", "g++"}));
+    CHECK_EQ(p.probeSourceBytes, 131072u); CHECK_EQ(p.probeOutputBytes, 60000u);
+    CHECK_EQ(p.initialState("__cplusplus").definition->replacement, "202302L");
+    CHECK_EQ(p.initialState("ONLINE_JUDGE").provenance.front(), FactOrigin::commandOperation);
+    CHECK_EQ(p.initialState("__AVX512F__").state, MacroState::unknown);
+    CHECK(!load(replace(snapshot, "# std: " + std, gnu ? "# std: c++23" : "# std: gnu++23")).ok());
+    CHECK(!load(replace(snapshot, "202302L", "202100L")).ok());
+    CHECK(!load(replace(snapshot, "# builtin-registry: gcc-16.2", "# builtin-registry: none")).ok());
+    CHECK(!load(replace(snapshot, "# probe __has_embed defined", "")).ok());
+    CHECK(!load(replace(snapshot, "# reproduced: no", "# reproduced: yes")).ok());
+    CHECK(!load(replace(snapshot, bottle, bottle.substr(0, bottle.size() - 1) + "a")).ok());
+  }
+}
 TEST(profile_schema_required_unknown_types_and_values) {
   auto text = allowProfile(); auto doc = parseProfileToml(text, "test").value();
   for (const auto& [key, entry] : doc) {
@@ -628,7 +704,9 @@ TEST(profile_list_columns_and_order) {
   CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\t-\n") != std::string::npos);
   CHECK(list.find("qoj-gcc15-cpp23\tqoj\tbundled\tapproximate\t2026-11-17\t\"QOJ") != std::string::npos);
   CHECK(list.find("kattis-gcc15-gnupp23\tkattis\tbundled\tapproximate\t2026-11-17\t\"Kattis") != std::string::npos);
-  const auto count = 6;
+  CHECK(list.find("yukicoder-gcc16-cpp23\tyukicoder\tbundled\tapproximate\t2026-11-17\t\"yukicoder") != std::string::npos);
+  CHECK(list.find("yukicoder-gcc16-gnupp23\t-\tbundled\tapproximate\t2026-11-17\t\"yukicoder") != std::string::npos);
+  const auto count = 8;
   CHECK_EQ(std::count(list.begin(), list.end(), '\n'), count);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());
