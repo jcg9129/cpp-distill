@@ -73,11 +73,13 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         result = judge_run('list')
         check(result.returncode == 0 and result.stderr == '', result.stderr)
         rows = [line.split('\t') for line in result.stdout.splitlines()]
-        check(len(rows) == 2 and all(len(row) == 7 and row[6] == '-' for row in rows), rows)  # last column: latest observation
-        check([row[:3] for row in rows] == [
+        expected = [
             ['atcoder-gcc15-gnupp23', 'atcoder', 'bundled'],
-            ['codeforces-gcc14-cpp23', 'codeforces', 'bundled']], rows)
-        for alias, name in [('codeforces', 'codeforces-gcc14-cpp23'), ('atcoder', 'atcoder-gcc15-gnupp23')]:
+            ['codeforces-gcc14-cpp23', 'codeforces', 'bundled']]
+        expected.append(['cses-gcc13-cpp23', 'cses', 'bundled'])
+        check(len(rows) == len(expected) and all(len(row) == 7 and row[6] == '-' for row in rows), rows)
+        check([row[:3] for row in rows] == expected, rows)
+        for name, alias, _ in expected:
             for selector in (alias, name):
                 result = judge_run(selector, compile=True)
                 check(result.returncode == 1 and 'rejected option' in result.stderr, result.stderr)

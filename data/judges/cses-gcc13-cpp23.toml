@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Researched 2026-11-17 from https://cses.fi/howto (no page update date).
+# Published C++ compiler: g++ 13.3.0; C++23 flags: -std=c++23 -O2 -Wall.
+# No full command, link options, -D (including ONLINE_JUDGE), or -march is published.
+# UNVERIFIED: the submission form's option label was not inspected.
+name = "cses-gcc13-cpp23"
+alias = "cses"
+description = "CSES C++23 (GCC 13.3.0), approximate Ubuntu 24.04 snapshot"
+# UNVERIFIED: judge OS, architecture and triple are not published. Ubuntu 24.04
+# x86_64 is inferred from the listed language versions, not established by CSES.
+# CI checks the snapshot compiler's actual -dumpmachine; vendor-only triple
+# differences are accepted by both the C++ loader and snapshot.py.
+triple = "x86_64-linux-gnu"
+compiler = { family = "gcc", version = "13.3.0" }
+std = "c++23"
+flags = ["-O2", "-Wall"]
+link = []
+# No build: CSES does not publish an exact package revision (APPROXIMATE).
+# Snapshot compiler only: this exact amd64 package is in noble-updates, checked
+# 2026-11-17 at https://packages.ubuntu.com/noble-updates/g++-13 and its download listing.
+snapshot_compiler = { package = "ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1" }
+# UNVERIFIED: judge library/OS identities; select the existing libstdc++/glibc A1
+# inventories for the inferred Ubuntu environment, not a claim of judge capture.
+libraries = ["libstdc++", "glibc"]
+# Produced only by profiles.yml; never generate these files locally.
+predefined = "cses-gcc13-cpp23-predefined.txt"
+check = ["g++-13", "g++"]
+# Published: "The source code size limit is 128 kB" (https://cses.fi/howto).
+# Use decimal kB conservatively; UNVERIFIED: CSES's exact kB-to-byte conversion.
+probe_source_bytes = 128000
+# UNVERIFIED: output limit is not published; documented 60000-byte default.
+# UNVERIFIED: no known custom-test facility; plan to run each probe part as an
+# ordinary submission and obtain its output, if exposed by the judge UI.
+# UNVERIFIED: ordinary-submission output retrieval has not been tested.
+updated = "2026-11-17"
+sources = ["https://cses.fi/howto"]

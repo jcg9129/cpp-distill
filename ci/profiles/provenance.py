@@ -3,6 +3,10 @@
 import re
 
 
+# Ubuntu identities include the release and a Debian revision, with optional epoch.
+UBUNTU_PACKAGE = r'ubuntu-[0-9]{2}\.[0-9]{2}:[a-z0-9][a-z0-9+.-]*=(?:[0-9]+:)?[0-9][A-Za-z0-9.+~-]*-[A-Za-z0-9.+~]+'
+
+
 def identity(profile, key):
     if key not in profile:
         return 'none'
@@ -14,4 +18,6 @@ def identity(profile, key):
             or (kind == 'recipe' and not re.fullmatch(r'https?://[^ \t]+', text))
             or (kind == 'package' and not re.fullmatch(r'[A-Za-z0-9_.:+-]+=[A-Za-z0-9_.:+~-]+', text))):
         raise ValueError(f'{key}: invalid compiler provenance (package requires an exact version)')
+    if kind == 'package' and text.startswith(('ubuntu-', 'ubuntu:')) and not re.fullmatch(UBUNTU_PACKAGE, text):
+        raise ValueError(f'{key}: Ubuntu package requires ubuntu-YY.MM:name=version-revision')
     return kind + '=' + text

@@ -68,7 +68,10 @@ struct Schema {
     expected("__GNUC__", p.compiler.major, true);
     expected("__GNUC_MINOR__", p.compiler.minor, true);
     if (p.patchSpecified) expected("__GNUC_PATCHLEVEL__", p.compiler.patch, true);
-    expected("__cplusplus", p.dialect.cplusplus, true);
+    // GCC 13.3 libcpp/init.cc (cpp_init_builtins) still uses the C++23 draft
+    // value: https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.3.0/libcpp/init.cc
+    const auto cplusplus = p.compiler.major == 13 && p.dialect.name.ends_with("++23") ? 202100 : p.dialect.cplusplus;
+    expected("__cplusplus", cplusplus, true);
     if (p.predefined.contains("__clang__")) fail(key, "Clang snapshot supplied for GCC");
     if (p.dialect.gnu) {
       if (p.predefined.contains("__STRICT_ANSI__")) fail(key, "__STRICT_ANSI__ disagrees with GNU dialect");
@@ -134,6 +137,9 @@ struct Schema {
       const auto& [kind, value] = *provenance.begin();
       if (value.empty() || !clean(value) || (kind == "recipe" && !matches(value, "https?://[^ \\t]+")) ||
           (kind == "package" && !matches(value, "[A-Za-z0-9_.:+-]+=[A-Za-z0-9_.:+~-]+"))) fail(key, "invalid compiler provenance (package requires an exact version)");
+      if (kind == "package" && (value.starts_with("ubuntu-") || value.starts_with("ubuntu:")) &&
+          !matches(value, "ubuntu-[0-9]{2}\\.[0-9]{2}:[a-z0-9][a-z0-9+.-]*=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*-[A-Za-z0-9.+~]+"))
+        fail(key, "Ubuntu package requires ubuntu-YY.MM:name=version-revision");
       (std::string_view(key) == "build" ? p.build : p.snapshotCompiler) = {kind, value};
     }
     // Profile options are an argv, not response-file references. A synthetic

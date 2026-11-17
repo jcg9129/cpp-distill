@@ -72,6 +72,35 @@ predefined = "fixture-predefined.txt"
             with self.assertRaisesRegex(ValueError, 'snapshot_compiler'):
                 capture(path, 'g++')
 
+    def test_cses_exact_ubuntu_snapshot_metadata_without_reproduction(self):
+        original = ROOT / 'data/judges/cses-gcc13-cpp23.toml'
+        calls = []
+
+        def compiler_run(compiler, *args):
+            calls.append(args)
+            if args[0] == '-dumpfullversion':
+                return '13.3.0'
+            if args[0] == '-dumpmachine':
+                return 'x86_64-linux-gnu'
+            if args[0] == '--version':
+                return 'g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0'
+            self.assertEqual(args[:5], ('-x', 'c++', '-std=c++23', '-O2', '-Wall'))
+            return '#define __GNUC__ 13\n#define __GNUC_MINOR__ 3\n#define __GNUC_PATCHLEVEL__ 0\n#define __cplusplus 202100L\n'
+
+        with tempfile.TemporaryDirectory(dir='.') as temp, patch('snapshot.shutil.which', return_value='/usr/bin/g++-13'), \
+                patch('snapshot.run', side_effect=compiler_run):
+            profile = Path(temp) / original.name
+            profile.write_bytes(original.read_bytes())
+            output = capture(profile, 'g++-13').read_text()
+            self.assertIn('# snapshot-compiler: package=ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1', output)
+            self.assertIn('# build: none\n# reproduced: no', output)
+            self.assertIn('# builtin-registry: none', output)
+            self.assertIn('# dumpmachine: x86_64-linux-gnu', output)
+            self.assertNotIn('ONLINE_JUDGE', output)
+            self.assertFalse(any(args[-1].endswith('probe.cpp') for args in calls))
+            with self.assertRaisesRegex(ValueError, 'provenance'):
+                capture(profile, 'g++-13', 'package=ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1')
+
     def test_mismatches_clang_and_other_startup_headers_rejected(self):
         for option, value in [('-dumpfullversion', '15.3.0'), ('-dumpmachine', 'aarch64-linux-gnu'),
                               ('-dM', '#define __clang__ 1\n'), ('-dD', '# 1 "/judge/settings.h" 1\n')]:
@@ -225,15 +254,25 @@ predefined = "fixture-predefined.txt"
 
     def test_matrix_selection_builds_and_bad_input(self):
         rows = matrix()['include']
-        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23'})
+        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23'})
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['version'], '15.2.0')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['runner'], 'windows-2025')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['build'], '')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-3')
+        cses = matrix('cses-gcc13-cpp23')['include'][0]
+        self.assertEqual(cses, dict(profile='cses-gcc13-cpp23', version='13.3.0', runner='ubuntu-24.04',
+                                   build='', compiler='package=ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1',
+                                   acquisition='ubuntu'))
+        self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['acquisition'], 'atcoder')
+        self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['acquisition'], 'msys2')
         with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '14.2.0'}, 'triple': 'x86_64-w64-mingw32',
                    'build': {'package': 'msys2:mingw-w64-x86_64-gcc=14.2.0-1'},
                    'snapshot_compiler': {'package': 'msys2:mingw-w64-x86_64-gcc=14.2.0-3'}}):
             self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['compiler'], 'package=msys2:mingw-w64-x86_64-gcc=14.2.0-1')
+        with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '13.3.0'},
+                   'triple': 'x86_64-linux-gnu', 'snapshot_compiler': {'package': 'other:gcc=13.3.0-1'}}):
+            with self.assertRaisesRegex(ValueError, 'unsupported compiler acquisition'):
+                matrix('cses-gcc13-cpp23')
         for selection in ['', 'typo', 'atcoder-gcc15-gnupp23,', 'all,atcoder-gcc15-gnupp23']:
             with self.assertRaises(ValueError):
                 matrix(selection)
