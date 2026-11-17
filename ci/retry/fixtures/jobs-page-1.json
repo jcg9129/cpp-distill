@@ -1,0 +1,40 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 101,
+      "run_id": 123456789,
+      "name": "matrix (linux-x86_64)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-17T10:00:00Z",
+      "completed_at": "2026-11-17T10:05:00Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1
+        }
+      ],
+      "runner_id": 1001,
+      "runner_name": "GitHub Actions 1",
+      "runner_group_id": 1,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 102,
+      "run_id": 123456789,
+      "name": "matrix (macos-arm64)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "started_at": "2026-11-17T10:00:00Z",
+      "completed_at": "2026-11-17T10:15:00Z",
+      "steps": [],
+      "runner_id": 0,
+      "runner_name": "",
+      "runner_group_id": 0,
+      "runner_group_name": ""
+    }
+  ]
+}
