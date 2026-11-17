@@ -94,6 +94,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
+          # -march=native facts depend on the runner CPU; record which one.
+          grep -m1 'model name' /proc/cpuinfo || true
+          "$PWD/out/atcoder-gcc/bin/g++" -march=native -Q --help=target | grep -E '^\s+-march=' || true
           export LD_LIBRARY_PATH="$PWD/out/atcoder-gcc/lib64:${LD_LIBRARY_PATH:-}"
           python3 ci/profiles/probe.py data/judges/atcoder-gcc15-gnupp23.toml --compiler "$PWD/out/atcoder-gcc/bin/g++" --distill out/profile-probe/distill
       - name: Install exact MSYS2 compiler and dependency closure
