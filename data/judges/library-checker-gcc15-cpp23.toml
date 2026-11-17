@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Checked 2026-11-17 at library-checker-judge commit
+# 01fa3c63f036611cff8be611dc1c69a5605f6a70, langs/langs.toml:
+# id = "cpp", name = "C++23", version = "GCC 15.2 + AC Library(1.6)"
+# compile = ["g++", "-O2", "-std=c++23", "-DEVAL", "-DONLINE_JUDGE", "-march=native", "-o", "main", "main.cpp", "-I", "/opt/ac-library"]
+# std holds -std=; flags retain the published preprocessing order; no link flags.
+# -I /opt/ac-library is omitted: ACL v1.6 is a judge system header outside
+# the profile, as with AtCoder. Include paths are forbidden in profile flags.
+name = "library-checker-gcc15-cpp23"
+alias = "library-checker"
+description = "Library Checker C++23 (GCC 15.2 + AC Library(1.6)), approximate image snapshot"
+# UNVERIFIED for the judge: x86_64-linux-gnu, libstdc++/glibc versions and
+# Debian trixie base. docker-library uses --build=$gnuArch; CI records the
+# actual -dumpmachine. README's Ubuntu 22.04 is the host, not this container.
+triple = "x86_64-linux-gnu"
+compiler = { family = "gcc", version = "15.2.0" }
+std = "c++23"
+flags = ["-O2", "-DEVAL", "-DONLINE_JUDGE", "-march=native"]
+link = []
+# APPROXIMATE, no build: Dockerfile.GCC uses FROM gcc:15.2 (tag only),
+# cloning ACL v1.6 and copying its atcoder headers into /opt/ac-library.
+# The currently resolved base-image digest is snapshot provenance only;
+# the deployed judge image/base digest and compiler build are UNVERIFIED.
+# Docker Hub gcc/15.2 API rechecked 2026-11-17: index digest unchanged from
+# 2026-11-16, last_updated 2026-06-11. Also in data/extensions/libstdc++.txt.
+# docker-library 15.2 denotes GCC 15.2.0; CI requires -dumpfullversion == 15.2.0
+# before/after diagnostic tool installation and before capture.
+snapshot_compiler = { image = "docker.io/library/gcc@sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289" }
+libraries = ["libstdc++", "glibc"]
+# Judge CPU is unpublished. Use data/native/gcc-15.2-x86.txt exactly as AtCoder:
+# all model names stay unknown unless fixed by a command -D/-U. CI performs
+# named-CPU sweeps plus the native host regression check in snapshot.py;
+# probe.py retains -march=native and the container job logs the runner CPU.
+# Produced only by profiles.yml; never generate these files locally.
+predefined = "library-checker-gcc15-cpp23-predefined.txt"
+# The published command and docker-library image use plain g++.
+check = ["g++", "g++-15"]
+# restapi/handlers_submissions.go accepts 1..1024*1024 source bytes.
+probe_source_bytes = 1048576
+# No published global output limit (per problem): use the 60000-byte default.
+# Submission only, no custom-test facility; output retrieval and an actual
+# judge probe match remain UNVERIFIED. Snapshot/expected output await CI.
+updated = "2026-11-17"
+sources = [
+  "https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/langs/langs.toml",
+  "https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/langs/Dockerfile.GCC",
+  "https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/restapi/handlers_submissions.go",
+  "https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/README.md",
+  "https://hub.docker.com/v2/repositories/library/gcc/tags/15.2",
+]
