@@ -18,7 +18,7 @@ int newer_ranges;
 #if defined(__cpp_lib_zzz_future)
 int future;
 #endif
-#if __cpp_constexpr == 202211L
+#ifdef __cpp_constexpr
 int compiler_feature;
 #endif
 #include <bits/stdc++.h>
