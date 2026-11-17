@@ -440,9 +440,39 @@ Library Checker (#44, `37439a0`, 2026-11-17): `library-checker-gcc15-cpp23`
 /opt/ac-library` omitted (judge system header). The container snapshot job now
 takes the compiler from `check[0]`; the Kattis rerun was byte-identical.
 
-Next: Luogu (item 1 above). Open points: the live judge-env flake revision,
-and GCC 15.3 needs its own builtin registry and native model audit (Luogu uses
-`-march=native`).
+Luogu: PARKED (2026-11-17, user: no Luogu account for a probe). Codex review
+of the plan found:
+- The dialect of "C++23" (`c++23` vs `gnu++23`) is unpublished. Approximate
+  profiles still trust allow-listed `__STRICT_ANSI__`, `linux`, `unix`, so a
+  wrong guess is unsound. Agreed resolution: a live probe on Luogu (IDE or a
+  submission, C++23, O2 on and off) printing `__STRICT_ANSI__`, `linux`,
+  `unix`, `__VERSION__`, `__GLIBC__`/`__GLIBC_MINOR__`, `__OPTIMIZE__`,
+  `_FORTIFY_SOURCE`, `_GLIBCXX_ASSERTIONS`, `__PIC__`/`__pic__`/`__PIE__`/
+  `__pie__`, `__SSP_STRONG__`, `__CET__`, `__AVX2__`, `__AVX512F__` and
+  `__has_include(<testlib.h>)`. Without it: ship both dialects with no alias,
+  or add a per-profile "uncertain names" field.
+- The compiler is a nixpkgs cc-wrapper (`luogu-dev/judge-env`, `wrapCCWith`,
+  testlib via `-idirafter` in libc-cflags). The wrapper may inject hardening
+  flags (fortify can add `-O2` and `_FORTIFY_SOURCE`) depending on its
+  environment; snapshot with the pinned wrapper, record effective argv and env,
+  never treat wrapper `-D`s as command operations. `nix` provenance (full
+  commit + explicit attr) would be snapshot-only; live revision unknown.
+- The optimize patch makes GCC *error* on optimize pragmas/attributes when the
+  `ONLINE_JUDGE` environment variable is set (not merely ignore them).
+- GCC 15.3 needs its own builtin registry and native model with a full audit
+  (not just a 15.2 diff). `-fPIC` must be modelled with the whole
+  `-fpic/-fPIC/-fpie/-fPIE` family and all four macros; `-fno-asm` can be
+  inert (masks `asm`/`typeof` keywords only).
+- Don't use the broad alias `luogu` without the probe: the NOI GCC 9.3/C++14
+  option is a separate environment.
+
+Follow-up from the same review (applies beyond Luogu, unverified): the command
+model's HARMLESS options include some that change predefined macros
+(`-pthread`, `-O*` -> `__OPTIMIZE__`/`__NO_INLINE__`, `-W*` -> `__DEPRECATED`,
+`-pedantic`). Probably safe because local configurations are probed and the
+`-O` names are feature names, but check that every such fact is invalidated.
+
+Next: Timus (item 2 above).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
