@@ -426,3 +426,9 @@ Done 2026-11-17 (user decisions):
   need the same audit.
 
 Next: yukicoder (item 1 above).
+
+Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
+existing profile with the same compiler build up to flag-explained differences
+(QOJ vs Kattis differ only in 5 `-std` lines; AtCoder vs QOJ in 59). Would
+catch a judge claiming one compiler but running another. Add only if the
+remaining judges show a need; not required for soundness.
