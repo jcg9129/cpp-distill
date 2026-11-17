@@ -10,7 +10,11 @@ that would otherwise collide. Full names pin a compiler option and never change
 meaning. The shipped names are `codeforces-gcc14-cpp23` and
 `atcoder-gcc15-gnupp23`, with optional `alias = "codeforces"` and
 `alias = "atcoder"`, respectively. Aliases use nonempty `[a-z0-9-]+` strings and
-track the newest GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`).
+track the newest supported GCC option. D6c adds `cses-gcc13-cpp23` (alias `cses`)
+and `qoj-gcc15-cpp23` (alias `qoj`). QOJ's published C++26 option is deferred:
+the audited A6 ADL name registry ends at C++23 and disables pruning for C++26.
+The profile schema, dialect model and standard header/macro inventories accept
+C++26; GCC 15.2's `__cplusplus = 202400L` already matches the dialect model.
 Future alias moves belong in release notes. Required fields are
 `name`, `description`, `compiler = { family = "gcc", version = "major.minor[.patch]" }`,
 `triple`, `std`, `flags`, `libraries`, `check`, `updated` and nonempty HTTP(S)
@@ -277,6 +281,48 @@ GCC 13 while retaining the nominal C++23 dialect. There is currently no audited
 GCC 13 special-builtin registry; snapshots record `builtin-registry: none`, so
 they cannot establish exhaustive builtin facts.
 
+QOJ's [environment blog](https://qoj.ac/blog/221) and the research
+[pjudge mirror](https://pjudge.ac/blog/221) describe GCC 15.2.0, Ubuntu 26.04.1
+LTS, an Intel Xeon Platinum 8573C CPU, and C++ standards through C++26.
+On 2026-11-17 direct fetches of both sites returned HTTP 403; the web reader
+could read the official blog at its redirected `/blog/qingyu/blog/221` path,
+agreeing with the supplied mirror research. The TOML records both URLs and
+the access limitation. The command selects C++ explicitly, optimizes at O2,
+defines `ONLINE_JUDGE`, selects the requested ISO C++ dialect and links libm.
+The drivers supply `-x c++`, `std` holds the standard, the ordered flags are
+`-O2`, `-DONLINE_JUDGE`, and `link` holds `-lm`. Moving the independent standard
+selection ahead of these flags preserves the command's preprocessing effects.
+UNVERIFIED: the judge triple `x86_64-linux-gnu`, library identities, exact
+submission label, custom-test behavior and platform-wide source/output limits.
+Both probe budgets use the documented 60000-byte defaults.
+
+QOJ does not publish a compiler package or build recipe; the profile omits
+`build` and stays **approximate**. Its snapshot compiler is
+`ubuntu-26.04:g++-15=15.2.0-16ubuntu1`, confirmed 2026-11-17 by the official
+[resolute package page](https://packages.ubuntu.com/resolute/g++-15) and the
+[Launchpad published-source API](https://api.launchpad.net/1.0/ubuntu/+archive/primary?ws.op=getPublishedSources&source_name=gcc-15&distro_series=https://api.launchpad.net/1.0/ubuntu/resolute&exact_match=true&status=Published)
+(resolute Release, published 2026-03-31). UNVERIFIED: that package is the one
+QOJ installed. No judge package provenance follows from a matching version.
+[GCC 15.2 release source](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/libcpp/init.cc)
+confirms `202302L` for C++23 and `202400L` for C++26; no loader exception is
+needed for GCC 15.2. The missing C++26 ADL audit, rather than that macro value,
+is why `qoj` currently selects C++23.
+
+QOJ uses a separate `snapshot-container` job on ubuntu-24.04 with
+`ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db`.
+The official [Docker Hub tag API](https://hub.docker.com/v2/repositories/library/ubuntu/tags/26.04)
+returned that multi-platform index digest on 2026-11-17 (amd64 is present).
+The job installs git, CA certificates, Python, CMake, Ninja and a normal C++
+toolchain as root, then the exact compiler package family using the generalized
+Ubuntu installer. It never needs sudo in the container. The installer checks
+the identity's release and amd64 architecture and fails if any pinned revision
+is unavailable. Runtime packages follow the archive; this is not a judge
+manifest. The existing CSES, AtCoder and Codeforces rows stay in the runner job
+with their original acquisition steps. `job_matrices()` partitions dispatch
+rows; job-level conditions skip empty partitions before matrix expansion.
+Thus runner jobs have no `container` key, avoiding an invalid empty container.
+The QOJ snapshot and expected output remain pending branch CI capture.
+
 **Adding a profile:** a TOML names its snapshot and expected probe output, and
 the embedded catalog requires both. Push the TOML and CI job on a branch,
 dispatch `profiles.yml` on that branch for the new profile (it loads the TOML by
@@ -285,7 +331,7 @@ same branch before opening the PR, recording the run URL. Never edit the TOML
 after capture without regenerating: the expected output binds its digest.
 
 All jobs upload snapshots for review; they never commit or publish changes.
-The two shipped snapshots are validated by embedded-profile tests. The four
+Bundled snapshots are validated by embedded-profile tests. The four
 shipped A1 inventories in `data/extensions/` come byte for byte from the merged
 artifacts of [`extensions.yml` run 43768709866](https://github.com/jcg9129/cpp-distill/actions/runs/43768709866);
 their comments record each scan.
@@ -302,9 +348,9 @@ target equivalence. Resolver/validation orchestration remains the next D2 work.
 
 The optional strict-schema TOML integer keys `probe_source_bytes` and
 `probe_output_bytes` each accept 1024 through 16777216 inclusive. Both default
-to **60000 bytes**. Codeforces and AtCoder currently use this conservative
+to **60000 bytes**. Codeforces, AtCoder and QOJ currently use this conservative
 fallback: no published source/output limit has been established here, and these
-values are not claims about either judge's limit. An override must cite the
+values are not claims about those judges' limits. An override must cite the
 judge's published limit in a comment. Probe output has a conservative static
 bound: stringized values are limited to 256 bytes (larger expansions produce an
 explicit probe failure), hex encoded on output. The bound includes protocol

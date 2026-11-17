@@ -142,7 +142,14 @@ GCC build and snapshot from its published recipe. The D6c **CSES** profile
 (`cses-gcc13-cpp23`, alias `cses`) records GCC 13.3.0 with C++23 and is
 approximate: CSES publishes only the GCC version and flags, and its snapshot
 comes from the exact Ubuntu 24.04 `g++-13` package that its other tool versions
-point to.
+point to. The D6c **QOJ** profile (`qoj-gcc15-cpp23`, alias `qoj`) records
+GCC 15.2.0 with C++23 and is approximate: QOJ publishes no package revision;
+CI uses the exact Ubuntu 26.04 `g++-15` package in a digest-pinned container.
+QOJ also offers C++26. Its profile is deferred because the audited A6 ADL
+name registry currently covers only C++11 through C++23; the dialect model
+and standard header/macro inventories already cover C++26. The QOJ snapshot
+and expected probe output must be captured by branch CI before the PR; see
+[Adding a profile](data/judges/README.md#research-and-ci).
 A reproduced snapshot alone
 does not make an arbitrary local GCC equivalent: target verification also needs
 matching compiler facts, dialect and command. AtCoder's `-march=native` facts
