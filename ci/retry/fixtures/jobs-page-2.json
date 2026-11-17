@@ -1,0 +1,19 @@
+{
+  "total_count": 3,
+  "jobs": [
+    {
+      "id": 103,
+      "run_id": 123456789,
+      "name": "matrix (macos-x86_64)",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "started_at": null,
+      "completed_at": "2026-11-17T10:15:00Z",
+      "steps": [],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    }
+  ]
+}
