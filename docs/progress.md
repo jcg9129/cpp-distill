@@ -32,7 +32,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
 | D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
 | D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
-| D6 judge profiles v2 | design v9 §4.3.1 approved 2026-11-16: D6a names/aliases, D6b probe/check, D6c profiles for Library Checker, yukicoder, Luogu, Kattis, CSES, QOJ, Timus (user excluded Yandex; research notes in the D6 section) |
+| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36) shipped; yukicoder, Library Checker, Luogu, Timus remain (see D6 section) |
 
 ## D1 findings (2026-11-15)
 
@@ -364,18 +364,63 @@ SDK linkage and every platform observation remain for the first CI run.
   Codex job that built and tested locally. Builds and tests now run in CI only;
   Codex briefs must not ask for local suites while anything else runs.
 
-## D6 judge profiles v2 (planned 2026-11-16)
+## D6 judge profiles v2 (state 2026-11-17)
 
-- User chose (2026-11-16) all researched judges with published GCC flags except
-  Yandex Contest: Library Checker (GCC 15.2, c++23, `-DONLINE_JUDGE
-  -march=native`, open repo/Docker -> can be reproduced), yukicoder (gcc
-  15.3.0, c++23, `-DONLINE_JUDGE`), Luogu (GCC 15.3.0, Nix flake
-  `luogu-dev/judge-env` -> can be reproduced), Kattis (g++-15 15.2.0,
-  `-std=gnu++23`, static), CSES (g++ 13.3.0), QOJ (GCC 15.2.0, Ubuntu 26.04
-  judgehosts), Timus (MinGW GCC 13.2.0 WinLibs, Windows, `-std=c++23`).
-  Each must be re-researched from official pages when its profile is written.
-- Order: D6a names/aliases (rename shipped profiles, keep `--judge codeforces`),
-  D6b probe/check (diagnostic only, J1), D6c one PR per new profile.
-- Builds/tests run in CI only (VM crash 2026-11-16); Codex jobs do not run
-  local suites.
+Design v9 §4.3.1 (#29). Done and merged, each with all 17 CI checks green:
 
+- D6a (#30, `32033cb`): full names `<judge>-gcc<major>-<cppNN|gnuppNN>`,
+  aliases, `--judge list`, `judge: X -> Y` on stderr, report digest.
+  User profiles from 0.1.0 with free-form names must be renamed.
+- D6b (#31 `a6e04ac`, #32 `512dc86`): `--judge-probe` / `--judge-check` /
+  `--record`, diagnostic only. Expected outputs are produced by profiles.yml
+  with each snapshot compiler; a unit test checks shipped expected files
+  against the current generator. The probe header carries no distill version.
+- Native fix (#33, `d621167`): under `-march=native` every native-model name is
+  unknown unless a command `-D`/`-U` fixes it (design §4.3). Found by the
+  AtCoder probe self-check: `__SHSTK__` was defined on 2 of 3 GitHub runners
+  while the sweep-based snapshot said undefined (runs 43984033506,
+  43984758811). This bug is in the released **v0.1.0**.
+- D6c shipped: `cses-gcc13-cpp23` (#34, alias `cses`), `qoj-gcc15-cpp23` (#35,
+  alias `qoj`), `kattis-gcc15-gnupp23` (#36, alias `kattis`), all approximate.
+  New provenance forms: `ubuntu-YY.MM:pkg=rev` packages and snapshot-only
+  `image = "docker.io/...@sha256:..."`; profiles.yml has a `snapshot-container`
+  job (ubuntu:26.04 and the Kattis image). QOJ C++26 not shipped: the A6 ADL
+  registry stops at C++23, so pruning is disabled for c++26.
+
+How a profile lands (data/judges/README.md, "Adding a profile"): Codex writes
+TOML + CI job without local builds; push the branch; dispatch
+`gh workflow run profiles.yml --ref <branch> -f profiles=<name>`; review the
+two artifacts (`<name>-predefined.txt`, `<name>-probe-expected.txt`); commit
+them to the branch; then open the PR and merge when all checks are green.
+
+Remaining D6c profiles, in this order; research in
+[`d6-judge-research.md`](d6-judge-research.md) (claims, re-check sources):
+
+1. yukicoder: newest option GCC **16.2.0** (`cpp23_gcc16`, Homebrew GCC on
+   Ubuntu 25.04, bottle sha256 recorded). Private `-fplugin=noavx512` cannot
+   be reproduced: approximate unless shown not to affect predefined macros.
+   Check whether distill's registries/name tables support GCC 16.
+2. Library Checker: GCC 15.2 (Docker `gcc:15.2`), `-std=c++23 -DEVAL
+   -DONLINE_JUDGE -march=native`, ACL 1.6 via `-I`.
+3. Luogu: GCC 15.3.0 from Nix flake `luogu-dev/judge-env` (live rev
+   unconfirmed); patched GCC disables `#pragma`/`__attribute__` optimize;
+   `-march=native`.
+4. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
+   WinLibs release and CRT (UCRT/MSVCRT) unknown.
+
+Open questions for the user (asked 2026-11-17, unanswered):
+
+- Tag **v0.1.1** (AtCoder native fix, names/aliases, probe/check, CSES, QOJ,
+  Kattis)? v0.1.0 users of `--judge atcoder` have the native bug.
+- Plan an audited `abi` scope in the native model so ABI-fixed names
+  (`__x86_64__`, `__amd64__`, SSE2 baseline `__SSE__`/`__SSE2__`/`__MMX__`/
+  `__FXSR__`, code-model and long-double macros) stay known under
+  `-march=native`? Today they are unknown (sound, imprecise): an unknown user
+  condition disables pruning. Affects AtCoder and the three native judges
+  above; needs a Codex challenge and user approval before code.
+
+Other follow-ups: native-dependent *expansions* are not compared by
+`--judge-check` (model lists no values); ADL registry audit for C++26.
+
+Working rules: builds and tests run in CI only (VM crash 2026-11-16); Codex
+jobs syntax-check single files at most; one Codex job at a time.
