@@ -511,8 +511,18 @@ Done 2026-11-17 (evening):
   cancel-in-progress group lets it cancel the current run.
 - User README rewritten (#51): quick start, troubleshooting, judge table.
 
-Open: Luogu (parked, needs a Luogu account for the probe); the HARMLESS-option
-check from the Luogu review; user corpus measurement (D4/D5).
+- Option-model audit (#81, `93c9c07`): several "harmless" options change
+  predefined macros (`-O*`, `-Ofast`, `-pthread`, `-Wdeprecated`, `-Wvla`,
+  `-Werror=vla`, `-pedantic`, `-fsanitize=`; modelled `-fno-exceptions`,
+  `-fno-rtti`). Verdict imprecise but sound: without a profile they stay
+  unknown, with a profile the mixed configuration is probed and resolution
+  rerun, target verification compares all macros; worst case is a raw
+  fallback. `-Oz` (unmodelled) disables resolution. Details and GCC source
+  citations in `docs/reviews/2026-11-17-option-model-audit.md`; nine tests in
+  `tests/unit/option_model_test.cpp`. No production change.
+
+Open: Luogu (parked, needs a Luogu account for the probe); user corpus
+measurement (D4/D5).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
