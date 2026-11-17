@@ -32,7 +32,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4b compatibility matrix | implemented: five-platform moved-CLI smoke, GCC × six dialects, dependency/minimum-OS audits and Codeforces MinGW cross build checks; execution requires SDK CI |
 | D5a release packaging/docs | done: five-platform release workflow, build identity, licenses/notices and user README; fixes in #27; **v0.1.0 published 2026-11-16** |
 | D4/D5 remainder | user corpus measurement (needs the user's library and solutions in `tests/corpus/user/`) and fixes from it; any remaining checker work; see design §7 |
-| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36) shipped; yukicoder, Library Checker, Luogu, Timus remain (see D6 section) |
+| D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42) shipped; Library Checker, Luogu, Timus remain (see D6 section) |
 
 ## D1 findings (2026-11-15)
 
@@ -396,16 +396,12 @@ them to the branch; then open the PR and merge when all checks are green.
 Remaining D6c profiles, in this order; research in
 [`d6-judge-research.md`](d6-judge-research.md) (claims, re-check sources):
 
-1. yukicoder: newest option GCC **16.2.0** (`cpp23_gcc16`, Homebrew GCC on
-   Ubuntu 25.04, bottle sha256 recorded). Private `-fplugin=noavx512` cannot
-   be reproduced: approximate unless shown not to affect predefined macros.
-   Check whether distill's registries/name tables support GCC 16.
-2. Library Checker: GCC 15.2 (Docker `gcc:15.2`), `-std=c++23 -DEVAL
+1. Library Checker: GCC 15.2 (Docker `gcc:15.2`), `-std=c++23 -DEVAL
    -DONLINE_JUDGE -march=native`, ACL 1.6 via `-I`.
-3. Luogu: GCC 15.3.0 from Nix flake `luogu-dev/judge-env` (live rev
+2. Luogu: GCC 15.3.0 from Nix flake `luogu-dev/judge-env` (live rev
    unconfirmed); patched GCC disables `#pragma`/`__attribute__` optimize;
    `-march=native`.
-4. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
+3. Timus: WinLibs MinGW GCC 13.2.0, `-std=c++23 -static -march=native`; exact
    WinLibs release and CRT (UCRT/MSVCRT) unknown.
 
 Done 2026-11-17 (user decisions):
@@ -425,7 +421,22 @@ Done 2026-11-17 (user decisions):
   (`gcc/config/i386/i386-modes.def`). New native models (GCC 13, 16, 15.3)
   need the same audit.
 
-Next: yukicoder (item 1 above).
+yukicoder (#42, `82665ba`, 2026-11-17): `yukicoder-gcc16-cpp23` (alias
+`yukicoder`) and `yukicoder-gcc16-gnupp23`, approximate: the judge's
+`noavx512` plugin is omitted (published source filters AVX-512 target
+pragmas/attributes; deployed binary unverified). New snapshot-only provenance
+`homebrew = "homebrew:gcc=M.m.p@sha256:<bottle blob>"`, installed by
+`ci/profiles/homebrew.py` on ubuntu-24.04 (run 44043584293). GCC 16.2 builtin
+registry added (same 20 names as 15.2); no GCC 16 native model (no
+`-march=native`). A1 libstdc++ already included a GCC 16.2 scan. The GCC 15.3
+option (`cpp23`) is not shipped.
+
+Follow-up proposed (Codex review): regression test that allow-listed
+`__cpp_lib_*` names become unknown after `#include <version>` / system headers
+in approximate profiles (`__cpp_[a-z0-9_]+` in the allow-list also matches them).
+
+Next: Library Checker (item 1 above; it uses `-march=native`, covered by the
+existing GCC 15.2 native model).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
