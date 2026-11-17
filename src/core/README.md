@@ -631,6 +631,15 @@ its own predefinitions, including the driver's GNU compatibility default
 options are recorded; semantic options without support, including
 modules/OpenMP/CPU tuning and `-Ofast`'s implied fast-math policy, disable pruning. Source
 pragmas use the audited allow-list below; other pragmas disable pruning.
+`flatCommand` marks exact profile-origin `inert` occurrences for preprocessing
+permission only; identical unmodelled local occurrences keep their reason.
+The independent semantic translation gate still disables for those profile flags.
+Unknown conditional diagnostics use the resolver decision's original line-map
+location, including a later `#elif`, and survive the worker protocol as disable
+reasons. Predefined expansion diagnostics distinguish unknown judge/parse facts
+from differing definitions and print both known values. Without `--judge`, judge
+facts remain unknown by design, so target-dependent conditionals need a profile
+for pruning; a local probe does not fill those facts.
 Generated markers are identified from D2's null line-map entries, never by
 spelling alone. Keep comments are captured as physical declaration-token offsets by
 `captureKeepOffsets` before any D3b comment stripping, then bound to families

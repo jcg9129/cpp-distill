@@ -23,6 +23,19 @@ bool equalMacro(const MacroFact& a, const MacroFact& b) {
   return a.state == MacroState::known && b.state == MacroState::known && a.definition && b.definition &&
       macroTokens(*a.definition) == macroTokens(*b.definition);
 }
+std::string macroValue(const MacroFact& f) {
+  if (f.state == MacroState::undefined) return "undefined";
+  if (!f.definition || f.state != MacroState::known) return "unknown";
+  const auto& m = *f.definition;
+  std::string value;
+  if (m.functionLike) {
+    value = "(";
+    for (const auto& p : m.parameters) { if (value.size() > 1) value += ','; value += p; }
+    if (m.variadic) { if (value.size() > 1) value += ','; value += "..."; }
+    value += ") ";
+  }
+  return value + (m.replacement.empty() ? "<empty>" : m.replacement);
+}
 }
 Result<std::vector<Token>> pruningIdentifiers(std::string_view text) {
   auto s = scanDirectives(text);
@@ -146,18 +159,11 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   };
   for (const auto& why : m.disabledReasons) disable(why);
   if (!registry.supports(m.dialect)) disable("unsupported ADL dialect: " + m.dialect);
-  if (m.unknownInUserCode) {
-    std::string location = " in flat.cpp";
-    auto scan = scanDirectives(m.text);
-    if (scan.ok()) for (const auto& l : scan.value().lines) if (l.directive &&
-        (l.directive->name == "if" || l.directive->name == "ifdef" || l.directive->name == "ifndef")) {
-      if (l.firstLine <= m.lineMap.size() && m.lineMap[l.firstLine-1]) {
-        const auto& at = *m.lineMap[l.firstLine-1]; location = " at " + at.file + ':' + std::to_string(at.line);
-      } else location = " at flat.cpp:" + std::to_string(l.firstLine);
-      location += " (#" + l.directive->name + ")"; break;
-    }
-    disable("unknown conditional in user code" + location);
-  }
+  // Preparation carries the resolver's exact decision location in the reasons.
+  // Hand-built models without that provenance still fail closed.
+  if (m.unknownInUserCode && std::none_of(out.disabledReasons.begin(), out.disabledReasons.end(), [](const auto& why) {
+        return why.starts_with("unknown conditional in user code");
+      })) disable("unknown conditional in user code");
   for (const auto& header : m.includes) {
     if (!isStandardHeader(header)) disable("non-standard system header: " + header);
     else if (!extensionPruningCovered(header)) disable("unaudited GNU extension header: " + header);
@@ -169,7 +175,16 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     const bool locationIntrinsic = (e.name == "__LINE__" || e.name == "__FILE__") &&
         e.parse.state == MacroState::definedUnknown && !e.parse.definition &&
         (e.judge.activeSpecialBuiltin() || (!m.judgeProfile && e.judge.state == MacroState::unknown && !e.judge.definition));
-    if (e.predefined && !locationIntrinsic && !equalMacro(e.parse, e.judge)) disable("predefined macro differs or unknown: " + e.name);
+    if (e.predefined && !locationIntrinsic && !equalMacro(e.parse, e.judge)) {
+      const auto prefix = "predefined macro " + e.name;
+      if (e.judge.state == MacroState::unknown || e.judge.state == MacroState::definedUnknown ||
+          (e.judge.state == MacroState::known && !e.judge.definition))
+        disable(prefix + ": unknown judge fact");
+      else if (e.parse.state == MacroState::unknown || e.parse.state == MacroState::definedUnknown ||
+               (e.parse.state == MacroState::known && !e.parse.definition))
+        disable(prefix + ": unknown parse fact");
+      else disable(prefix + " differs: judge " + macroValue(e.judge) + ", parse " + macroValue(e.parse));
+    }
     if (e.paste && (!e.pasteOperandsKnown || e.externalPasteOperand)) disable("external or unknown token-paste operand: " + e.name);
   }
   const auto n = m.families.size(); out.families.resize(n);

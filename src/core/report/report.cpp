@@ -70,7 +70,8 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
     if (profile->provenance.origin == "user") out << ' ' << std::quoted(pathToUtf8(profile->provenance.file));
     out << "\njudge digest: sha256:" << profile->provenance.contentDigest << '\n';
     for (const auto& warning : profile->warnings) out << warning << '\n';
-  }
+    if (!profile->inert.empty()) out << "profile inert: preprocessing-only guarantee; untranslated semantic options still disable pruning\n";
+  } else out << "judge facts: unknown by design without --judge; target-dependent conditionals need a profile for pruning\n";
   out << "assumptions:";
   if (r.assumptions.empty()) out << " none";
   for (const auto& a : r.assumptions) out << ' ' << a;

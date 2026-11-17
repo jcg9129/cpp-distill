@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=diagnostics
+artifact=flat
+verification=local
+exit=0
+configuration=local
+report=unknown conditional in user code at choices.hpp:9 (#elif)
+report.decision=choices.hpp:9 #elif: kept (unknown: unknown macro: __LATER_UNKNOWN__)
+report.no_profile=judge facts: unknown by design without --judge; target-dependent conditionals need a profile for pruning

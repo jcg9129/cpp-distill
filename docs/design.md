@@ -214,12 +214,12 @@ first.
 | Class | Options | Treatment |
 |---|---|---|
 | input | exactly one `.cpp`/`.cc`/`.cxx` | the source |
-| modelled | `-I`, `-iquote`, `-isystem`, `-D`, `-U`, `-std=`, `-m32`, `-m64`, `-funsigned-char`, `-fsigned-char`, `-fshort-wchar`, `-fno-exceptions`, `-fno-rtti`, `-march=`, `-mtune=` | translated into the Clang parse and the configuration object (§4.6) |
+| modelled | `-I`, `-iquote`, `-isystem`, `-D`, `-U`, `-std=`, `-m32`, `-m64`, `-funsigned-char`, `-fsigned-char`, `-fshort-wchar`, `-fno-exceptions`, `-fno-rtti`, `-fmodules`, `-fopenmp`, `-march=`, `-mtune=`, `-mcpu=` | represented in the configuration object (§4.6); explicit supported translations feed the Clang parse. Modelled does not imply translated: modules, OpenMP and CPU options currently disable pruning as untranslated semantic options. |
 | harmless | `-O0`…`-O3`, `-Os`, `-Og`, `-Ofast`, `-g`, `-g0`…`-g3`, `-W<name>` and `-Wno-<name>` for warning names (not `-Wp,` `-Wl,` `-Wa,`), `-w`, `-pedantic`, `-pedantic-errors`, `-pthread`, `-static`, `-static-libstdc++`, `-static-libgcc`, `-s`, `-lm`, `-lpthread`, `-lstdc++`, `-fdiagnostics-color=…`, `-fmax-errors=…`, `-pipe`, `-fsanitize=…` | passed to every build unchanged |
 | libraries | other `-l<lib>`, `-L<dir>` | passed to builds; pruning disabled (R4-K) |
 | controlled | `-o`, `-MD`, `-MMD`, `-MF`, `-MT` | `-o` replaced per build by a temporary path; dependency outputs dropped |
 | rejected | `-c`, `-S`, `-E`, `-include`, `-imacros`, `-Wp,…`, `-Xpreprocessor`, `-Wl,…`, `-Xlinker`, `-Wa,…`, `-Xassembler`, `-save-temps`, `-B…`, `--sysroot`, `-isysroot`, `-M`, `-MM`, more than one input | error |
-| unmodelled | anything else | passed to builds; disables resolution and pruning (only `raw.cpp`), with a message naming the option |
+| unmodelled | anything else | passed to builds; disables resolution and pruning (only `raw.cpp`), with a message naming the option; exact profile-origin `inert` occurrences have a preprocessing permission exemption (§4.3), while the semantic pruning gate remains |
 
 `-D`/`-U` in the compile command are local settings (e.g. `-DLOCAL`): they
 apply to the baseline and the `raw` checks only; configurations that check
@@ -274,13 +274,19 @@ sources = ["https://codeforces.com/blog/entry/133046"]
 
 Researched from the judge's published information when written, dated, and
 updated by PR. Without a profile the dialect comes from the compile command
-and nothing else about the judge is known.
+and nothing else about the judge is known. Local probes do not establish judge
+compiler/platform facts; pruning code with target-dependent conditionals needs
+a profile supplying the required facts, otherwise the unresolved conditions disable it.
 
 **Command** (P1-5, P1-6, P2-6). `flags` is parsed structurally by the §4.1
 command model with the same rejected list (no `-include`, `-imacros`, `-Wp,…`,
 `-specs=`, `-B…`, …); an unmodelled option is a profile error unless the
 profile lists it in `inert` (options it documents as not affecting
-preprocessing, such as `-fconstexpr-depth=…`). `-D`/`-U` stay an ordered list
+preprocessing, such as `-fconstexpr-depth=…`). This is a preprocessing-only
+guarantee for exact occurrences originating in the selected profile's `flags`;
+the same unmodelled spelling in a local command still disables permission.
+It does not prove safe omission from the AST dependency parse: untranslated
+semantic options independently disable pruning (§4.7). `-D`/`-U` stay an ordered list
 of macro operations with exact replacement text (`-DX` is `1`, `-DX=` is
 empty). The profile's `std` is the dialect: a `-std=` in `flags` is a profile
 error, and `std` overrides `-std=` in the user's compile command (warning if
@@ -829,8 +835,13 @@ from the selected `flat` checking configuration (§4.6): its probed triple,
 search lists (as §4.2) and dialect, its effective macro operations (the
 profile's replacing local `-D`/`-U`, in order, after Clang's predefinitions),
 and its semantic options translated to Clang's. Options without a Clang
-translation are listed in the report; one that isn't on the
-semantics-inert list disables pruning. The report names the parse
+translation are listed in the report; one without an audited semantics-inert
+omission disables pruning. This semantic gate is independent of the profile's
+preprocessing-only `inert` permission exemption: that list supplies no proof of
+dependency-preserving omission. Modules, OpenMP and CPU options currently have
+no supported translation and retain their semantic disables. Without a profile,
+local checking facts do not become judge facts; unknown judge conditions or
+predefined macro values still disable pruning. The report names the parse
 configuration separately from the checking configuration. A `target` level
 describes the checking configuration; it is not a claim that Clang's
 semantics are the judge's.

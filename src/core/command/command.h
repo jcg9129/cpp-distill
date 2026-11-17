@@ -13,6 +13,9 @@ struct Arg {
   Class classification;
   std::string option;
   std::string value;
+  // Set only for an exact inert occurrence appended from the selected profile.
+  // This exempts preprocessing permission, never semantic parse translation.
+  bool profilePreprocessingInert = false;
 };
 enum class IncludeKind { user, quote, system };
 struct IncludePath { std::filesystem::path path; IncludeKind kind; };

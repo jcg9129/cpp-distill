@@ -210,7 +210,7 @@ int run(int argc, char** argv) {
         }
         ProcessSpec s; s.cwd = cwd;
         s.argv = {pathToUtf8(binary), "--report", "report.txt", "-o", "submit.cpp"};
-        if (value("prune") != "yes") s.argv.push_back("--no-prune");
+        if (value("prune") != "yes" && value("prune") != "diagnostics") s.argv.push_back("--no-prune");
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
@@ -281,7 +281,8 @@ int run(int argc, char** argv) {
         }
       } else {
         auto cmd = take(parseCompileCommand(command, cwd));
-        DistillOptions o; o.noPrune = value("prune") != "yes"; o.pruningWorker = workerPath;
+        // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
+        DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
         o.stripComments = value("strip") == "yes";
         if (!value("keep").empty()) o.keep = {value("keep")};
