@@ -204,7 +204,9 @@ jobs:
           # unchanged. If tooling requires upgrades, fail for review instead.
           dpkg-query -W -f='${binary:Package} ${db:Status-Status}\n' |
             awk '$2 == "installed" {print $1}' | xargs -r apt-mark hold > /dev/null
-          apt-get install -y --no-install-recommends bash ca-certificates git python3 cmake ninja-build
+          # ca-certificates and bash are already in the image; requesting them would
+          # upgrade held image packages, which this job forbids.
+          apt-get install -y --no-install-recommends git python3 cmake ninja-build
           test "$(g++-15 -dumpfullversion)" = 15.2.0
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install exact Ubuntu compiler for QOJ
