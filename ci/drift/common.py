@@ -30,8 +30,8 @@ def host(url):
     return urlsplit(url).hostname or ''
 
 
-def fetch(url, *, headers=None, limit=16 * 1024 * 1024):
-    with urlopen(Request(url, headers={'User-Agent': 'distill-drift/1', **(headers or {})}), timeout=60) as response:
+def fetch(url, *, headers=None, limit=16 * 1024 * 1024, timeout=60):
+    with urlopen(Request(url, headers={'User-Agent': 'cpp-distill-drift/1', **(headers or {})}), timeout=timeout) as response:
         data = response.read(limit + 1)
         if len(data) > limit:
             raise ValueError('HTTP metadata exceeds size budget')

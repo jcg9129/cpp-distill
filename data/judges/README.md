@@ -785,6 +785,13 @@ document alias moves. Do not refresh `updated` for an automated pass: it records
 human review. The CLI suggests `--judge-check` after more than 180 days.
 
 The [framework documentation](../../ci/drift/README.md) defines watch/result
-schemas, the extractor interface and issue state model. Part 2 adds real watch
-files and per-judge extractors; currently evidence reports `no sources`.
+schemas, the extractor interface and issue state model. After a reviewed profile
+change, update its `watch/<profile>.toml` expectations and original-language
+excerpt from the moving deployment source, retaining exact argument order,
+duplicates and macro text. Refresh the dated parser fixture and its changed,
+missing, duplicated and challenge variants, run
+`python3 -m unittest discover -s ci/drift -p 'test_*.py'`, then run
+`python3 ci/drift/evidence.py --output results/evidence.json` and review every
+source classification. Keep availability listings separate from judge adoption;
+never adjust expectations solely to make an automated drift result pass.
 Ubuntu acquisition uses [recorded snapshot timestamps](../../ci/profiles/ubuntu-snapshots.md).

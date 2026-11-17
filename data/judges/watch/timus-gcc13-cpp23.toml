@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. Staged for origin/d6c-timus:data/judges/timus-gcc13-cpp23.toml (read with git show); normal CI selects shipped profiles only.
+# Russian locale retains original text; C++23 is the command’s dialect selector, not a claimed form ID. UCRT/POSIX/SEH are probe facts, not asserted by this page.
+schema = 1
+
+[[sources]]
+id = "timus"
+url = "https://acm.timus.ru/help.aspx?topic=cpp&locale=ru"
+kind = "deployment"
+extractor = "timus"
+excerpt = "MinGW GCC 13.2.0 x64 и Clang 17.0.6 x64 взяты из сборки WinLibs. Компиляторы запускаются со следующими параметрами:\ng++ -x c++ -std=c++23 -O2 -fno-strict-aliasing -march=native -DONLINE_JUDGE -static -Wl,-s,--stack=67108864 -o %1.exe %1"
+[sources.expected]
+language_id = "C++23"
+compiler_family = "gcc"
+compiler_version = "13.2.0"
+compile_arguments = ["g++", "-x", "c++", "-std=c++23", "-O2", "-fno-strict-aliasing", "-march=native", "-DONLINE_JUDGE", "-static", "-Wl,-s,--stack=67108864", "-o", "%1.exe", "%1"]
+runtime_notes = ["MinGW GCC 13.2.0 x64", "WinLibs"]
+library_notes = []
+language_label = "MinGW GCC 13.2.0 x64"

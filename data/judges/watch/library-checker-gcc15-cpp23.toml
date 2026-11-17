@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Evidence reviewed/fetched 2026-11-17. Historical langs.toml: https://github.com/yosupo06/library-checker-judge/blob/01fa3c63f036611cff8be611dc1c69a5605f6a70/langs/langs.toml
+# Watch master, not the pinned commit. GCC 15.2 -> 15.2.0 follows the reviewed profile; retain the original version label too. Image metadata is not adoption.
+schema = 1
+
+[[sources]]
+id = "library-checker"
+url = "https://raw.githubusercontent.com/yosupo06/library-checker-judge/master/langs/langs.toml"
+kind = "deployment"
+extractor = "library_checker"
+excerpt = "id = \"cpp\"\nname = \"C++23\"\nversion = \"GCC 15.2 + AC Library(1.6)\"\ncompile = [\"g++\", \"-O2\", \"-std=c++23\", \"-DEVAL\", \"-DONLINE_JUDGE\", \"-march=native\", \"-o\", \"main\", \"main.cpp\", \"-I\", \"/opt/ac-library\"]\nexec = [\"./main\"]"
+[sources.expected]
+language_id = "cpp"
+compiler_family = "gcc"
+compiler_version = "15.2.0"
+compile_arguments = ["g++", "-O2", "-std=c++23", "-DEVAL", "-DONLINE_JUDGE", "-march=native", "-o", "main", "main.cpp", "-I", "/opt/ac-library"]
+runtime_notes = ["./main"]
+library_notes = ["GCC 15.2 + AC Library(1.6)"]
+language_label = "C++23"
+
+[[sources]]
+id = "docker-gcc"
+url = "https://hub.docker.com/v2/repositories/library/gcc/tags/15.2"
+kind = "availability"
+extractor = "docker_hub"
+excerpt = "\"name\": \"15.2\", \"digest\": \"sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289\"; linux/amd64 \"digest\": \"sha256:c101370f78e4a30be178c11dd18aeee64c65d617908a98157db2392ca73ab04f\""
+[sources.expected]
+language_id = "library/gcc:15.2"
+compiler_family = "not published"
+compiler_version = "not published"
+compile_arguments = []
+runtime_notes = ["linux/amd64", "index sha256:3ae15afe768b06d0c0fe088d822ba5f8045c26630bdacc8d8e7713cf5d8e7289", "manifest sha256:c101370f78e4a30be178c11dd18aeee64c65d617908a98157db2392ca73ab04f"]
+library_notes = []

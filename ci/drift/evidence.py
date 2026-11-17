@@ -30,8 +30,10 @@ sys.modules.setdefault('evidence', sys.modules[__name__])
 def facts(value):
     strings = {'language_id', 'compiler_family', 'compiler_version'}
     lists = {'compile_arguments', 'runtime_notes', 'library_notes'}
-    if not isinstance(value, dict) or set(value) != strings | lists:
+    if not isinstance(value, dict) or set(value) not in (strings | lists, strings | lists | {'language_label'}):
         raise ExtractorFailure('facts require language ID, compiler family/version, ordered compile arguments and runtime/library notes')
+    if 'language_label' in value:
+        strings = strings | {'language_label'}
     if any(not isinstance(value[k], str) or not value[k] for k in strings):
         raise ExtractorFailure('missing fact string')
     if any(not isinstance(value[k], list) or any(not isinstance(x, str) for x in value[k]) for k in lists):
@@ -42,9 +44,8 @@ def facts(value):
 def watches(selected, directory=ROOT / 'data/judges/watch'):
     sources = []
     paths = sorted(directory.glob('*.toml'))
-    known = set(profiles()) if directory == ROOT / 'data/judges/watch' else None
-    if known is not None and any(path.stem not in known for path in paths):
-        raise ValueError('watch filename does not identify a shipped profile')
+    # Watches may be staged ahead of a profile (e.g. Timus). The caller's
+    # selection still controls coverage; normal CI selects shipped profiles.
     for path in paths:
         name = path.stem
         if name not in selected:
@@ -74,12 +75,13 @@ def expected(selected):
 
 def inspect(source, fetcher=fetch, loader=importlib.import_module):
     try:
-        payload, metadata = fetcher(source['url'], limit=4 * 1024 * 1024)
+        payload, metadata = fetcher(source['url'], limit=4 * 1024 * 1024, timeout=30)
     except Exception as error:
         return 'evidence unavailable', str(error)
     try:
         extractor = loader('extractors.' + source['extractor'])
-        actual = facts(extractor.extract(payload, {**metadata, 'source_url': source['url'], 'kind': source['kind']}))
+        actual = facts(extractor.extract(payload, {**metadata, 'source_url': source['url'], 'kind': source['kind'],
+                                                  'profile': source.get('profile'), 'source_id': source['id']}))
         status = 'same facts' if actual == source['expected'] else 'different facts'
         return status, json.dumps({'expected': source['expected'], 'actual': actual, 'excerpt': source['excerpt']}, ensure_ascii=True)
     except FetchFailure as error:

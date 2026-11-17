@@ -29,9 +29,10 @@ does not change the existing dispatch behavior.
 
 ## Evidence watch schema (version 1)
 
-Files are `data/judges/watch/<full-profile-name>.toml`. There are no watch files
-or production extractors in part 1. Missing watch files mean **no sources**,
-not successful evidence, and create no evidence issues. A watch contains exactly
+Files are `data/judges/watch/<full-profile-name>.toml`. Missing watch files mean
+**no sources**, not successful evidence, and create no evidence issues. Watches
+may be staged before a profile lands (currently Timus); normal CI selection is
+still limited to shipped profiles. A watch contains exactly
 `schema = 1` and a nonempty `sources` array. Every source has exactly the
 following fields (the example is synthetic):
 
@@ -50,19 +51,39 @@ compiler_version = "15.2.0"
 compile_arguments = ["-std=gnu++23", '-DNAME="exact text"', "-O2"]
 runtime_notes = ["Linux amd64"]
 library_notes = ["libstdc++"]
+language_label = "C++23 (GCC 15.2.0)" # optional; independently watched display text
 ```
 
-All three scalar facts are nonempty strings. All three array facts contain
+All scalar facts are nonempty strings. All three array facts contain
 strings; empty runtime/library arrays explicitly mean no recorded notes.
 Argument order, whitespace, quoting and macro text are significant. No
-normalization, token sorting or version-prefix matching occurs. Pinned commit
+normalization by the comparison, token sorting or version-prefix matching occurs. Pinned commit
 URLs remain historical sources in the profile; watches track moving deployment
 URLs. `availability` sources remain labelled as listings in every report.
 
+Part 2 adds only the optional `language_label` fact to schema 1: the original
+six fields could not independently watch both a language ID and its display
+label. Six-field extractors/watches remain valid. Where an evidence page does
+not publish a submission-form ID, `language_id` uses its language/dialect label
+as a selector, documented in the watch comments; it never invents a numeric ID.
+Codeforces/Library Checker's published minor release labels expand to the
+profile's documented `.0` patch version; the original labels are also watched.
+Compile arguments contain the full published command/template (or only the
+published flags for CSES), including options omitted by approximate profiles.
+QOJ's `XX` remains the published template; its supported C++23 selection is
+checked separately. Runtime/library notes contain only published facts, not
+inferred triples or locally probed UCRT/thread/ABI facts. Docker tag metadata
+does not state a compiler family/version: both use `not published` and only
+the tag, platform and digests are compared. Homebrew compares formula version,
+revision, bottle rebuild and the Linux bottle digest. Neither listing proves
+judge adoption or verifies artifact bytes (that is the availability claim).
+
 Each extractor exports `extract(payload: bytes, metadata: dict) -> dict` with
-exactly the six fact fields above. Metadata contains final `url`, HTTP `status`,
-`headers`, original `source_url`, and declared `kind`. Extractors parse bytes as
-data; they never execute source text, interpolate it into shell commands or
+the six required fact fields above, optionally with `language_label`. Metadata
+contains final `url`, HTTP `status`, `headers`, original `source_url`, declared
+`kind`, `profile` and `source_id`. The profile selects yukicoder's independent
+ISO/GNU rows without extra requests or duplicated format parsers. Extractors
+parse bytes as data; they never execute source text, interpolate it into shell commands or
 fetch additional URLs. They must detect challenge/login content even at HTTP
 200 and require exactly one complete matching entry. Errors are imported from
 `evidence`:
@@ -75,9 +96,12 @@ fetch additional URLs. They must detect challenge/login content even at HTTP
 | `fetch failure` | `FetchFailure`: login/challenge/non-source page despite HTTP 200. |
 | `evidence unavailable` | HTTP errors (including 403/429), timeouts/transport errors or `EvidenceUnavailable`. |
 
-Part 2 must test each extractor against saved original, changed, missing,
-duplicated and challenge pages. This part tests the runner with synthetic
-fixtures and a synthetic extractor defined only in tests.
+Production extractors have saved original, changed, missing, duplicated,
+challenge, login and empty fixtures. See [fixture provenance](fixtures/README.md)
+and [the initial live check](fixtures/live-2026-11-17.md). All extractor tests
+run offline, including transport errors and exact macro/argument checks.
+HTTP metadata requests use `cpp-distill-drift/1`, a 30-second timeout and a
+4 MiB evidence response limit. Sources are fetched sequentially without retries.
 
 ## Result artifacts and durable issue state
 
