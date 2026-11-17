@@ -25,6 +25,7 @@ struct JudgeCheck {
 // one or more parts, but their union must be exactly the complete manifest.
 JudgeCheck checkJudgeProbe(const Profile&, std::string_view expected,
                           const std::vector<std::string>& outputs);
+// Load and validate the expected-only wire format against the current generator.
 Result<std::string> judgeProbeExpected(const Profile&);
 Result<std::filesystem::path> recordJudgeObservation(const Profile&, const JudgeCheck&,
     const std::vector<std::string>& outputs, const std::filesystem::path& directory,

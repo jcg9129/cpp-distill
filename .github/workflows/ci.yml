@@ -72,11 +72,17 @@ jobs:
           Write-Host 'MinGW GCC unavailable; case runner will skip compiler comparisons'
           'DISTILL_TEST_GXX=distill-gcc-unavailable' >> $env:GITHUB_ENV
           exit 0
+      - if: runner.os == 'Linux'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
       - name: Data tooling self-tests
         if: runner.os == 'Linux'
         run: |
           timeout 120 python3 -m unittest discover -s ci/extensions -p 'test_*.py'
           timeout 120 python3 -m unittest discover -s ci/profiles -p 'test_*.py'
+          python3 -m pip install --disable-pip-version-check -r ci/drift/requirements-test.txt
+          timeout 120 python3 -m unittest discover -s ci/drift -p 'test_*.py'
           timeout 120 python3 ci/llvm/test-ci.py
           timeout 120 python3 -m unittest discover -s ci/release -p 'test_*.py'
           timeout 120 python3 ci/test-measure.py

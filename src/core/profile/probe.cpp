@@ -20,6 +20,7 @@
 namespace distill {
 namespace {
 constexpr std::size_t valueLimit = 256;
+constexpr std::string_view nativeMarker = "native";
 Result<std::string> unhex(std::string_view s) {
   if (s.size() % 2) return Error{"odd hex length"};
   std::string out;
@@ -103,6 +104,33 @@ Audit audit(const Profile& p, const MacroTable& table, const std::string& name, 
   if (depth) out.reason = "unbalanced parentheses";
   return out;
 }
+bool nativePresence(const Profile& p, const std::string& name, const std::string& v, bool& applies) {
+  applies = false;
+  auto it = p.snapshotFacts.find(name);
+  if (it == p.snapshotFacts.end()) return false;
+  const auto& f = it->second;
+  if (std::find(f.provenance.begin(), f.provenance.end(), FactOrigin::nativeModel) == f.provenance.end()) return false;
+  // Known and absent joined facts are model invariants: compare normally.
+  if (f.state == MacroState::known || f.state == MacroState::undefined) return false;
+  applies = true;
+  if (f.state == MacroState::unknown) return v == "0" || v == "1";
+  return v == (f.state == MacroState::undefined ? "0" : "1");
+}
+// Exactly the facts whose expected value the comparison does not consult.
+// Presence-only/unsupported expansions still compare their diagnostic reason.
+bool nativeExpected(const Profile& p, const MacroTable& table, const JudgeProbeFact& f) {
+  if (!f.unsupported.empty()) return false;
+  if (f.category == "presence") {
+    bool applies;
+    nativePresence(p, f.name, "0", applies);
+    return applies;
+  }
+  if (f.category == "expansion") {
+    std::set<std::string> visiting;
+    return audit(p, table, f.name, visiting).native;
+  }
+  return false;
+}
 std::vector<std::pair<std::string, std::string>> versions(const Profile& p) {
   std::vector<std::pair<std::string, std::string>> result;
   for (const auto& lib : p.libraries) {
@@ -160,9 +188,13 @@ JudgeProbe makeProbe(const Profile& p, JudgeProbePart part, const std::vector<Ju
   result.facts.assign(all.begin() + begin, all.begin() + end);
   result.header = header(p);
   result.manifest = "PART|" + std::to_string(part.number) + "|" + std::to_string(part.total) + "|" + factHash(result.facts) + "|" + p.provenance.contentDigest + "|" + factHash(all);
+  const auto table = macros(p);
+  const bool hasNative = std::any_of(result.facts.begin(), result.facts.end(),
+      [&](const auto& f) { return nativeExpected(p, table, f); });
   std::ostringstream out;
   out << "// distill diagnostic judge probe; output is user-reported evidence only\n";
-  const std::vector<std::string> helpers{"raw", "string", "presence", "values", "keys", "put", "line", "hash", "count", "emit", "c", "s", "key", "value", "n"};
+  std::vector<std::string> helpers{"raw", "string", "presence", "values", "keys", "put", "line", "hash", "count", "emit", "c", "s", "key", "value", "n"};
+  if (hasNative) for (const char* h : {"expected", "argc", "argv"}) helpers.emplace_back(h);
   std::size_t versionCount = 0;
   for (const auto& f : result.facts) if (f.category == "version") ++versionCount;
   for (std::size_t i = 0; i < versionCount; ++i) out << "#ifdef __distill_probe_version_" << i << "\n#error distill probe helper collision\n#endif\n";
@@ -188,6 +220,7 @@ JudgeProbe makeProbe(const Profile& p, JudgeProbePart part, const std::vector<Ju
     out << "#if defined(__has_include)\n#if __has_include(<" << h << ">)\n#include <" << h << ">\n#endif\n#endif\n"
         << "static const char* const __distill_probe_version_" << vi++ << "=\n#ifdef " << n << "\n__distill_probe_string(" << n << ")\n#else\n\"unsupported:version unavailable after " << h << "\"\n#endif\n;\n";
   }
+  if (hasNative) out << "#include <cstring>\n";
   out << R"cpp(#include <cstdio>
 static unsigned long __distill_probe_hash=2166136261UL, __distill_probe_count=0;
 static void __distill_probe_put(unsigned char __distill_probe_c){std::putchar(__distill_probe_c);__distill_probe_hash=((__distill_probe_hash^__distill_probe_c)*16777619UL)&0xffffffffUL;}
@@ -198,8 +231,10 @@ if(__distill_probe_n>256)__distill_probe_value="!probe-failure:value exceeds 256
 while(*__distill_probe_key)__distill_probe_put((unsigned char)*__distill_probe_key++);__distill_probe_put('|');
 while(*__distill_probe_value){unsigned char __distill_probe_c=(unsigned char)*__distill_probe_value++;__distill_probe_put("0123456789abcdef"[__distill_probe_c>>4]);__distill_probe_put("0123456789abcdef"[__distill_probe_c&15]);}
 __distill_probe_put(10);++__distill_probe_count;}
-int main(){
 )cpp";
+  if (hasNative)
+    out << "int main(int __distill_probe_argc,char** __distill_probe_argv){\nconst bool __distill_probe_expected=__distill_probe_argc==2 && std::strcmp(__distill_probe_argv[1],\"--distill-expected\")==0;\n";
+  else out << "int main(){\n";
   out << "__distill_probe_line(" << quote(result.header) << ");\n__distill_probe_line(" << quote(result.manifest) << ");\n";
   std::size_t pi = 0, ei = 0; vi = 0;
   for (const auto& f : result.facts) {
@@ -208,6 +243,10 @@ int main(){
     else if (f.category == "version") value = "__distill_probe_version_" + std::to_string(vi++);
     else if (f.category == "assumption") value = quote("unsupported:" + f.unsupported);
     else value = "__distill_probe_values[" + std::to_string(ei++) + "]";
+    // CI runs the same binary twice: real output for validation, then expected
+    // output with a raw non-hex marker. Ordinary judge runs keep real values.
+    if (nativeExpected(p, table, f))
+      out << "if(__distill_probe_expected)__distill_probe_line(" << quote(factKey(f) + '|' + std::string(nativeMarker)) << ");else\n";
     out << "__distill_probe_emit(" << quote(factKey(f)) << "," << value << ");\n";
   }
   out << "std::printf(\"END|%lu|%lu\\n\",__distill_probe_count,__distill_probe_hash);\nreturn std::ferror(stdout)?1:0;}\n";
@@ -215,13 +254,15 @@ int main(){
   // Allow CRLF emitted by a Windows C runtime as well as LF.
   result.outputBound = result.header.size() + result.manifest.size() + 64 + result.facts.size() + 3;
   for (const auto& f : result.facts) {
-    std::size_t maxValue = (f.category == "presence" ? 1 : f.category == "header" ? 40 : valueLimit);
-    result.outputBound += factKey(f).size() + 2 + 2 * maxValue;
+    const std::size_t maxValue = (f.category == "presence" ? 1 : f.category == "header" ? 40 : valueLimit);
+    // Cover both the real hex value and the expected-only raw marker.
+    const auto encodedSize = std::max(2 * maxValue, nativeExpected(p, table, f) ? nativeMarker.size() : 0);
+    result.outputBound += factKey(f).size() + 2 + encodedSize;
   }
   return result;
 }
 struct ParsedPart { JudgeProbePart part; std::map<std::string, std::string> values; };
-std::vector<ParsedPart> parseOutput(const Profile& p, std::string_view text) {
+std::vector<ParsedPart> parseOutput(const Profile& p, std::string_view text, bool expected) {
   if (text.empty()) throw Error{"probe failure: empty output (probe may not have compiled or run)"};
   std::vector<ParsedPart> out;
   while (!text.empty()) {
@@ -251,7 +292,18 @@ std::vector<ParsedPart> parseOutput(const Profile& p, std::string_view text) {
         break;
       }
       if (f.size() != 3 || (f[0] != "presence" && f[0] != "expansion" && f[0] != "builtin" && f[0] != "header" && f[0] != "version" && f[0] != "assumption")) throw Error{"format error: malformed fact/category"};
-      auto value = unhex(f[2]);
+      // Real values are always hex encoded (including the text "native").
+      // Only expected files may contain the raw marker, at permitted keys.
+      if (f[2] == nativeMarker) {
+        const auto table = macros(p);
+        const auto& fs = probe.value().facts;
+        auto fact = std::find_if(fs.begin(), fs.end(), [&](const auto& fact) {
+          return fact.category == f[0] && fact.name == f[1];
+        });
+        if (!expected || fact == fs.end() || !nativeExpected(p, table, *fact))
+          throw Error{"format error: native marker only allowed for native-model expected facts"};
+      }
+      auto value = f[2] == nativeMarker ? Result<std::string>{std::string(nativeMarker)} : unhex(f[2]);
       if (!value.ok() || value.value().size() > valueLimit) throw Error{"format error: invalid fact encoding/length"};
       if (!parsed.values.emplace(f[0] + "|" + f[1], value.value()).second) throw Error{"format error: duplicate fact"};
       covered += s + '\n'; ++count;
@@ -265,7 +317,7 @@ std::map<std::string, std::string> collect(const Profile& p, const std::vector<s
   std::map<std::string, std::string> out;
   std::set<std::size_t> seen;
   std::size_t total = 0;
-  for (const auto& file : files) for (auto& part : parseOutput(p, file)) {
+  for (const auto& file : files) for (auto& part : parseOutput(p, file, expected)) {
     if (!total) total = part.part.total;
     if (total != part.part.total || !seen.insert(part.part.number).second) throw Error{"format error: duplicate or mixed parts"};
     const auto probe = generateJudgeProbe(p, part.part).value();
@@ -273,6 +325,7 @@ std::map<std::string, std::string> collect(const Profile& p, const std::vector<s
     for (const auto& f : probe.facts) allowed.insert(factKey(f));
     for (auto& [k,v] : part.values) {
       if (!allowed.contains(k)) {
+        if (expected) throw Error{"probe failure: unexpected fact in shipped expected output"};
         // An extra unknown key is reported per fact, but a key belonging to
         // another part is a mixed manifest, even when the union is complete.
         for (const auto& f : facts(p)) if (factKey(f) == k) throw Error{"format error: fact in wrong part"};
@@ -283,18 +336,6 @@ std::map<std::string, std::string> collect(const Profile& p, const std::vector<s
   }
   if (!total || seen.size() != total) throw Error{"format error: missing parts"};
   return out;
-}
-bool nativePresence(const Profile& p, const std::string& name, const std::string& v, bool& applies) {
-  applies = false;
-  auto it = p.snapshotFacts.find(name);
-  if (it == p.snapshotFacts.end()) return false;
-  const auto& f = it->second;
-  if (std::find(f.provenance.begin(), f.provenance.end(), FactOrigin::nativeModel) == f.provenance.end()) return false;
-  // Known and absent joined facts are model invariants: compare normally.
-  if (f.state == MacroState::known || f.state == MacroState::undefined) return false;
-  applies = true;
-  if (f.state == MacroState::unknown) return v == "0" || v == "1";
-  return v == (f.state == MacroState::undefined ? "0" : "1");
 }
 } // namespace
 Result<JudgeProbePart> parseJudgeProbePart(std::string_view text) {
@@ -370,7 +411,11 @@ JudgeCheck checkJudgeProbe(const Profile& p, std::string_view expected, const st
   return result;
 }
 Result<std::string> judgeProbeExpected(const Profile& p) {
-  if (p.probeExpected) return *p.probeExpected;
+  if (p.probeExpected) {
+    try { collect(p, {*p.probeExpected}, true); }
+    catch (const Error& error) { return error; }
+    return *p.probeExpected;
+  }
   return Error{"no expected output shipped for " + p.name + "; run profiles.yml"};
 }
 Result<std::filesystem::path> recordJudgeObservation(const Profile& p, const JudgeCheck& check,

@@ -27,13 +27,16 @@ class ProbeCapture(unittest.TestCase):
                 if argv[0] == 'snapshot-g++':
                     return b''
                 if '--judge-check' in argv:
+                    self.assertEqual(Path(argv[-1]).read_bytes(), b'fixture output\nfixture output\n')
                     return b'user-reported match\n'
+                if '--distill-expected' in argv:
+                    return b'canonical expected output\n'
                 return b'fixture output\n'
 
             with patch.object(probe, 'run', side_effect=run):
                 out = probe.capture(profile, 'snapshot-g++', root / 'distill')
             self.assertEqual(out.name, 'fixture-gcc15-gnupp23-probe-expected.txt')
-            self.assertEqual(out.read_bytes(), b'fixture output\nfixture output\n')
+            self.assertEqual(out.read_bytes(), b'canonical expected output\ncanonical expected output\n')
             compiles = [a for a in calls if a[0] == 'snapshot-g++']
             self.assertEqual(len(compiles), 2)
             for argv in compiles:
@@ -83,6 +86,17 @@ class ProbeCapture(unittest.TestCase):
                 profile = root / 'test.toml'
                 profile.write_text('name="fixture"\nstd="c++23"\nflags=[]\nprobe_output_bytes=1000\n', encoding='utf-8')
                 with patch.object(probe, 'run', side_effect=[b'// fixture source', b'', output]):
+                    with self.assertRaises(ValueError):
+                        probe.capture(profile, 'g++', root / 'distill')
+                self.assertFalse((root / 'fixture-probe-expected.txt').exists())
+
+    def test_expected_mode_budget_and_failures_are_also_checked(self):
+        for output in (b'X' * 1001, b'expansion|X|2170726f62652d6661696c7572653a\n'):
+            with self.subTest(output=output[:60]), tempfile.TemporaryDirectory(dir=Path.cwd()) as temp:
+                root = Path(temp)
+                profile = root / 'test.toml'
+                profile.write_text('name="fixture"\nstd="c++23"\nflags=[]\nprobe_output_bytes=1000\n')
+                with patch.object(probe, 'run', side_effect=[b'// source', b'', b'actual\n', output]):
                     with self.assertRaises(ValueError):
                         probe.capture(profile, 'g++', root / 'distill')
                 self.assertFalse((root / 'fixture-probe-expected.txt').exists())

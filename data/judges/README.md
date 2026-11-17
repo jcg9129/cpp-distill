@@ -702,12 +702,27 @@ the model. No native name is simply ignored because it appears in the model.
 The output protocol (format **1**) is LF-delimited ASCII; CRLF transport is
 accepted and normalized for the checksum. It has:
 
-- `DPROBE|1|<profile>|<digest>|<hex distill version>`
+- `DPROBE|1|<profile>|<digest>`
 - `PART|<N>|<M>|<part fact-set SHA-256>|<profile digest>|<full fact-set SHA-256>`
 - `<category>|<key>|<hex UTF-8 value>` for each fact. Categories are `presence`,
   `expansion`, `builtin`, `header`, `version`, `assumption`. Unsupported values
   begin `unsupported:`; runtime probe errors begin `!probe-failure:`.
 - `END|<number of preceding lines>|<decimal FNV-1a-32 checksum>`
+
+Expected outputs record native-model facts with the host-independent `native`
+marker, so reproduction stays byte-exact without normalization.
+The literal wire value `native` replaces hex only for presence facts with
+variable or defined-unknown native bindings and audited comparable expansions with a
+transitive variable native dependency; fixed and presence-only diagnostic facts
+retain their normal values. Real presence `0`/`1` encodes as `30`/`31`, and real
+expansion text `native` encodes as `6e6174697665`, so the marker cannot collide
+with encoded values. The checker accepts the marker only in expected files at
+those permitted keys; judge output must still contain real encoded values and
+satisfy the model (including required presence for `defined-unknown`). CI runs
+the compiled probe normally for validation, then with `--distill-expected` for
+the expected file; both modes produce their own correct trailers. Ordinary
+judge runs use no arguments. The judge wire format and fact manifests are
+unchanged, and legacy hex expected files remain readable during regeneration.
 
 The checksum covers every preceding line including LF, starting at 2166136261,
 XORing each byte then multiplying by 16777619 modulo 2^32. Fact-set hashes cover

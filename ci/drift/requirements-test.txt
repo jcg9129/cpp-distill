@@ -1,0 +1,2 @@
+# YAML parsing for workflow wiring tests only; production scripts use the standard library.
+PyYAML==6.0.3

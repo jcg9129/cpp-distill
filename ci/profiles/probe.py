@@ -46,22 +46,30 @@ def capture(profile_file, compiler, distill):
             break
         if sources is None:
             raise ValueError('no probe partition fits profile budgets')
-        outputs = []
+        outputs, actual = [], []
         for part, contents in enumerate(sources, 1):
             source.write_bytes(contents)
             run([compiler, '-x', 'c++', '-std=' + profile['std'], *profile['flags'],
                  source, '-o', binary])
-            output = run([binary])
-            if len(output) > profile.get('probe_output_bytes', 60000):
-                raise ValueError('probe exceeded output budget')
-            if b'!probe-failure:' in output or b'2170726f62652d6661696c7572653a' in output:
-                raise ValueError('probe failed while capturing expected output')
-            outputs.append(output)
+            captured = []
+            for argv in ([binary], [binary, '--distill-expected']):
+                output = run(argv)
+                if len(output) > profile.get('probe_output_bytes', 60000):
+                    raise ValueError('probe exceeded output budget')
+                if b'!probe-failure:' in output or b'2170726f62652d6661696c7572653a' in output:
+                    raise ValueError('probe failed while capturing expected output')
+                captured.append(output)
+            # The generated program uses the same C++ native-model predicates as
+            # the checker; only permitted expected facts get the raw marker.
+            actual.append(captured[0])
+            outputs.append(captured[1])
         destination = profile_file.with_name(profile['name'] + '-probe-expected.txt')
         destination.write_bytes(b''.join(outputs))
         # Reloads the expectation just produced and exercises the complete
         # header/trailer/parts checker before uploading it as review evidence.
-        run([distill, '--judge-check', profile_file, destination])
+        judge_output = work / 'actual.txt'
+        judge_output.write_bytes(b''.join(actual))
+        run([distill, '--judge-check', profile_file, judge_output])
         return destination
 
 

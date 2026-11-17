@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import tomllib
 
-from common import ROOT, arguments, envelope, fetch, host, profiles, result, write
+from common import ROOT, arguments, envelope, fetch, host, profiles, result, summarize, write
 
 
 class ExtractorFailure(ValueError):
@@ -102,6 +102,12 @@ def run(selected):
     return envelope('evidence', selected, rows)
 
 
+def build_parser():
+    return arguments(__doc__)
+
+
 if __name__ == '__main__':
-    args = arguments(__doc__).parse_args()
-    write(args.output, run(profiles(args.profiles)))
+    args = build_parser().parse_args()
+    data = run(profiles(args.profiles))
+    write(args.output, data)
+    summarize(data)
