@@ -532,6 +532,25 @@ TEST(profile_cses_bundled_approximate_snapshot) {
   CHECK(!alias.value().reproduced); CHECK(!alias.value().build);
   CHECK_EQ(alias.value().initialState("ONLINE_JUDGE").state, MacroState::undefined);
 }
+TEST(profile_qoj_bundled_approximate_snapshot) {
+  CHECK(embeddedProfileFiles().contains("qoj-gcc15-cpp23.toml"));
+  const auto alias = lookupProfile("qoj"), full = lookupProfile("qoj-gcc15-cpp23");
+  CHECK(alias.ok()); CHECK(full.ok()); if (!alias.ok() || !full.ok()) return;
+  const auto& p = alias.value();
+  CHECK_EQ(p.name, "qoj-gcc15-cpp23");
+  CHECK_EQ(p.provenance.contentDigest, full.value().provenance.contentDigest);
+  CHECK(!p.reproduced); CHECK(!p.build);
+  CHECK(p.snapshotCompiler.has_value());
+  if (p.snapshotCompiler) CHECK_EQ(p.snapshotCompiler->second, "ubuntu-26.04:g++-15=15.2.0-16ubuntu1");
+  CHECK_EQ(p.dialect.name, "c++23");
+  CHECK_EQ(p.flags, (std::vector<std::string>{"-O2", "-DONLINE_JUDGE"}));
+  CHECK_EQ(p.link, (std::vector<std::string>{"-lm"}));
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").state, MacroState::known);
+  CHECK_EQ(p.initialState("ONLINE_JUDGE").definition->replacement, "1");
+  CHECK_EQ(p.initialState("__cplusplus").definition->replacement, "202302L");
+  CHECK_EQ(p.initialState("__unlisted_reserved").state, MacroState::unknown);
+  CHECK_EQ(p.probeSourceBytes, 60000u); CHECK_EQ(p.probeOutputBytes, 60000u);
+}
 TEST(profile_list_columns_and_order) {
   test::TempDirectory temp;
   ProfileLookup lookup; lookup.userDirectory = temp.path;
@@ -542,7 +561,8 @@ TEST(profile_list_columns_and_order) {
   CHECK(list.starts_with("atcoder-gcc15-gnupp23\tatcoder\tbundled\treproduced\t2026-11-15\t\"AtCoder"));
   CHECK(list.find("codeforces-gcc14-cpp23\tcodeforces\tbundled\tapproximate\t2026-11-15\t\"Codeforces") != std::string::npos);
   CHECK(list.find("mingw-gcc14-cpp23\t-\tuser " + quotedPath(temp.path / "mingw-gcc14-cpp23.toml") + "\tapproximate\t2026-11-15\t\"Synthetic MinGW fixture\"\t-\n") != std::string::npos);
-  const auto count = 4;
+  CHECK(list.find("qoj-gcc15-cpp23\tqoj\tbundled\tapproximate\t2026-11-17\t\"QOJ") != std::string::npos);
+  const auto count = 5;
   CHECK_EQ(std::count(list.begin(), list.end(), '\n'), count);
   catalog.value().profiles.back().description = "Line 1\nLine 2\tmore";
   const auto escaped = renderProfileList(catalog.value());

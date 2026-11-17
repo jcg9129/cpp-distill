@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       profiles:
-        description: all, or comma-separated full names (codeforces-gcc14-cpp23, atcoder-gcc15-gnupp23, cses-gcc13-cpp23)
+        description: all, or comma-separated full names (codeforces-gcc14-cpp23, atcoder-gcc15-gnupp23, cses-gcc13-cpp23, qoj-gcc15-cpp23)
         default: all
         required: true
 permissions:
@@ -14,22 +14,34 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
+      runner_matrix: ${{ steps.matrix.outputs.runner_matrix }}
+      container_matrix: ${{ steps.matrix.outputs.container_matrix }}
+      has_runner: ${{ steps.matrix.outputs.has_runner }}
+      has_container: ${{ steps.matrix.outputs.has_container }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - id: matrix
         env:
           PROFILES: ${{ inputs.profiles }}
         run: |
-          set -euo pipefail
-          echo "matrix=$(python3 ci/profiles/matrix.py --profiles "$PROFILES")" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          sys.path.insert(0, 'ci/profiles')
+          from matrix import job_matrices
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key, value in job_matrices(os.environ['PROFILES']).items():
+                  output.write(key + '=' + json.dumps(value, separators=(',', ':')) + '\n')
+          PY
   snapshot:
     needs: plan
+    if: needs.plan.outputs.has_runner == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.runner_matrix) }}
     env:
       PROFILE: ${{ matrix.profile }}
       COMPILER_PROVENANCE: ${{ matrix.compiler }}
@@ -140,6 +152,57 @@ jobs:
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           & "$env:pythonLocation/python.exe" ci/profiles/probe.py data/judges/codeforces-gcc14-cpp23.toml --compiler C:/msys64/mingw64/bin/g++.exe --distill out/profile-probe/distill.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: snapshot-${{ matrix.profile }}
+          path: |
+            data/judges/${{ matrix.profile }}-predefined.txt
+            data/judges/${{ matrix.profile }}-probe-expected.txt
+          if-no-files-found: error
+  # A separate job keeps container: absent for all existing runner rows.
+  # Job-level if is evaluated before matrix expansion, so an empty partition
+  # is skipped even when dispatch selects only a runner or only a container.
+  snapshot-container:
+    needs: plan
+    if: needs.plan.outputs.has_container == 'true'
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.container_matrix) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PROFILE: ${{ matrix.profile }}
+      COMPILER_PROVENANCE: ${{ matrix.compiler }}
+    steps:
+      # Containers run as root. Install git before checkout and provide the
+      # normal C++ toolchain and Python 3.11+ used by the diagnostic CLI.
+      - name: Install container tools
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y --no-install-recommends ca-certificates git python3 cmake ninja-build g++
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install exact Ubuntu compiler for QOJ
+        run: bash ci/profiles/install-ubuntu.sh "$COMPILER_PROVENANCE"
+      - name: Build diagnostic distill
+        run: |
+          set -euo pipefail
+          cmake -S . -B out/profile-probe -G Ninja -DCMAKE_BUILD_TYPE=Release -DDISTILL_PROFILE_ONLY=ON -DBUILD_TESTING=OFF
+          cmake --build out/profile-probe --target distill --parallel 2
+          python3 ci/profiles/test_probe_cli.py out/profile-probe/distill tests/unit/fixtures/profile
+      - name: Snapshot QOJ effective command (approximate)
+        run: |
+          set -euo pipefail
+          python3 ci/profiles/snapshot.py "data/judges/$PROFILE.toml" --compiler /usr/bin/g++-15
+      - name: Produce QOJ expected diagnostic output
+        run: |
+          set -euo pipefail
+          python3 ci/profiles/probe.py "data/judges/$PROFILE.toml" --compiler /usr/bin/g++-15 --distill out/profile-probe/distill
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: snapshot-${{ matrix.profile }}

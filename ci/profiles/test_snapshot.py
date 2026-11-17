@@ -7,7 +7,7 @@ from unittest.mock import patch
 from snapshot import (capture, inventory, startup_origins, join_native, native_runs, cpu_values,
                       compatible_triple, data, run, ROOT)
 from flags import operations
-from matrix import matrix
+from matrix import matrix, job_matrices, UBUNTU_26_04
 
 
 class SnapshotTests(unittest.TestCase):
@@ -254,7 +254,7 @@ predefined = "fixture-predefined.txt"
 
     def test_matrix_selection_builds_and_bad_input(self):
         rows = matrix()['include']
-        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23'})
+        self.assertEqual({r['profile'] for r in rows}, {'atcoder-gcc15-gnupp23', 'codeforces-gcc14-cpp23', 'cses-gcc13-cpp23', 'qoj-gcc15-cpp23'})
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['version'], '15.2.0')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['runner'], 'windows-2025')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['build'], '')
@@ -263,6 +263,10 @@ predefined = "fixture-predefined.txt"
         self.assertEqual(cses, dict(profile='cses-gcc13-cpp23', version='13.3.0', runner='ubuntu-24.04',
                                    build='', compiler='package=ubuntu-24.04:g++-13=13.3.0-6ubuntu2~24.04.1',
                                    acquisition='ubuntu'))
+        self.assertEqual(matrix('qoj-gcc15-cpp23')['include'][0],
+                         dict(profile='qoj-gcc15-cpp23', version='15.2.0', runner='ubuntu-24.04',
+                              build='', compiler='package=ubuntu-26.04:g++-15=15.2.0-16ubuntu1',
+                              acquisition='ubuntu', container=UBUNTU_26_04))
         self.assertEqual(matrix('atcoder-gcc15-gnupp23')['include'][0]['acquisition'], 'atcoder')
         self.assertEqual(matrix('codeforces-gcc14-cpp23')['include'][0]['acquisition'], 'msys2')
         with patch('matrix.tomllib.loads', return_value={'compiler': {'version': '14.2.0'}, 'triple': 'x86_64-w64-mingw32',
@@ -276,6 +280,23 @@ predefined = "fixture-predefined.txt"
         for selection in ['', 'typo', 'atcoder-gcc15-gnupp23,', 'all,atcoder-gcc15-gnupp23']:
             with self.assertRaises(ValueError):
                 matrix(selection)
+
+    def test_job_partitions_skip_empty_matrices_and_keep_runner_rows(self):
+        all_jobs = job_matrices()
+        self.assertTrue(all_jobs['has_runner'])
+        self.assertTrue(all_jobs['has_container'])
+        self.assertEqual(all_jobs['runner_matrix']['include'],
+                         matrix('atcoder-gcc15-gnupp23,codeforces-gcc14-cpp23,cses-gcc13-cpp23')['include'])
+        self.assertTrue(all('container' not in row for row in all_jobs['runner_matrix']['include']))
+        self.assertEqual(all_jobs['container_matrix'], matrix('qoj-gcc15-cpp23'))
+        container_only = job_matrices('qoj-gcc15-cpp23,qoj-gcc15-cpp23')
+        self.assertFalse(container_only['has_runner'])
+        self.assertEqual(container_only['runner_matrix'], {'include': []})
+        self.assertEqual(container_only['container_matrix'], matrix('qoj-gcc15-cpp23'))
+        runner_only = job_matrices('cses-gcc13-cpp23')
+        self.assertFalse(runner_only['has_container'])
+        self.assertEqual(runner_only['container_matrix'], {'include': []})
+        self.assertEqual(runner_only['runner_matrix'], matrix('cses-gcc13-cpp23'))
 
 
 if __name__ == '__main__':

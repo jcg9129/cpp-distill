@@ -3,8 +3,14 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import tomllib
 from provenance import identity
+
+
+# Official Docker Hub tag API, checked 2026-11-17 (multi-platform index):
+# https://hub.docker.com/v2/repositories/library/ubuntu/tags/26.04
+UBUNTU_26_04 = 'ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db'
 
 
 def matrix(selection='all'):
@@ -25,7 +31,7 @@ def matrix(selection='all'):
             raise ValueError(f'{name}: Windows snapshot requires an exact MSYS2 GCC package')
         if windows:
             acquisition = 'msys2'
-        elif compiler.startswith('package=ubuntu-24.04:g++-'):
+        elif re.match(r'package=ubuntu-(24\.04|26\.04):g\+\+-', compiler):
             acquisition = 'ubuntu'
         elif compiler == 'recipe=https://img.atcoder.jp/file/language-update/2025-10/017-23_gcc_14-2-0.toml':
             acquisition = 'atcoder'
@@ -33,7 +39,20 @@ def matrix(selection='all'):
             raise ValueError(f'{name}: unsupported compiler acquisition: {compiler}')
         rows.append(dict(profile=name, version=version, runner='windows-2025' if windows else 'ubuntu-24.04',
                          build='' if build == 'none' else build, compiler=compiler, acquisition=acquisition))
+        if compiler.startswith('package=ubuntu-26.04:'):
+            rows[-1]['container'] = UBUNTU_26_04
     return {'include': rows}
+
+
+def job_matrices(selection='all'):
+    """Separate container rows so runner jobs never receive an empty container."""
+    rows = matrix(selection)['include']
+    result = {}
+    for name, container in [('runner', False), ('container', True)]:
+        selected = [row for row in rows if ('container' in row) == container]
+        result[name + '_matrix'] = {'include': selected}
+        result['has_' + name] = bool(selected)
+    return result
 
 
 if __name__ == '__main__':

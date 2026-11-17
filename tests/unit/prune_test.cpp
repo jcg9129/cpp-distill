@@ -80,7 +80,7 @@ TEST(prune_adl_dialects_and_all_registry_names) {
       auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.families[0].reason,"never removed: ADL name (A6)");
     }
   }
-  for (const auto* dialect : {"c++98","gnu++03","gnu++26","c++2b",""}) { Model b; b.m.dialect = dialect; b.add("x","int x;"); CHECK(!b.run().disabledReasons.empty()); }
+  for (const auto* dialect : {"c++98","gnu++03","c++26","gnu++26","c++2b",""}) { Model b; b.m.dialect = dialect; b.add("x","int x;"); CHECK(!b.run().disabledReasons.empty()); }
   CHECK(!parseAdlRegistry("c++20 x ADL [clause] x verified\n").ok());
   bool delegated = false;
   for (const auto& row : registry.entries) if (row.name == "cdata") delegated |= row.mechanism.starts_with("public-CPO-overretention");

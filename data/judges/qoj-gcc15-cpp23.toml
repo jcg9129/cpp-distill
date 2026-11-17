@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Researched 2026-11-17: QOJ blog 221, "Judging environment of QOJ",
+# last updated June 2026. UNVERIFIED: the research notes identify
+# https://pjudge.ac/blog/221 as a mirror; its identity was not rechecked.
+# qoj.ac itself returned HTTP 403 to the direct fetcher (as did the mirror).
+# The web reader could read https://qoj.ac/blog/221, redirected to
+# https://qoj.ac/blog/qingyu/blog/221; it agrees with the supplied transcription.
+# Published: GCC 15.2.0, Ubuntu 26.04.1 LTS, Intel Xeon Platinum 8573C;
+# g++ -o answer -x c++ answer.code -lm -O2 -DONLINE_JUDGE -std=c++XX
+# XX includes 23 and 26. -x c++ is supplied by the snapshot/probe drivers;
+# std holds -std=, flags retain -O2 then -D, and link holds -lm. Moving the
+# independent std selection before these flags preserves preprocessing.
+# QOJ offers C++26, but distill's audited A6 ADL registry ends at C++23;
+# defer the cpp26 profile and its alias until that inventory is supported.
+# UNVERIFIED: the exact submission-form option label was not inspected.
+name = "qoj-gcc15-cpp23"
+alias = "qoj"
+description = "QOJ C++23 (GCC 15.2.0), approximate Ubuntu 26.04 snapshot"
+# UNVERIFIED: judge triple is inferred from the published OS and x86_64 CPU;
+# CI records the snapshot compiler's actual -dumpmachine separately.
+triple = "x86_64-linux-gnu"
+compiler = { family = "gcc", version = "15.2.0" }
+std = "c++23"
+flags = ["-O2", "-DONLINE_JUDGE"]
+link = ["-lm"]
+# No build: QOJ does not state a package revision (APPROXIMATE).
+# Snapshot compiler only: exact resolute Release package confirmed 2026-11-17
+# at https://packages.ubuntu.com/resolute/g++-15 and the Launchpad API:
+# https://api.launchpad.net/1.0/ubuntu/+archive/primary?ws.op=getPublishedSources&source_name=gcc-15&distro_series=https://api.launchpad.net/1.0/ubuntu/resolute&exact_match=true&status=Published
+# UNVERIFIED: QOJ actually uses this distribution package rather than another
+# build of GCC 15.2.0. A matching release and version do not establish identity.
+snapshot_compiler = { package = "ubuntu-26.04:g++-15=15.2.0-16ubuntu1" }
+# UNVERIFIED: judge library identities; use libstdc++/glibc A1 inventories for
+# the published GCC/Ubuntu environment, not as evidence of judge capture.
+libraries = ["libstdc++", "glibc"]
+# Produced only by profiles.yml; never generate these files locally.
+predefined = "qoj-gcc15-cpp23-predefined.txt"
+check = ["g++-15", "g++"]
+# UNVERIFIED: platform-wide source/output limits were not found. Both probe
+# budgets use the documented 60000-byte defaults, not asserted judge limits.
+# UNVERIFIED: custom-test availability, behavior and output retrieval were not
+# confirmed; the probe has not been run on the judge.
+updated = "2026-11-17"
+sources = ["https://pjudge.ac/blog/221", "https://qoj.ac/blog/221", "https://packages.ubuntu.com/resolute/g++-15"]
