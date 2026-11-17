@@ -435,8 +435,8 @@ Follow-up proposed (Codex review): regression test that allow-listed
 `__cpp_lib_*` names become unknown after `#include <version>` / system headers
 in approximate profiles (`__cpp_[a-z0-9_]+` in the allow-list also matches them).
 
-Next: Library Checker (item 1 above; needs a GCC 15.2 native model check, it
-uses `-march=native`).
+Next: Library Checker (item 1 above; it uses `-march=native`, covered by the
+existing GCC 15.2 native model).
 
 Idea (agreed 2026-11-17, optional): a CI report when a new snapshot matches an
 existing profile with the same compiler build up to flag-explained differences
