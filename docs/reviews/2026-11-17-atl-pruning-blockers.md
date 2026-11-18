@@ -13,10 +13,16 @@ unknown by design, so pruning target-dependent conditionals needs a profile with
 the required facts. Profile `inert` remains a preprocessing-only guarantee,
 never permission to omit a flag from the dependency parse or checking command.
 
-Investigation only: no source, tests or data changed, no compiler/LLVM SDK build,
-and no external ATL checkout or compiler documentation consulted. The reported
-44-program run, its exact ATL revision/include order, and v0.1.1's correspondence
-to this checkout are **UNVERIFIED**. The ATL snippets below are the question's
+**Step 2a done (audit only, 2026-11-18): translation blocked.** The pinned cc1
+spelling is verified, but equal or larger Clang constexpr depth limits do not
+guarantee GCC acceptance or template-selection parity. The counterexamples in
+§3 keep `-fconstexpr-depth=N` untranslated; this follow-up changes documentation
+only. All seven semantic disables and the AtCoder expected reasons remain.
+
+Original investigation (2026-11-17): no source, tests or data changed, no
+compiler/LLVM SDK build, and no external ATL checkout or compiler documentation
+consulted. The reported 44-program run, its exact ATL revision/include order,
+and v0.1.1's correspondence to this checkout are **UNVERIFIED**. The ATL snippets below are the question's
 inputs; conclusions about distill are traced to this checkout. Proposed compiler
 translations are explicitly distinguished from implemented, audited support.
 
@@ -221,13 +227,85 @@ until there is a per-option proof, matching `docs/design.md:827`.
 
 | Profile option | Proposed disposition; what is and is not established here |
 | --- | --- |
-| `-fconstexpr-depth=1024` | Candidate translation to `-fconstexpr-depth=1024`; do not map to a step/loop limit. The profile documents it only as preprocessing-inert. Exact pinned LLVM cc1 acceptance and semantic-limit behavior are **UNVERIFIED** from this checkout, which has no such translation. Add explicit translation and acceptance/limit tests before enabling. |
+| `-fconstexpr-depth=1024` | Step 2a audit: pinned LLVM 23.1.5 accepts cc1 `-fconstexpr-depth=N` for `LangOpts.ConstexprCallDepth`, default 512. Keep untranslated: equal or larger limits do not establish GCC acceptance or template-selection parity; see the counterexamples below. The profile's preprocessing-inert declaration cannot discharge this obligation. |
 | `-fconstexpr-loop-limit=524288` | GCC loop-resource policy. No implemented Clang equivalent here; a claim of an exact compiler equivalent is **UNVERIFIED**. Do not rename to depth or assume Clang's step budget counts GCC loops. Candidate parse-only omission needs an argument that successful parsing cannot lose retention dependencies; resource-induced parse errors must still disable. |
 | `-fconstexpr-ops-limit=2097152` | Same obligation, with operation budget rather than loop count. A proposed Clang `-fconstexpr-steps` setting is not established as an equivalent GCC operation budget. The reviewer's claim that these GCC options have no direct Clang equivalent is plausible but **UNVERIFIED** without compiler sources; there is certainly no translation or equivalence proof in this code. |
 | `-ftrivial-auto-var-init=zero` | Candidate cc1 translation preserving zero initialization, or a narrowly audited omission for dependency extraction. It is not runtime-inert; retain it in checking/build commands. Exact LLVM 23 cc1 support and the absence of extra lookup/instantiation effects are **UNVERIFIED** here. Keep disabling until audited. |
 | `-fopenmp` | Do not omit just because it is modelled. `_OPENMP` effects are tested (`tests/unit/option_model_test.cpp:132`); pragma parsing needs a separate policy. The core currently rejects `#pragma omp` because only its listed pragma names are supported (`src/core/prune/extract.cpp:11`). Support needs a cc1 OpenMP mode/version audit, macro checks and dependency traversal for directives/clauses, or a proven restricted input subset with conservative refusal elsewhere. Merely injecting `_OPENMP` cannot establish OpenMP semantics. Exact GCC/LLVM parity is **UNVERIFIED**. |
 | `-fmodules` | GCC C++20 modules cannot be assumed to mean Clang's similarly spelled header-module option. `__cpp_modules` effects are tested (`tests/unit/option_model_test.cpp:133`). Module/import syntax and imported declarations require an explicit policy; this checkout supplies no translation. A restricted non-module input omission is conceivable only after auditing tokens (including macro-produced ones), predefines and AST forms. A same-spelling forwarding fix is unsupported; exact pinned frontend mapping is **UNVERIFIED**. |
 | `-march=native` | Keep disabling in the current implementation. The audited native model bounds uncertain preprocessing facts, not a cc1 CPU/feature vector. Driver options must become target-specific `-target-cpu`/features, not be forwarded verbatim (`src/core/README.md:661`). A snapshot from one host cannot fix all judge hosts' features (`docs/design.md:336`, `data/native/gcc-15.2-x86.txt:7`). Macro-value checks alone do not prove lookup/builtin/type support unchanged. Any restricted omission or translation needs a separate argument covering these effects and must preserve native unknown facts. |
+
+### Step 2a depth audit: why translation remains disabled
+
+Fetched the pinned LLVM tag's
+[`clang/include/clang/Options/Options.td`](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.5/clang/include/clang/Options/Options.td).
+The requested historical `clang/include/clang/Driver/Options.td` path returns
+404 at this tag. `fconstexpr_depth_EQ` is a joined `-fconstexpr-depth=` option
+with `CC1Option` visibility, marshalled to `LangOpts.ConstexprCallDepth` with
+default 512. Thus the spelling is established independently of driver acceptance.
+
+Both frontends count nested constexpr function calls, rather than loops or
+operations. GCC 15.2's
+[`push_cx_call_context` and `cxx_eval_call_expression`](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/cp/constexpr.cc)
+check the active call stack against `max_constexpr_depth`, but can reuse a cached
+call result instead of evaluating its body recursively. Pinned Clang's
+[`EvalInfo::CheckCallLimit` and `CallStackFrame`](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.5/clang/lib/AST/ExprConstant.cpp)
+check `ConstexprCallDepth` against their evaluation stack. Matching this resource
+unit does not establish matching evaluation success: GCC's cached subcalls can
+avoid recursion that Clang performs.
+
+An equal-limit acceptance counterexample is:
+
+```cpp
+constexpr int down(int n) { return n ? down(n - 1) : 0; }
+constexpr int warmup = down(7);
+constexpr int deeper = down(8);
+static_assert(deeper == 0);
+```
+
+With `-std=c++20 -fsyntax-only -fconstexpr-depth=8`, local GCC 15.2 accepts this;
+local Clang 22.1.8 rejects `deeper` for exceeding eight calls. GCC reuses the
+previously evaluated `down(7)`. This is not an off-by-one correction to a
+uniform nesting count.
+
+More seriously, depth exhaustion need not produce a parse error:
+
+```cpp
+constexpr int down(int n) { return n ? down(n - 1) : 0; }
+// Insert `constexpr int warmup = down(7);` for the cached variant.
+template<int> struct tag {};
+template<int N> concept deep = requires { typename tag<down(N)>; };
+int fallback() { return 1; }
+int preferred() { return 2; }
+template<int N> int pick(...) { return fallback(); }
+template<int N> requires deep<N> int pick(int) { return preferred(); }
+int main() { return pick<8>(0); }
+```
+
+The following local syntax-only probes all succeed; separate
+`static_assert(deep<8> == EXPECT)` checks confirm the requirement's value:
+
+| Variant | GCC 15.2 depth | Clang 22.1.8 depth | GCC selection | Clang selection |
+| --- | --- | --- | --- | --- |
+| Without warmup | 8 | 8 | `fallback` | `fallback` |
+| Without warmup | 8 | 9 | `fallback` | `preferred` |
+| With warmup | 8 | 8 | `preferred` | `fallback` |
+
+A failed constant-expression requirement simply removes the constrained
+overload. Therefore increasing Clang's limit is not selection-preserving, and
+using exactly GCC's limit is not sufficient either. Parse-error refusal cannot
+detect the successful parses with different selections. A regression showing
+only recursion above 512 succeeding would not discharge this obligation.
+
+These executable observations use the installed Clang 22.1.8, **not** a pinned
+LLVM 23.1.5 worker; the pinned option and evaluator sources were inspected, but
+no pinned executable was built or tested. Consequently the required guarantee
+for the pinned worker is not established. Following step 2a's stop condition,
+there is no parse-argv translation, numeric validator, last-occurrence handling,
+code change or relaxed AtCoder expectation. The other six semantic options keep
+their disables as well. Reopening support requires a dependency-preservation
+argument covering silent constant-evaluation failures and compiler caching,
+rather than assuming a larger resource budget preserves template selection.
 
 Existing forwarding of `-O2`, ordered `-D`/`-U`, `-pthread`, character options and
 exception/RTTI defaults demonstrates the intended explicit translation approach
@@ -320,13 +398,23 @@ contexts if unchanged source, dependencies and frontend handling justify it.
 
 ## Verification performed
 
-Read the requested design, option table, profile, implementation and existing
-unit/case fixtures. Checked the shipped TOML/snapshot facts, the complete flag
-route, both disable gates, header invalidation, closure rejection, ownership and
+Original investigation: read the requested design, option table, profile,
+implementation and existing unit/case fixtures. Checked the shipped TOML/snapshot
+facts, the complete flag route, both disable gates, header invalidation, closure rejection, ownership and
 verification control flow. A read-only report check validates cited paths/line
 bounds and the report's SPDX header. No executable tests or builds were run;
 this investigation supplies proposed regressions below, not claims that fixes
-already pass them. Only this report is added.
+already pass them. Only this report was added in that investigation.
+
+Step 2a follow-up (2026-11-18): inspected the pinned option/evaluator sources
+linked in §3 and GCC 15.2's call-stack/cache implementation. Eight syntax-only
+checks read directly from the report's examples confirmed the acceptance and
+requirement results with installed GCC 15.2 and Clang 22.1.8. Configured an
+LLVM-free Debug build, built with `cmake --build build -j2`, and ran
+`ctest --test-dir build -j2 --output-on-failure`: all six registered suites
+passed, including the unchanged cc1 table and AtCoder reason assertions in the
+unit suite. Audit links and `git diff --check` passed. No LLVM SDK build or
+pinned-worker extraction tests were run; no source or test files changed.
 
 ## Ordered PR plan
 

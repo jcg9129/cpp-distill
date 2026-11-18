@@ -839,9 +839,15 @@ translation are listed in the report; one without an audited semantics-inert
 omission disables pruning. This semantic gate is independent of the profile's
 preprocessing-only `inert` permission exemption: that list supplies no proof of
 dependency-preserving omission. Modules, OpenMP and CPU options currently have
-no supported translation and retain their semantic disables. Without a profile,
-local checking facts do not become judge facts; unknown judge conditions or
-predefined macro values still disable pruning. The report names the parse
+no supported translation and retain their semantic disables.
+`-fconstexpr-depth=N` also remains untranslated: matching the nested-call
+resource unit does not establish equivalent evaluation success. GCC's constexpr
+cache can avoid recursion that Clang performs, and a depth failure inside a
+requirement can silently change template selection. Equal or larger Clang limits
+therefore lack the required guarantee; see the
+[step 2a audit](reviews/2026-11-17-atl-pruning-blockers.md#step-2a-depth-audit-why-translation-remains-disabled).
+Without a profile, local checking facts do not become judge facts; unknown judge
+conditions or predefined macro values still disable pruning. The report names the parse
 configuration separately from the checking configuration. A `target` level
 describes the checking configuration; it is not a claim that Clang's
 semantics are the judge's.
