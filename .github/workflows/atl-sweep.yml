@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: atl-cpp sweep
+on:
+  workflow_dispatch:
+    inputs:
+      release_run:
+        description: Release run id (empty selects latest main run with an unexpired Linux x86_64 artifact)
+        type: string
+        default: ''
+        required: false
+      atl_ref:
+        description: atl-cpp branch, tag or commit
+        type: string
+        default: main
+        required: true
+      judge:
+        description: distill judge profile
+        type: string
+        default: cses
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/atl-sweep.yml
+      - ci/atl-sweep/sweep.sh
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: atl-sweep-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sweep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      ATL_REF: ${{ inputs.atl_ref || 'main' }}
+      JUDGE: ${{ inputs.judge || 'cses' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download Linux x86_64 Release binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_INPUT: ${{ inputs.release_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_run=$RELEASE_RUN_INPUT
+          if [[ -z $release_run ]]; then
+            # Do not filter by conclusion: another platform may have been cancelled.
+            run_ids=$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?branch=main&per_page=100" \
+              --jq '.workflow_runs[].id')
+            while IFS= read -r candidate; do
+              [[ -n $candidate ]] || continue
+              artifact_ids=$(gh api --paginate \
+                "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.name == "release-platform-linux-x86_64" and .expired == false) | .id')
+              if [[ -n $artifact_ids ]]; then
+                release_run=$candidate
+                break
+              fi
+            done <<< "$run_ids"
+          fi
+          if [[ ! $release_run =~ ^[1-9][0-9]*$ ]]; then
+            echo 'No eligible Release run found, or release_run is not a positive run id.' >&2
+            exit 1
+          fi
+          echo "Using Release run $release_run"
+          mkdir -p out/atl-sweep/release out/atl-sweep/unpacked
+          gh run download "$release_run" --repo "$GITHUB_REPOSITORY" \
+            --name release-platform-linux-x86_64 --dir out/atl-sweep/release
+          mapfile -d '' -t archives < <(find out/atl-sweep/release -type f -name 'distill-*-linux-x86_64.tar.gz' -print0)
+          [[ ${#archives[@]} -eq 1 ]] || { echo 'Expected exactly one Linux x86_64 archive.' >&2; exit 1; }
+          tar -xzf "${archives[0]}" -C out/atl-sweep/unpacked
+          mapfile -d '' -t binaries < <(find "$PWD/out/atl-sweep/unpacked" -type f -name distill -executable -print0)
+          [[ ${#binaries[@]} -eq 1 ]] || { echo 'Expected exactly one distill executable.' >&2; exit 1; }
+          "${binaries[0]}" --version
+          echo "DISTILL=${binaries[0]}" >> "$GITHUB_ENV"
+      - name: Check out public atl-cpp examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init out/atl-sweep/atl
+          git -C out/atl-sweep/atl remote add origin https://github.com/jcg9129/atl-cpp.git
+          git -C out/atl-sweep/atl fetch --depth 1 -- origin "$ATL_REF"
+          git -C out/atl-sweep/atl checkout --detach FETCH_HEAD
+          git -C out/atl-sweep/atl rev-parse HEAD
+      - name: Measure and verify all three variants
+        shell: bash
+        run: bash ci/atl-sweep/sweep.sh out/atl-sweep/atl "$DISTILL" out/atl-sweep/results "$JUDGE"
+      - name: Upload sweep summary, reports and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atl-sweep-${{ env.JUDGE }}
+          path: |
+            out/atl-sweep/results/summary.tsv
+            out/atl-sweep/results/**/*.rep
+            out/atl-sweep/results/**/*.log
+          if-no-files-found: warn
