@@ -138,7 +138,7 @@ TEST(prune_all_disable_reasons_accumulate) {
   CHECK(!staticNameInvariant(b.m,r,"").ok());
 }
 TEST(prune_predefined_macros_source_overrides_and_pasting) {
-  for (int scenario = 0; scenario < 8; ++scenario) {
+  for (int scenario = 0; scenario < 13; ++scenario) {
     Model b; b.add("x","int x;"); PruneMacroExpansion e; e.name = "__GNUC__"; e.predefined = true;
     e.parse = known("4"); e.judge = known("4");
     if (scenario == 1) e.judge = known("15");
@@ -148,10 +148,55 @@ TEST(prune_predefined_macros_source_overrides_and_pasting) {
     if (scenario == 5) { e.judge = known("15"); e.condition = true; }
     if (scenario == 6) { e.judge = known("15"); e.user = false; }
     if (scenario == 7) { e.predefined = false; e.paste = true; }
+    if (scenario == 8) e.judge = {MacroState::undefined,{}, {FactOrigin::a4}};
+    if (scenario == 9) e.parse = {};
+    if (scenario == 10) e.judge = {MacroState::definedUnknown,{}, {FactOrigin::specialBuiltin}};
+    if (scenario == 11) e.parse = {MacroState::definedUnknown,{}, {FactOrigin::compilerBuiltin}};
+    if (scenario == 12) e.judge = known("");
     b.m.expansions.push_back(e);
-    CHECK_EQ(b.run().disabledReasons.empty(),scenario == 0 || scenario >= 5);
+    CHECK_EQ(b.run().disabledReasons.empty(),scenario == 0 || (scenario >= 5 && scenario <= 7));
+    if (scenario == 1) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__ differs: judge 15, parse 4");
+    if (scenario == 2) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__: unknown judge fact");
+    if (scenario == 8) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__ differs: judge undefined, parse 4");
+    if (scenario == 9 || scenario == 11) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__: unknown parse fact");
+    if (scenario == 10) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__: unknown judge fact");
+    if (scenario == 12) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__ differs: judge <empty>, parse 4");
   }
   Model b; PruneMacroExpansion e; e.name = "X"; e.predefined = true; e.parse = known("a + b"); e.judge = known("a+b"); b.m.expansions.push_back(e); CHECK(b.run().disabledReasons.empty());
+}
+TEST(prune_profile_inert_exempts_only_exact_profile_occurrences) {
+  const auto p = lookupProfile("atcoder-gcc15-gnupp23").value();
+  for (const auto& inert : p.inert) for (const auto& option : {inert, inert + "0"}) {
+    const auto local = parseCompileCommand({"g++", "-isystem", "sys", option, "main.cpp"}, std::filesystem::current_path()).value();
+    Configuration c; c.command = flatCommand(local, &p, "g++", false).value();
+    c.probe.triple = p.triple; c.probe.dialect = p.dialect;
+    CHECK_EQ(c.command.pruningAllowed().reasons, (std::vector<std::string>{"unmodelled option: " + option}));
+    CHECK_EQ(c.command.args[1].classification, Class::unmodelled);
+    CHECK(!c.command.args[1].profilePreprocessingInert);
+    ResolveResult flat; flat.text = "int main(){}\n";
+    const auto m = preparePruning(c, {}, flat, &p).value();
+    CHECK_EQ(m.disabledReasons.front(), "unmodelled option: " + option);
+    CHECK_EQ(std::count(m.disabledReasons.begin(), m.disabledReasons.end(), "untranslated semantic option: " + option), option == inert ? 2 : 1);
+    CHECK(std::find(m.parseArgv.begin(), m.parseArgv.end(), option) == m.parseArgv.end());
+    const auto build = c.command.buildArgv("flat.cpp", "program", true, {});
+    CHECK_EQ(std::count(build.begin(), build.end(), option), option == inert ? 2 : 1);
+  }
+}
+TEST(prune_unknown_location_uses_resolver_decision_including_elif) {
+  Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"gnu++20",false,202002};
+  ResolveResult flat;
+  flat.text = "#if 0\n#elif __UNKNOWN__\nint x;\n#endif\n";
+  flat.lineMap = {SourceLocation{"misleading.hpp",1}};
+  flat.unknownInUserCode = true;
+  flat.decisions = {{30,SourceLocation{"actual.hpp",90},"if",Decision::falseValue,"",{},{}},
+                    {31,SourceLocation{"actual.hpp",91},"elif",Decision::unknown,"",{},{}}};
+  const auto m = preparePruning(c, {}, flat).value();
+  const std::vector<std::string> expected{"unknown conditional in user code at actual.hpp:91 (#elif)"};
+  CHECK_EQ(m.disabledReasons, expected);
+  const auto roundtrip = parsePruningModel(serializePruningModel(m).value()).value();
+  CHECK_EQ(computeRetention(roundtrip).value().disabledReasons, expected);
+  flat.decisions[1].original.reset();
+  CHECK_EQ(preparePruning(c, {}, flat).value().disabledReasons.front(), "unknown conditional in user code at raw.cpp:31 (#elif)");
 }
 TEST(prune_directives_pin_generated_markers_do_not) {
   Model b; b.add("x","void x(){\n#line 20 \"file\"\n}\n");

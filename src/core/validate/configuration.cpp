@@ -53,11 +53,23 @@ Result<CompileCommand> flatCommand(const CompileCommand& local, const Profile* p
     if (p && check && (a.classification == Class::libraries || a.option == "-l" || a.option == "-static" || a.option == "-static-libgcc" || a.option == "-static-libstdc++" || a.option == "-s")) continue;
     for (const auto& word : a.spelling) argv.push_back(word);
   }
+  const auto profileBegin = argv.size();
   if (p) {
     argv.push_back("-std=" + p->dialect.name);
     argv.insert(argv.end(), p->flags.begin(), p->flags.end());
   }
   auto result = parseCompileCommand(argv, local.cwd);
+  if (result.ok() && p) {
+    std::size_t word = 1;
+    for (auto& a : result.value().args) {
+      // Count argv words, not arguments: local paired options must not shift
+      // the profile boundary or exempt a same-spelled local occurrence.
+      if (word >= profileBegin && a.classification == Class::unmodelled &&
+          a.spelling.size() == 1 && std::find(p->inert.begin(), p->inert.end(), a.spelling.front()) != p->inert.end())
+        a.profilePreprocessingInert = true;
+      word += a.spelling.size();
+    }
+  }
   // Link options were already validated by the profile loader, separately from
   // compile options (which intentionally reject -Wl). Preserve their exact argv.
   if (result.ok() && p && check) for (const auto& flag : p->link)

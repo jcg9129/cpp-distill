@@ -26,6 +26,13 @@ Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&,
                                    const Profile* judge, const std::vector<std::string>& keep) {
   PruningModel m; m.text = flat.text; m.lineMap = flat.lineMap; m.dialect = c.probe.dialect.name;
   m.disabledReasons = flat.disabledReasons; m.unknownInUserCode = flat.unknownInUserCode;
+  if (flat.unknownInUserCode) for (const auto& d : flat.decisions) {
+    if (d.decision != Decision::unknown || d.directive == "else" || d.directive == "endif") continue;
+    const auto location = d.original ? d.original->file + ':' + std::to_string(d.original->line)
+                                     : "raw.cpp:" + std::to_string(d.rawLine);
+    m.disabledReasons.push_back("unknown conditional in user code at " + location + " (#" + d.directive + ")");
+    break;
+  }
   m.keepNames.insert(keep.begin(),keep.end());
   auto annotations = captureKeepOffsets(m.text); if (!annotations.ok()) return annotations.error();
   m.keepOffsets = flat.keepOffsets;

@@ -136,6 +136,17 @@ used by the transformation. Without a judge profile it is local. A reproduced sn
 alone does not make arbitrary local GCC equivalent: compiler facts, dialect and command
 must match. AtCoder's `-march=native` does not establish target verification across hosts.
 
+Without `--judge`, judge compiler/platform facts are unknown by design; local
+probes do not supply them. Pruning code with target-dependent conditionals needs
+a profile with the required facts. Otherwise those conditionals stay unresolved
+and disable pruning.
+
+A profile's `inert` list guarantees only that its exact listed flags do not affect
+preprocessing. It exempts those profile-origin occurrences from the unmodelled
+option reason; the same unmodelled option typed locally still gets that reason.
+An untranslated semantic option still disables pruning, including a profile-inert
+flag: preprocessing inertness does not prove safe omission from the dependency parse.
+
 Runtime status is `not requested`, `compared N samples`, or `skipped: can't run target binaries here`.
 A compatible cross GCC can check a target build even when its binaries cannot run here.
 
@@ -160,7 +171,8 @@ For a fallback, start with `--report report.txt`. Common reason text/prefixes:
 | `unknown conditional in user code` | Inspect the reported `#if`; choose a judge profile with the needed facts, or accept `flat`. |
 | `non-standard system header:` / `unaudited GNU extension header:` | PBDS and other unaudited system headers disable pruning; use audited headers or accept `flat`. |
 | `external library option:` | External code may call user code; remove an unnecessary library option or accept `flat`. |
-| `predefined macro differs or unknown:` / `external or unknown token-paste operand:` | Inspect the macro; avoid compiler-dependent expansion/pasting or accept `flat`. |
+| `predefined macro NAME: unknown judge fact` / `predefined macro NAME differs: judge X, parse Y` | Choose a profile with the needed fact, or inspect the differing definitions and accept `flat`. Unknown parse facts are reported separately. |
+| `external or unknown token-paste operand:` | Inspect the macro; avoid compiler-dependent pasting or accept `flat`. |
 | `unsupported ADL dialect:` / `untranslated semantic option:` / `unsupported user pragma` | Use a supported C++11–C++23 dialect/options/constructs where possible, or accept `flat`. |
 | `Clang parse error` / `pruning worker deadline exceeded` | GCC may accept code the analysis cannot handle; simplify it or accept the checked fallback. |
 | `resolution disabled: __COUNTER__` (also `_Pragma`, `push_macro`, `pop_macro`) / `unmodelled option:` | Remove the feature/option if unnecessary; otherwise expect `raw`. |

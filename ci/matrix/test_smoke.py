@@ -86,7 +86,7 @@ class AcceptanceTests(unittest.TestCase):
             self.smoke.analysis(self.analysis, 'pruned')
 
     def test_flat_requires_reported_analysis_refusal(self):
-        reason = 'predefined macro differs or unknown: __GNUC__'
+        reason = 'predefined macro __GNUC__: unknown judge fact'
         self.assertEqual(self.smoke.analysis(self.analysis + 'pruning disabled: ' + reason + '\n', 'flat'), reason)
         with self.assertRaises(AssertionError):
             self.smoke.analysis(self.analysis + 'flat: passed\n', 'flat')

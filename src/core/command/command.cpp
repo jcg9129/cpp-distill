@@ -190,7 +190,7 @@ std::vector<Arg> CompileCommand::flags(Class classification) const {
 }
 Permission CompileCommand::resolutionAllowed() const {
   Permission result{true, {}};
-  for (const auto& arg : args) if (arg.classification == Class::unmodelled)
+  for (const auto& arg : args) if (arg.classification == Class::unmodelled && !arg.profilePreprocessingInert)
     result.reasons.push_back("unmodelled option: " + arg.option);
   result.allowed = result.reasons.empty();
   return result;

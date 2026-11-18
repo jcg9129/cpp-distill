@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "core/validate/preprocess.h"
 #include "core/command/options.h"
+#include "core/prune/extract.h"
 using namespace distill;
 TEST(validate_preprocess_markers_flags_blanks_escapes) {
   CHECK(comparePreprocessed("# 3 \"a\\\\b\\\"c\" 1 3 4\n\nint x;\n", "# 4 \"a\\\\b\\\"c\" 2\nint x;\n").ok());
@@ -186,5 +187,50 @@ TEST(validate_configuration_preserves_link_order) {
     CHECK(std::find(argv.begin(), argv.end(), "raw.cpp") < std::find(argv.begin(), argv.end(), "-lfixture"));
     CHECK(std::find(argv.begin(), argv.end(), "-O2") < std::find(argv.begin(), argv.end(), "raw.cpp"));
     CHECK(std::find(argv.begin(), argv.end(), "-Iinc") == argv.end());
+  }
+}
+TEST(validate_atcoder_flat_pruning_remaining_reasons_and_link_provenance) {
+  auto loaded = lookupProfile("atcoder-gcc15-gnupp23"); CHECK(loaded.ok());
+  const auto& p = loaded.value();
+  const std::vector<std::string> semantic{
+    "untranslated semantic option: -fconstexpr-depth=1024",
+    "untranslated semantic option: -fconstexpr-loop-limit=524288",
+    "untranslated semantic option: -fconstexpr-ops-limit=2097152",
+    "untranslated semantic option: -fmodules",
+    "untranslated semantic option: -ftrivial-auto-var-init=zero",
+    "untranslated semantic option: -march=native",
+    "untranslated semantic option: -fopenmp"};
+  ResolveResult flat; flat.text = "int main(){}\n";
+  for (const bool libraries : {false, true}) for (const bool check : {false, true}) {
+    std::vector<std::string> argv{"g++", "-isystem", "sys", "-std=c++20", "-DLOCAL", "main.cpp"};
+    if (libraries) argv.insert(argv.end(), {"-L", "local-lib", "-llocal"});
+    const auto local = parseCompileCommand(argv, std::filesystem::current_path()).value();
+    Configuration c; c.command = flatCommand(local, &p, "g++", check).value();
+    c.probe.triple = p.triple; c.probe.dialect = p.dialect;
+    CHECK(c.command.resolutionAllowed());
+    CHECK_EQ(std::count_if(c.command.args.begin(), c.command.args.end(), [](const auto& a) {
+      return a.profilePreprocessingInert;
+    }), static_cast<std::ptrdiff_t>(p.inert.size()));
+    const auto build = c.command.buildArgv("flat.cpp", "program", true, {});
+    auto next = build.begin();
+    for (const auto& flag : p.flags) {
+      next = std::find(next, build.end(), flag); CHECK(next != build.end());
+      if (next != build.end()) ++next;
+    }
+    if (check) for (const auto& flag : p.link) {
+      next = std::find(next, build.end(), flag); CHECK(next != build.end());
+      if (next != build.end()) ++next;
+    }
+    CHECK(std::find(build.begin(), build.end(), "-DLOCAL") == build.end());
+    CHECK_EQ(std::find(build.begin(), build.end(), "-llocal") != build.end(), libraries && !check);
+    std::vector<std::string> expected;
+    const auto links = check ? p.link : libraries ? std::vector<std::string>{"-L", "-llocal"} : std::vector<std::string>{};
+    for (const auto& flag : links) expected.push_back("external library option: " + flag);
+    if (!check && libraries) expected.insert(expected.end(), {"untranslated semantic option: -L local-lib", "untranslated semantic option: -llocal"});
+    expected.insert(expected.end(), semantic.begin(), semantic.end());
+    if (check) for (const auto& flag : links) expected.push_back("untranslated semantic option: " + flag);
+    const auto model = preparePruning(c, {}, flat, &p); CHECK(model.ok());
+    CHECK_EQ(model.value().disabledReasons, expected);
+    CHECK_EQ(computeRetention(model.value()).value().disabledReasons, expected);
   }
 }

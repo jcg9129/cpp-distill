@@ -3,6 +3,16 @@
 
 ## Scope and verdict
 
+Step 1 implementation note: the investigation below records the original
+checkout behavior. Exact profile-origin `inert` occurrences now omit the
+misleading unmodelled permission reason, while all seven untranslated semantic
+options and the check-path link disables remain. Unknown conditional diagnostics
+now identify the actual resolver decision; predefined macro diagnostics separate
+unknown judge facts from differing values. Without `--judge`, judge facts are
+unknown by design, so pruning target-dependent conditionals needs a profile with
+the required facts. Profile `inert` remains a preprocessing-only guarantee,
+never permission to omit a flag from the dependency parse or checking command.
+
 Investigation only: no source, tests or data changed, no compiler/LLVM SDK build,
 and no external ATL checkout or compiler documentation consulted. The reported
 44-program run, its exact ATL revision/include order, and v0.1.1's correspondence
