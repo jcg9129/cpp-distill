@@ -2,6 +2,7 @@
 #include "core/inline/inline.h"
 #include "core/lex/scan.h"
 #include "core/path.h"
+#include "core/validate/preprocess.h"
 #include <algorithm>
 #include <fstream>
 #include <iterator>
@@ -27,11 +28,6 @@ struct Node {
   std::string guard;
   std::vector<bool> resync;
 };
-std::string escaped(std::string_view text) {
-  std::string result;
-  for (char c : text) { if (c == '\\' || c == '"') result += '\\'; result += c; }
-  return result;
-}
 bool beginsGroup(std::string_view name) { return name == "if" || name == "ifdef" || name == "ifndef"; }
 struct Engine {
   const CompileCommand& cmd;
@@ -47,6 +43,7 @@ struct Engine {
   std::vector<Frame> stack;
   std::size_t unsafeIncludes = 0;
   bool macroStackName = false;
+  PresumedFile presumed; // Fed every output directive in order (short markers).
   Engine(const CompileCommand& command, const IncludeSearch& includes, const InlineOptions& settings)
       : cmd(command), search(includes), options(settings) {}
 
@@ -226,7 +223,7 @@ struct Engine {
   }
   void newline() { if (!result.text.empty() && result.text.back() != '\n') append("\n"); }
   void marker(const Node& n, std::size_t line) {
-    newline(); append("#line " + std::to_string(line) + " \"" + escaped(n.info.fileName) + "\"\n");
+    newline(); append(presumed.marker({n.info.fileName, line}));
   }
   std::size_t physicalAt(const Node& n, std::size_t offset) const {
     return 1 + static_cast<std::size_t>(std::lower_bound(n.newlines.begin(), n.newlines.end(), offset) - n.newlines.begin());
@@ -269,7 +266,7 @@ struct Engine {
       // Guards have no original provenance, but their presumed file must still
       // be an original source, even for a #pragma once in the root file.
       marker(n, 1);
-      newline(); append("#ifndef " + n.guard + "\n#define " + n.guard + "\n");
+      newline(); append("#ifndef " + n.guard + "\n#define " + n.guard + "\n"); presumed.directive("ifndef");
       stack.back().guardEpoch = unsafeIncludes;
     }
     marker(n, 1);
@@ -293,17 +290,19 @@ struct Engine {
         if (user) { newline(); render(include->second.node); }
         else if (rewrite) {
           append("#include <" + include->second.name + ">\n", SourceLocation{n.info.fileName, physicalAt(n, d.begin)});
+          presumed.directive("include");
         }
         else append("\n", SourceLocation{n.info.fileName, physicalAt(n, d.begin)});
         // Drop the entire edited directive, including comments and extra tokens
         // ignored by GCC. Resume only after its terminating logical newline.
         marker(n, physicalAt(n, d.end));
-      } else if (n.resync[i]) {
+      } else {
         original(n, l.begin, l.end);
-        marker(n, physicalAt(n, l.end));
-      } else original(n, l.begin, l.end);
+        if (l.directive) presumed.directive(l.directive->name);
+        if (n.resync[i]) marker(n, physicalAt(n, l.end));
+      }
     }
-    if (n.once) { newline(); append("#endif\n"); }
+    if (n.once) { newline(); append("#endif\n"); presumed.directive("endif"); }
     stack.pop_back();
   }
   InlineResult run() {
