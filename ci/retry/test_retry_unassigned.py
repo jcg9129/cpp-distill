@@ -75,7 +75,7 @@ class RetryTests(unittest.TestCase):
                 with self.subTest(attempt=attempt, conclusion=conclusion):
                     run = dict(self.run, run_attempt=attempt, conclusion=conclusion)
                     self.assertEqual(retry.decide(run, self.jobs, REPOSITORY),
-                                     (True, '2 unassigned job(s); all other jobs succeeded'))
+                                     (True, '2 unassigned job(s); other jobs succeeded or never ran'))
 
     def test_all_eligible_workflows(self):
         for name in retry.WORKFLOWS:
@@ -91,7 +91,9 @@ class RetryTests(unittest.TestCase):
     def test_real_failure_or_started_cancellation_blocks_entire_attempt(self):
         for changes in (
             {'conclusion': 'failure'}, {'conclusion': 'timed_out'},
-            {'conclusion': 'action_required'}, {'conclusion': 'skipped'},
+            {'conclusion': 'action_required'},
+            {'conclusion': 'skipped', 'steps': [{'name': 'Set up job'}]},
+            {'conclusion': 'skipped', 'runner_id': 123},
             {'conclusion': 'neutral'}, {'conclusion': None},
             {'steps': [{'name': 'Set up job'}]},
             {'runner_name': 'assigned'}, {'runner_id': 123},
@@ -101,6 +103,16 @@ class RetryTests(unittest.TestCase):
                 decision, reason = retry.decide(self.run, jobs, REPOSITORY)
                 self.assertFalse(decision)
                 self.assertIn('human review', reason)
+
+    def test_skipped_dependents_without_runner_do_not_block(self):
+        skipped = dict(self.jobs[2], conclusion='skipped')
+        for conclusion in ('cancelled', 'failure'):
+            with self.subTest(conclusion=conclusion):
+                decision, reason = retry.decide(dict(self.run, conclusion=conclusion),
+                                                self.jobs + [skipped], REPOSITORY)
+                self.assertTrue(decision, reason)
+        # Skipped jobs alone are not candidates.
+        self.assertFalse(retry.decide(self.run, [self.jobs[0], skipped], REPOSITORY)[0])
 
     def test_all_unassigned_cancellation_is_ambiguous_even_after_fifteen_minutes(self):
         for jobs in (self.jobs[1:], [self.jobs[1]], [self.jobs[2]]):

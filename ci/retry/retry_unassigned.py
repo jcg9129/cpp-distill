@@ -37,6 +37,11 @@ def unassigned(job):
                  or (type(job['runner_id']) is int and job['runner_id'] == 0)))
 
 
+def skipped_without_runner(job):
+    """A skipped job that never ran: same explicit-field rules as unassigned."""
+    return unassigned(dict(job, conclusion='cancelled')) and job.get('conclusion') == 'skipped'
+
+
 def skip_run(run, repository):
     """Return a skip reason, or None if the run is eligible for inspection."""
     if (run.get('name') == RETRY_WORKFLOW
@@ -65,7 +70,9 @@ def skip_run(run, repository):
 def decide(run, jobs, repository):
     """Return (should_retry, reason), without IO.
 
-    Every non-success must be unassigned, including skipped/neutral jobs. For an
+    Every non-success must be unassigned, except skipped jobs that never got a
+    runner (dependents of an unassigned job, e.g. Release's assemble/publish;
+    a rerun of failed jobs reruns them too). Neutral jobs block. For an
     overall cancelled run, require a successful job in this same attempt. The
     jobs API has no cancellation cause; elapsed time alone is not timeout proof.
     """
@@ -79,12 +86,13 @@ def decide(run, jobs, repository):
     candidates = [job for job in jobs if unassigned(job)]
     if not candidates:
         return False, 'no unassigned jobs'
-    if any(job.get('conclusion') != 'success' and not unassigned(job) for job in jobs):
+    if any(job.get('conclusion') != 'success' and not unassigned(job)
+           and not skipped_without_runner(job) for job in jobs):
         return False, 'a non-successful job is not unassigned; human review required'
     if (run['conclusion'] == 'cancelled'
             and not any(job.get('conclusion') == 'success' for job in jobs)):
         return False, 'cancelled attempt has no successful job; possible user cancellation'
-    return True, f'{len(candidates)} unassigned job(s); all other jobs succeeded'
+    return True, f'{len(candidates)} unassigned job(s); other jobs succeeded or never ran'
 
 
 class GitHub:
