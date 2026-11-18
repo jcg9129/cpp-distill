@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A2(a), user 2026-11-18. Sorted NAME followed by covered libraries.
+# Audit: docs/reviews/2026-11-18-a2-identity-macros.md
+# MinGW synthesizes six _M_* aliases; _cygwin.h defines _WIN64.
+_MSC_BUILD glibc libstdc++ macos-libc mingw-w64
+_MSC_FULL_VER glibc libstdc++ macos-libc mingw-w64
+_MSC_VER glibc libstdc++ macos-libc mingw-w64
+_M_AMD64 glibc libstdc++ macos-libc
+_M_ARM glibc libstdc++ macos-libc
+_M_ARM64 glibc libstdc++ macos-libc
+_M_ARM64EC glibc libstdc++ macos-libc
+_M_IX86 glibc libstdc++ macos-libc
+_M_X64 glibc libstdc++ macos-libc
+_WIN32 glibc libstdc++ macos-libc mingw-w64
+_WIN64 glibc libstdc++ macos-libc
+__APPLE__ glibc libstdc++ macos-libc mingw-w64
+__CUDACC__ glibc libstdc++ macos-libc mingw-w64
+__CYGWIN__ glibc libstdc++ macos-libc mingw-w64
+__EMSCRIPTEN__ glibc libstdc++ macos-libc mingw-w64
+__INTEL_COMPILER glibc libstdc++ macos-libc mingw-w64
+__INTEL_LLVM_COMPILER glibc libstdc++ macos-libc mingw-w64
+__MACH__ glibc libstdc++ macos-libc mingw-w64
+__MINGW32__ glibc libstdc++ macos-libc mingw-w64
+__MINGW64__ glibc libstdc++ macos-libc mingw-w64
+__NVCC__ glibc libstdc++ macos-libc mingw-w64
+__clang__ glibc libstdc++ macos-libc mingw-w64
+__clang_major__ glibc libstdc++ macos-libc mingw-w64
+__clang_minor__ glibc libstdc++ macos-libc mingw-w64
+__clang_patchlevel__ glibc libstdc++ macos-libc mingw-w64
+__linux__ glibc libstdc++ macos-libc mingw-w64

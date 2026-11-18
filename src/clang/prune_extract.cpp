@@ -48,6 +48,7 @@ bool scalarBuiltin(const Decl* d) {
     "__builtin_ffs", "__builtin_ffsl", "__builtin_ffsll",
     "__builtin_parity", "__builtin_parityl", "__builtin_parityll",
     "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64", "__builtin_bswap128",
+    "__builtin_add_overflow", "__builtin_sub_overflow", "__builtin_mul_overflow",
     "__builtin_expect", "__builtin_expect_with_probability", "__builtin_unreachable"
   };
   return names.contains(f->getNameAsString());

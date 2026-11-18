@@ -19,6 +19,15 @@ guarantee GCC acceptance or template-selection parity. The counterexamples in
 §3 keep `-fconstexpr-depth=N` untranslated; this follow-up changes documentation
 only. All seven semantic disables and the AtCoder expected reasons remain.
 
+**Step 4 partly done (2026-11-18): identity-header precision.** The user-approved
+A2(a) amendment preserves known external compiler/target identity facts across
+standard includes, with library coverage excluding MinGW's synthesized aliases.
+See [the amendment audit](2026-11-18-a2-identity-macros.md) for counterexamples,
+provenance/verification limits, tests, and the approximate qoj `__UINT64_C`
+finding. This addresses the standard-include/MSVC guard cascade for reproduced
+Linux profiles. The bounded Boolean evaluator remains unimplemented; no-profile
+or otherwise unknown leaves still use the whole-closure rule.
+
 Original investigation (2026-11-17): no source, tests or data changed, no
 compiler/LLVM SDK build, and no external ATL checkout or compiler documentation
 consulted. The reported 44-program run, its exact ATL revision/include order,
@@ -166,6 +175,11 @@ define reserved names and only protect names actually predefined by the compiler
 (`docs/design.md:90`). Preserving every absent reserved fact across headers
 would therefore be unsound under today's contract. That invalidation is **(c)**,
 even though a Boolean precision improvement can avoid depending on the fact.
+
+Historical-contract note (2026-11-18): the approved A2(a) amendment now permits
+preserving the finite, library-covered identity subset with external provenance.
+The blanket reserved-name exemption rejected above remains unsound, especially
+for MinGW-w64. This change does not implement Boolean short-circuit reasoning.
 
 `intrin.h` has a further cascade effect. Unknown groups keep all possible paths
 and join their states (`src/core/resolve/resolve.cpp:308`); pruning preparation
@@ -463,7 +477,11 @@ pinned-worker extraction tests were run; no source or test files changed.
    names and a conditional `intrin.h`, plus non-standard-header invalidation and
    differing branch joins. Require the no-profile unknown-fact tests to remain
    correct. Amend the normative whole-closure algorithm at
-   `docs/design.md:632`; do not weaken A1/A2 to preserve absent reserved names.
+   `docs/design.md:632`. Partly addressed on 2026-11-18 by the separately audited,
+   user-approved finite A2 identity amendment (see report linked above), including
+   the reproduced-Linux `intrin.h` regression. The Boolean proof, truth tables,
+   and unknown-leaf simplification remain open; arbitrary absent reserved names
+   still cannot be preserved.
 5. **Audit optional language modes separately.** One PR for OpenMP mode/macros
    and directive/clauses, another for a restricted modules policy or actual
    module support. Add cc1 table and worker tests, `_OPENMP`/`__cpp_modules`

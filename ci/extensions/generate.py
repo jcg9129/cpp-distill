@@ -22,13 +22,13 @@ def standard(name, names):
                 or re.fullmatch(r"(?:PRI|SCN)[diouxXbB](?:LEAST|FAST)?[0-9]+", name))
 
 
-def directive_text(text):
+def directive_text(text, mask_literals=False):
     # Phase 2 before comments, including GCC's whitespace-before-newline variant.
     text = re.sub(r"\\[ \t]*(?:\r\n|\n)", "", text)
     # Keep quotes intact so comment markers in strings cannot hide a directive.
     raw = r'(?:u8|u|U|L)?R"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"'
     tokens = raw + '|' + r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|/\*.*?\*/|//[^\n]*'
-    text = re.sub(tokens, lambda m: (" " if m[0].startswith("/") else m[0]), text, flags=re.S)
+    text = re.sub(tokens, lambda m: (" " if mask_literals or m[0].startswith("/") else m[0]), text, flags=re.S)
     return text
 
 

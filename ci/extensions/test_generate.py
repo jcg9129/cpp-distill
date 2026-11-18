@@ -6,6 +6,7 @@ from generate import collect, generate, read_list, reserved, standard, reachable
 from scan import attribute, search_paths
 from merge import merge
 from unittest.mock import patch
+import json
 
 
 class GeneratorTests(unittest.TestCase):
@@ -85,6 +86,7 @@ class GeneratorTests(unittest.TestCase):
             for library in ['glibc', 'libstdc++', 'mingw-w64', 'macos-libc']:
                 (root / f'data/extensions/{library}.txt').write_text('# Not generated\n')
             artifacts = root / 'artifacts'; artifacts.mkdir()
+            (artifacts / 'glibc-identity.json').write_text(json.dumps(dict(version=1, library='glibc', definitions={})))
             (artifacts / 'glibc.txt').write_text('# generator ci/extensions/generate.py v1;\nBROAD\n')
             with patch('merge.ROOT', root), self.assertRaisesRegex(ValueError, 'v2'):
                 merge(artifacts, root / 'out')
