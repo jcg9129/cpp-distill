@@ -303,6 +303,71 @@ std::string decisionName(const ResolutionDecision& d) {
   if (d.decision == Decision::dead) return "dead";
   return "unknown:" + d.reason;
 }
+// Unknown names used only under `defined` are enumerated
+// (docs/reviews/2026-11-18-boolean-precision.md).
+void booleanPrecisionSelfTest(ConditionEvaluator& evaluator, const std::filesystem::path& cwd, const IntegerModel& integers) {
+  Profile p; p.name = "judge"; p.reproduced = true; p.dialect = {"gnu++20", true, 202002};
+  p.snapshotFacts["__has_include"] = {MacroState::unknown, {}, {FactOrigin::specialBuiltin}};
+  p.snapshotFacts["__UNKNOWN_B"] = {MacroState::unknown, {}, {FactOrigin::compilerBuiltin}};
+  p.snapshotFacts["__ON"] = {MacroState::known, Macro{false, {}, false, "1"}, {FactOrigin::compilerBuiltin}};
+  const auto command = require(parseCompileCommand({"g++", "main.cpp", "-std=gnu++20"}, cwd));
+  const std::vector<std::pair<std::string, std::string>> cases{
+    {"defined(ATL_USE_MMAP) && defined(__has_include)", "false"},  // atl-cpp reader.hpp:33
+    {"defined __ON || defined __has_include", "true"},                 // true || unknown
+    {"defined(__has_include) && defined(ATL_USE_MMAP)", "false"},  // unknown && false
+    {"!defined(__has_include) && !defined(__ON)", "false"},
+    {"defined(__ON) ? 2 : defined(__has_include)", "true"},        // ternary, known condition
+    {"defined(__has_include) ? 3 : 3", "true"},                     // ternary, equal arms
+    {"defined(ATL_USE_MMAP) ? defined(__has_include) : 0", "false"},
+    {"(defined(ATL_USE_MMAP) && defined(__has_include)) + 1 > 1", "false"}, // nested arithmetic
+    {"(defined(__has_include) || 1) * 2 == 2", "true"},
+    {"(defined(__has_include) ? 1u : -1) > 0", "true"},             // usual conversions: unsigned in both
+    {"defined(__has_include) - defined(__UNKNOWN_B) < 2", "true"},  // two unknowns
+    {"0 && (1 / defined(__has_include))", "false"},                 // unevaluated division
+    // Must stay unknown:
+    {"defined(__has_include) && defined(__ON)", "unknown:unknown macro: __has_include"},
+    {"defined(__has_include) == defined(__UNKNOWN_B)", "unknown:unknown macro: __has_include"},
+    {"defined(ATL_USE_MMAP) && __UNKNOWN_B", "unknown:unknown macro: __UNKNOWN_B"}, // value use can reparse
+    {"defined(__UNKNOWN_B) || __UNKNOWN_B", "unknown:unknown macro: __UNKNOWN_B"},
+    {"defined(ATL_USE_MMAP) && __has_include(<vector>)", "unknown:builtin invocation: __has_include"},
+    {"1 / defined(__has_include)", "unknown"},                      // judge may reject: kept
+    {"defined(ATL_USE_MMAP) && (", "unknown"},                      // malformed in every variant
+  };
+  for (const auto& [condition, wanted] : cases) {
+    InlineResult raw;
+    raw.text = "#if " + condition + "\nint x;\n#endif\nint main(){return 0;}\n";
+    for (std::size_t line = 1; line <= 4; ++line) raw.lineMap.push_back(SourceLocation{"main.cpp", line});
+    ResolveOptions options; options.profile = &p; options.requirements.integers = integers;
+    const auto r = require(resolveConditions(raw, command, evaluator, options));
+    const auto& d = r.decisions.at(0);
+    const auto actual = decisionName(d);
+    check(actual == wanted || (wanted == "unknown" && d.decision == Decision::unknown), "boolean precision: " + condition + ": wanted " + wanted + ", got " + actual);
+    if (d.decision == Decision::unknown && wanted == "unknown") continue;
+    if (d.decision != Decision::trueValue && d.decision != Decision::falseValue) continue;
+    // Provenance: the known operand is recorded, enumerated unknown names are not.
+    for (const auto& u : d.external) check(u.fact.state != MacroState::unknown, "boolean precision: unknown fact recorded: " + u.name);
+    auto used = [&](std::string_view name) { return std::any_of(d.external.begin(), d.external.end(), [&](const auto& u) { return u.name == name; }); };
+    if (condition.find("ATL_USE_MMAP") != condition.npos) {
+      check(used("ATL_USE_MMAP"), "boolean precision: A5 fact lost: " + condition);
+      for (const auto& u : d.external) if (u.name == "ATL_USE_MMAP")
+        check(u.fact.state == MacroState::undefined && u.fact.provenance == std::vector<FactOrigin>{FactOrigin::a5}, "boolean precision: A5 provenance");
+    }
+    if (condition.find("__ON") != condition.npos) check(used("__ON"), "boolean precision: builtin fact lost: " + condition);
+    // Only purely boolean trees are width independent.
+    const bool boolean = condition.find_first_of("?:+*-=<>/") == condition.npos;
+    check(d.requirements.integers.has_value() == !boolean, "boolean precision: integer requirement: " + condition);
+  }
+  {
+    // `defined` inside a macro argument is not an atomic 0/1 operand.
+    InlineResult raw;
+    raw.text = "#define F(x) x\n#if F(defined(__has_include)) || 1\nint x;\n#endif\nint main(){return 0;}\n";
+    for (std::size_t line = 1; line <= 5; ++line) raw.lineMap.push_back(SourceLocation{"main.cpp", line});
+    ResolveOptions options; options.profile = &p; options.requirements.integers = integers;
+    const auto r = require(resolveConditions(raw, command, evaluator, options));
+    check(decisionName(r.decisions.at(0)) == "unknown:unknown macro: __has_include", "boolean precision: macro argument: " + decisionName(r.decisions.at(0)));
+  }
+  std::cout << "PASS boolean precision self-test\n";
+}
 int run(int argc, char** argv) {
   normalizationSelfTest();
   const std::filesystem::path root = DISTILL_RESOLVE_CASES;
@@ -319,6 +384,11 @@ int run(int argc, char** argv) {
   if (gcc) {
     probe = require(probeCompiler(*gcc, fixtureCommand, po));
     local = localProfile(*probe, temporary.path);
+  }
+  if (local) {
+    const auto integers = profileRequirements(*local).integers;
+    check(integers.has_value(), "local integer model unavailable");
+    booleanPrecisionSelfTest(*evaluator, temporary.path, *integers);
   }
   std::vector<std::filesystem::path> cases;
   for (const auto& e : std::filesystem::directory_iterator(root)) if (e.is_directory()) cases.push_back(e.path());

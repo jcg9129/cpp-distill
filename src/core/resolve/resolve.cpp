@@ -9,6 +9,7 @@
 
 namespace distill {
 namespace {
+constexpr std::size_t maxEnumerated = 4; // At most 2^4 evaluator calls per directive.
 template<class T> T take(Result<T> r) { if (!r.ok()) throw r.error(); return std::move(r.value()); }
 bool opening(std::string_view n) { return n == "if" || n == "ifdef" || n == "ifndef"; }
 bool conditional(std::string_view n) { return opening(n) || n == "elif" || n == "elifdef" || n == "elifndef" || n == "else" || n == "endif"; }
@@ -164,9 +165,11 @@ struct Engine {
       expression = tokens((d.name == "ifndef" || d.name == "elifndef" ? "!defined(" : "defined(") + expression[0].text + ")");
     }
     std::map<std::string, bool, std::less<>> closure; // true = value used, false = defined only
-    bool booleanOnly = true, dialectSensitive = false;
+    bool booleanOnly = true, dialectSensitive = false, invocation = false;
     std::size_t visited = 0, closureDepth = 0;
     std::string reason;
+    // Unknown names used only under `defined` (docs/reviews/2026-11-18-boolean-precision.md).
+    std::vector<std::string> enumerated;
     std::function<void(const std::vector<Token>&, const std::set<std::string, std::less<>>&)> visit;
     visit = [&](const auto& ts, const auto& bound) {
       checkDeadline();
@@ -196,10 +199,16 @@ struct Engine {
         entry->second = entry->second || value;
         if (value && (name == "true" || name == "false") && f.state == MacroState::undefined) { dialectSensitive = true; continue; }
         if (value && name.starts_with("__has_") && j + 1 < ts.size() && ts[j + 1].text == "(" && f.state != MacroState::known) { reason = "builtin invocation: " + name; break; }
-        if (f.state == MacroState::unknown) { reason = "unknown macro: " + name; break; }
+        if (f.state == MacroState::unknown) {
+          // `defined U` is 0 or 1 before macro replacement whatever U expands
+          // to; a value use can change the parse, so it is never enumerated.
+          if (!value) { if (std::find(enumerated.begin(), enumerated.end(), name) == enumerated.end()) enumerated.push_back(name); continue; }
+          reason = "unknown macro: " + name; break;
+        }
         if (value && f.state == MacroState::definedUnknown) { reason = (f.activeSpecialBuiltin() ? "builtin invocation: " : "unknown definition: ") + name; break; }
         if (expand && f.state == MacroState::known) {
           if (!f.definition) { reason = "missing definition: " + name; break; }
+          invocation = invocation || f.definition->functionLike;
           std::set<std::string, std::less<>> parameters;
           for (const auto& p : f.definition->parameters) parameters.insert(p.ends_with("...") ? p.substr(0, p.size() - 3) : p);
           if (f.definition->variadic) { parameters.insert("__VA_ARGS__"); parameters.insert("__VA_OPT__"); dialectSensitive = true; }
@@ -215,6 +224,8 @@ struct Engine {
     std::string source;
     for (const auto& [name, value] : closure) {
       const auto found = state.find(name); const auto f = found == state.end() ? initial(name) : found->second;
+      // Decisions are invariant under every value of an enumerated name; no fact is used.
+      if (!value && f.state == MacroState::unknown) continue;
       const bool external = std::any_of(f.provenance.begin(), f.provenance.end(), [](auto o) {
         return o != FactOrigin::source && o != FactOrigin::systemHeader && o != FactOrigin::pragma && o != FactOrigin::join;
       });
@@ -222,6 +233,14 @@ struct Engine {
       if (f.state == MacroState::known) source += definition(name, *f.definition);
       else if (f.state == MacroState::definedUnknown) source += "#define " + name + " 1\n";
     }
+    // In a macro argument, `defined U` is macro-generated and U may be expanded
+    // before `defined` sees it; only names outside any invocation are exact.
+    if (reason.empty() && !enumerated.empty() && (invocation || enumerated.size() > maxEnumerated)) reason = "unknown macro: " + enumerated.front();
+    // A lone (negated) `defined U` (#ifdef/#ifndef) depends on U: no evaluator call.
+    if (reason.empty() && !enumerated.empty() && std::all_of(expression.begin(), expression.end(), [&](const Token& t) {
+          return t.text == "defined" || t.text == "!" || t.text == "(" || t.text == ")" || t.text == enumerated.front();
+        }) && std::count_if(expression.begin(), expression.end(), [](const Token& t) { return t.text == "defined"; }) == 1)
+      reason = "unknown macro: " + enumerated.front();
     if (reason.empty() && !booleanOnly && !requirements.integers) reason = "unknown integer model";
     if (reason.empty() && dialectSensitive && !requirements.dialect) reason = "unknown dialect";
     if (!reason.empty()) { decide(i, Decision::unknown, reason); return; }
@@ -229,15 +248,26 @@ struct Engine {
     if (!booleanOnly) r.requirements.integers = requirements.integers;
     if (dialectSensitive) r.requirements.dialect = requirements.dialect;
     const auto conditionText = spell(expression);
+    std::string defines;
+    for (const auto& name : enumerated) defines += "#define " + name + " 1\n";
     auto unique = [&](std::string name) {
-      while (source.find(name) != source.npos || conditionText.find(name) != conditionText.npos) name += '_';
+      while (source.find(name) != source.npos || defines.find(name) != defines.npos || conditionText.find(name) != conditionText.npos) name += '_';
       return name;
     };
     const auto yes = unique("DISTILL_CONDITION_TRUE"), no = unique("DISTILL_CONDITION_FALSE");
-    source += "#if " + conditionText + '\n' + yes + "\n#else\n" + no + "\n#endif\n";
-    auto evaluated = evaluator.evaluate({source, r.requirements, yes, no, options.deadline});
-    if (!evaluated.ok()) decide(i, Decision::unknown, "evaluator error: " + evaluated.error().message);
-    else decide(i, evaluated.value() ? Decision::trueValue : Decision::falseValue);
+    const auto test = "#if " + conditionText + '\n' + yes + "\n#else\n" + no + "\n#endif\n";
+    // Every definedness combination must evaluate, without error, to one value.
+    std::optional<bool> value;
+    for (std::size_t mask = 0; mask < (std::size_t{1} << enumerated.size()); ++mask) {
+      checkDeadline();
+      std::string variant = source;
+      for (std::size_t k = 0; k < enumerated.size(); ++k) if (mask >> k & 1) variant += "#define " + enumerated[k] + " 1\n";
+      auto evaluated = evaluator.evaluate({variant + test, r.requirements, yes, no, options.deadline});
+      if (!evaluated.ok()) { decide(i, Decision::unknown, "evaluator error: " + evaluated.error().message); return; }
+      if (value && *value != evaluated.value()) { decide(i, Decision::unknown, "unknown macro: " + enumerated.front()); return; }
+      value = evaluated.value();
+    }
+    decide(i, *value ? Decision::trueValue : Decision::falseValue);
   }
   void transition(std::size_t i, States& state) {
     const auto& l = scan.lines[i]; if (!l.directive) return;

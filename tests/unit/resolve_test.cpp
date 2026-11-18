@@ -272,8 +272,11 @@ TEST(resolve_real_approximate_shipped_x86_identity_after_headers) {
     r = resolve("#include <cstdint>\n#ifdef i386\nx\n#endif\n", *e, o);
     CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
     for (const auto* write : {"#undef __i386__\n", "#define __i386__ 1\n"}) {
-      r = resolve(std::string(write) + "#include <cstdint>\n" + guard, *e, o);
+      r = resolve(std::string(write) + "#include <cstdint>\n#ifdef __i386__\n#endif\n" + guard, *e, o);
       CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+      // The kept __x86_64__ fact alone decides the guard (boolean precision).
+      CHECK_EQ(r.decisions.at(2).decision, Decision::trueValue);
+      CHECK_EQ(r.decisions.at(2).external.size(), 3u);
     }
     r = resolve("#include <vendor.h>\n#include <cstdint>\n" + guard, *e, o);
     CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
