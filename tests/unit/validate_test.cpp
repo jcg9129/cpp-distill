@@ -61,6 +61,18 @@ TEST(validate_preprocess_pragma_boundaries) {
   CHECK(!comparePreprocessed(a, b).ok());
   CHECK(!comparePreprocessed("# 1 \"a\"\n#pragma one\n", "# 1 \"a\"\none\n").ok());
 }
+TEST(validate_unmarked_preprocess_same_tokens_and_system_lines) {
+  const std::string head = "# 1 \"/usr/include/s.h\" 1 3\nint s;\n";
+  const auto marked = head + "# 7 \"main.cpp\"\n#pragma once\nint x;\n";
+  CHECK(compareUnmarkedPreprocessed(marked, head + "# 2 \"u.cpp\"\n#pragma once\nint x;\n").ok());
+  for (const auto& unmarked : {std::string("# 2 \"/usr/include/s.h\" 1 3\nint s;\n# 2 \"u.cpp\"\n#pragma once\nint x;\n"), // System line moved.
+                               head + "# 2 \"u.cpp\"\n#pragma once int x;\n",  // Boundary lost.
+                               head + "# 2 \"u.cpp\"\n#pragma once\nint y;\n", // Token differs.
+                               head + "# 2 \"u.cpp\"\n#pragma once\n"}) {      // Token lost.
+    auto r = compareUnmarkedPreprocessed(marked, unmarked); CHECK(!r.ok());
+    if (!r.ok()) CHECK(r.error().message.starts_with("unmarked preprocess difference at token "));
+  }
+}
 TEST(validate_preprocess_user_identity_system_spelling) {
   InlineResult raw;
   raw.userFiles = {{"/root/a.h", "a.h", {1,2}, 0, 1}, {"/root/alias.h", "alias.h", {1,2}, 0, 1}};
@@ -88,10 +100,15 @@ TEST(validate_cli_options) {
   auto defaults = parseDistillOptions({"--keep","first","--keep","second","--strip-comments","main.cpp"});
   CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(defaults.value().stripComments);
   CHECK_EQ(defaults.value().keep,(std::vector<std::string>{"first","second"}));
+  CHECK(!defaults.value().noLineMarkers);
+  auto lines = parseDistillOptions({"--no-line-markers","main.cpp"});
+  CHECK(lines.ok()); CHECK(lines.value().noLineMarkers);
+  CHECK(!parseDistillOptions({"--no-line-markers","--judge-probe","x"}).ok());
+  CHECK(distillHelp().find("  --no-line-markers  ") != std::string::npos);
   auto samples = parseDistillOptions({"--verify-run","one.in","--verify-run","dir","main.cpp"});
   CHECK(samples.ok()); CHECK_EQ(samples.value().verifyRun,(std::vector<std::string>{"one.in","dir"}));
   CHECK(parseDistillOptions({"main.cpp"}).ok());
-  for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}})
+  for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}, {"--no-line-markers"}})
     CHECK(!parseDistillOptions(args).ok());
 }
 

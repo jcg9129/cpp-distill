@@ -715,6 +715,124 @@ int main(int argc, char** argv) {
       check(kept("storage"),"pointer destination dependency lost");
       check(!kept("unrelated"),"unrelated function retained");
     });
+    // --no-line-markers observations (docs/reviews/2026-11-18-no-line-markers.md).
+    auto hasUse = [&](std::string_view what) {
+      return std::any_of(m.positionUses.begin(),m.positionUses.end(),[&](const auto& u) { return u.what.starts_with(what); });
+    };
+    auto uses = [&] {
+      std::string s; for (const auto& u : m.positionUses) s += "\n    " + u.what + "@" + std::to_string(u.offset);
+      return s;
+    };
+    run("line marker position uses in user code", [&] {
+      m = extract("int f(){return 1;}\nint main(){return f();}\n",o);
+      check(m.positionUses.empty(),"spurious position use:" + uses());
+      m = extract("int main(){return __LINE__;}\n",o);
+      check(hasUse("__LINE__ expanded"),"__LINE__ missing:" + uses());
+      check(!m.positionUses.empty() && m.positionUses.front().offset == m.text.find("__LINE__"),"__LINE__ offset:" + uses());
+      m = extract("#define WHERE __FILE__\nconst char* f(){return WHERE;}\nint main(){}\n",o);
+      check(hasUse("__FILE__ expanded"),"nested __FILE__ missing:" + uses());
+      m = extract("#if __LINE__ > 0\nint x;\n#endif\nint main(){}\n",o);
+      check(hasUse("__LINE__ expanded"),"condition __LINE__ missing:" + uses());
+      m = extract("int where(int line = __builtin_LINE()){return line;}\nint main(){return where();}\n",o);
+      check(hasUse("__builtin_LINE"),"user default __builtin_LINE missing:" + uses());
+      m = extract("#define AT __builtin_FILE()\nconst char* f(){return AT;}\nint main(){}\n",o);
+      check(hasUse("__builtin_FILE"),"macro-produced __builtin_FILE missing:" + uses());
+      m = extract("const char* f(){return __PRETTY_FUNCTION__;}\nint main(){}\n",o);
+      check(hasUse("__PRETTY_FUNCTION__"),"__PRETTY_FUNCTION__ missing:" + uses());
+      // Third review: every function-name expression counts (fail closed);
+      // a name can embed an unnamed type's presumed location.
+      m = extract("const char* f(){return __func__;}\nint main(){}\n",o);
+      check(hasUse("function name expression"),"__func__ missing:" + uses());
+      m = extract("const char* g(){return __builtin_FUNCTION();}\nint main(){}\n",o);
+      check(hasUse("source position builtin"),"__builtin_FUNCTION missing:" + uses());
+      m = extract("enum { anon = 1 };\nstruct C { operator decltype(anon)() const { (void)__func__; return anon; } };\n"
+                  "int main(){return C{} - 1;}\n",o);
+      check(hasUse("function name expression"),"__func__ in a conversion to an unnamed enum missing:" + uses());
+      m = extract("const char* seen;\n"
+                  "int f(decltype([] {\n"
+                  "  enum { e };\n"
+                  "  struct C {\n"
+                  "    operator decltype(e)() const {\n"
+                  "      seen = __func__;\n"
+                  "      return e;\n"
+                  "    }\n"
+                  "  };\n"
+                  "  return int(C{});\n"
+                  "}) cb) { return cb(); }\n"
+                  "int main(){return f({});}\n",o);
+      check(hasUse("function name expression"),"__func__ in a parameter type's conversion to an unnamed enum missing:" + uses());
+      m = extract("#define S(x) #x\nconst char* s = S(__LINE__);\nint main(){}\n",o);
+      check(m.positionUses.empty(),"a stringized __LINE__ is not expanded:" + uses());
+    });
+    run("line marker position uses from system headers", [&] {
+      // Each case writes its own test-only -isystem header: any function-name
+      // or position construct anywhere in the TU keeps the markers, so cases
+      // must not share one.
+      const auto dir = temp.path / "position-system";
+      std::filesystem::create_directories(dir);
+      std::size_t header = 0;
+      auto withHeader = [&](const std::string& text, const std::string& body) {
+        const auto name = "case" + std::to_string(header++) + ".h";
+        { std::ofstream h(dir / name, std::ios::binary); h << "#pragma once\n" << text; }
+        Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
+        SearchDirectory d; d.path = dir; d.kind = IncludeKind::system; c.probe.searchLists.directories.push_back(d);
+        ResolveResult flat; flat.text = "#include <" + name + ">\n" + body;
+        for (std::size_t i = 0, line = 1; i < flat.text.size(); ++i) if (i == 0 || flat.text[i-1] == '\n') flat.lineMap.push_back(SourceLocation{"original.hpp",line++});
+        m = extracted(take(preparePruning(c,{},flat)),o);
+        check(std::none_of(m.disabledReasons.begin(),m.disabledReasons.end(),[](const auto& why) { return why.starts_with("Clang parse error"); }),"header case does not parse");
+      };
+      const std::string where = "inline int where(int line = __builtin_LINE()) { return line; }\n";
+      const std::string signature = "template<class T> const char* signature(T) { return __PRETTY_FUNCTION__; }\n";
+      // A parameter's default is evaluated only at a call that uses it.
+      withHeader(where + "template<class T> int plain(T) { return 0; }\n","int main(){return plain(1) + where(7) - 7;}\n");
+      check(m.positionUses.empty(),"plain program blocked (unused default argument counted):" + uses());
+      withHeader(where,"int main(){return where();}\n");
+      check(hasUse("source position builtin (outside user code"),"system default argument at a call missing:" + uses());
+      check(!hasUse("__builtin_LINE"),"system token attributed to user code:" + uses());
+      withHeader("struct Logged { int line = __builtin_LINE(); };\n","int main(){Logged l{}; return l.line;}\n");
+      check(hasUse("source position builtin"),"default member initializer missing:" + uses());
+      withHeader("namespace std { inline namespace __v { struct stacktrace_entry { int source_line() const { return 0; } };\n"
+                 "inline stacktrace_entry here() { return {}; } } }\n","int main(){return std::here().source_line();}\n");
+      check(hasUse("value of type"),"stacktrace-typed value missing:" + uses());
+      withHeader("namespace std::meta { inline int probe() { return 0; } }\n","int main(){return std::meta::probe();}\n");
+      check(hasUse("use of std::meta::probe"),"std::meta use missing:" + uses());
+      withHeader("#define NONSTANDARD_CONSTANT 3\n","int main(){return NONSTANDARD_CONSTANT - 3;}\n");
+      check(hasUse("non-standard system macro NONSTANDARD_CONSTANT expanded"),"non-standard system macro missing:" + uses());
+      withHeader("#define EOF (-1)\n","int main(){return EOF + 1;}\n");
+      check(m.positionUses.empty(),"standard macro EOF blocked:" + uses());
+      withHeader("#define assert(e) ((e) ? (void)0 : (void)__LINE__)\n","int main(){assert(1); return 0;}\n");
+      check(hasUse("__LINE__ expanded") && !hasUse("non-standard system macro"),"assert without NDEBUG:" + uses());
+      // Codex reproducers: a name in any system template, whatever its
+      // arguments (closure, int, nested Outer<closure>::Inner, unnamed-enum
+      // integral value, 20-deep nesting), local classes at any depth, dump_struct.
+      withHeader(signature,"int main(){return signature([]{})[0] == 0;}\n");
+      check(hasUse("function name expression"),"system __PRETTY_FUNCTION__ with a closure:" + uses());
+      withHeader(signature,"int main(){return signature(1)[0] == 0;}\n");
+      check(hasUse("function name expression"),"instantiation with int arguments:" + uses());
+      withHeader(signature + "template<class T> struct Outer { struct Inner {}; };\n",
+                 "int main(){auto l = []{}; return signature(Outer<decltype(l)>::Inner{})[0] == 0;}\n");
+      check(hasUse("function name expression"),"nested type of a closure specialization:" + uses());
+      // Use an in-range value without a named enumerator so the printed
+      // argument includes the unnamed enum's type and source location.
+      withHeader("template<auto V> const char* valueSignature() { return __PRETTY_FUNCTION__; }\n",
+                 "enum { anon_value = 1 };\nint main(){return valueSignature<static_cast<decltype(anon_value)>(0)>()[0] == 0;}\n");
+      check(hasUse("function name expression"),"integral argument of an unnamed enum:" + uses());
+      std::string nested = "decltype(l)";
+      for (int i = 0; i < 20; ++i) nested = "W<" + nested + ">";
+      withHeader(signature + "template<class T> struct W {};\n","int main(){auto l = []{}; return signature(" + nested + "{})[0] == 0;}\n");
+      check(hasUse("function name expression"),"deeply nested argument:" + uses());
+      withHeader("template<class T> struct Box { const char* name() const { return __func__; } };\n",
+                 "struct Mine {};\nint main(){return Box<Mine>{}.name()[0] == 0;}\n");
+      check(hasUse("function name expression"),"system __func__ in a specialization member:" + uses());
+      withHeader("template<class T> const char* make(T) {\n"
+                 "  struct Local { struct Nested { const char* name() { return __PRETTY_FUNCTION__; } }; };\n"
+                 "  return typename Local::Nested{}.name(); }\n","int main(){return make([]{})[0] == 0;}\n");
+      check(hasUse("function name expression"),"nested local class in a system template:" + uses());
+      withHeader("extern \"C\" int printf(const char*, ...);\n"
+                 "template<class T> int dumped(T v) { __builtin_dump_struct(&v, printf); return 0; }\n",
+                 "int main(){struct { int a; } s{}; return dumped(s);}\n");
+      check(hasUse("builtin __builtin_dump_struct"),"__builtin_dump_struct in a system template:" + uses());
+    });
     run("standard library and builtin functions", [&] {
       // Use the native GCC's target and header search, just like extraction
       // cases; the header-free synthetic models above use a fixed target.

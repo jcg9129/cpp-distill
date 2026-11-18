@@ -182,12 +182,50 @@ struct Pipeline {
       result.checks.push_back({"pruned","passed",flatConfiguration,{}});
       result.artifact = "pruned"; result.bytes = bytes;
       result.assumptions.insert(result.retention->assumptions.begin(),result.retention->assumptions.end());
+      if (options.noLineMarkers) unmark(rendered,path);
     } catch (const Error& e) {
       if (e.message.starts_with("--keep ")) throw;
       result.runtime = flatRuntime;
       result.checks.push_back({"pruned",e.message,flatConfiguration,{}});
       result.diagnostic += "pruned rejected: " + e.message + "; using flat\n";
     }
+  }
+  std::string markedRuntime;
+  void keepMarkers(const std::string& why) {
+    if (result.lineMarkers.empty()) result.lineMarkers = "kept: " + why;
+    result.diagnostic += "line markers kept: " + why + '\n';
+  }
+  // Runs after pruned passed every check; any failure keeps the checked
+  // marked bytes (docs/reviews/2026-11-18-no-line-markers.md).
+  void unmark(const RenderedSource& rendered, const std::filesystem::path& marked) {
+    const auto why = lineMarkerObservations(*result.pruningModel,flatConfiguration->argv);
+    if (!why.empty()) {
+      const std::size_t shown = std::min<std::size_t>(why.size(),10);
+      for (std::size_t i = 0; i < shown; ++i) keepMarkers(why[i]);
+      if (why.size() > shown) result.diagnostic += "line markers kept: " + std::to_string(why.size() - shown) + " more observations\n";
+      return;
+    }
+    markedRuntime = result.runtime;
+    try {
+      step("unmarked checks");
+      const auto bytes = take(withoutLineMarkers(rendered));
+      take(unmarkedInvariant(rendered.provenance.text,bytes));
+      const auto path = work.path / "unmarked.cpp"; write(path,bytes);
+      take(compareUnmarkedPreprocessed(preprocess(*flatConfiguration,marked,true),preprocess(*flatConfiguration,path,true)));
+      auto program = build(*flatConfiguration,path,true,"unmarked");
+      compareRuns(runs["flat"],execute(*flatConfiguration,program));
+      checkedBytes(path,bytes); checkedBytes(marked,rendered.provenance.text);
+      if (Clock::now() >= deadline) throw Error{"unmarked checks deadline exceeded"};
+      result.checks.push_back({"pruned without line markers","passed",flatConfiguration,{}});
+      result.bytes = bytes; result.lineMarkers = "omitted";
+      result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
+    } catch (const Error& e) { failedUnmarked(e.message); }
+    catch (const std::exception& e) { failedUnmarked(e.what()); }
+  }
+  void failedUnmarked(const std::string& message) {
+    result.runtime = markedRuntime;
+    result.checks.push_back({"pruned without line markers",message,flatConfiguration,{}});
+    keepMarkers("marker-free check failed: " + message);
   }
   std::string preprocess(const Configuration& c, const std::filesystem::path& file, bool generated) {
     ProcessSpec spec; spec.argv = argv(c, file, "-", generated); spec.argv.push_back("-E");
@@ -370,6 +408,8 @@ struct Pipeline {
       if (result.artifact == "raw") result.runtime = rawRuntime;
       if (result.artifact == "flat") prune(raw);
       else if (!options.keep.empty()) throw Error{"--keep " + options.keep.front() + ": requires a checked flat configuration"};
+      if (options.noLineMarkers && result.lineMarkers.empty())
+        keepMarkers(result.pruningModel ? "no checked pruned artifact" : "no parse");
       if (result.verification == "target") result.assumptions.insert("A4");
       result.exitCode = options.strict && (result.artifact != "pruned" || result.verification != "target") ? 3 : 0;
       result.resultLine = "distill: wrote " + result.artifact + " (" + result.verification + "), runtime " + result.runtime;

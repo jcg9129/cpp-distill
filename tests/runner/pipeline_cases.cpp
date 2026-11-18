@@ -216,6 +216,7 @@ int run(int argc, char** argv) {
         s.argv = {pathToUtf8(binary), "--report", "report.txt", "-o", "submit.cpp"};
         if (value("prune") != "yes" && value("prune") != "diagnostics") s.argv.push_back("--no-prune");
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
+        if (value("lines") == "no") s.argv.push_back("--no-line-markers");
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? pathToUtf8(fixture.provenance.file.filename()) : value("profile")); }
@@ -288,7 +289,7 @@ int run(int argc, char** argv) {
         // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
         DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
-        o.stripComments = value("strip") == "yes";
+        o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no";
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (value("prune") == "yes" || value("samples") == "yes") {
           write(cwd / "sample.in",value("sample")); o.samples = {{"sample.in",cwd / "sample.in"}};
@@ -325,7 +326,7 @@ int run(int argc, char** argv) {
         auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
-            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp") continue;
+            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp") continue;
             workPath = p.parent_path();
             check(std::filesystem::equivalent(workPath.parent_path(), workRoot), "work is outside requested temp root");
             check(spec.cwd == workPath, "generated check uses user cwd");
@@ -339,6 +340,7 @@ int run(int argc, char** argv) {
               if (p.filename() == "raw.cpp") builtInputs["raw"] = read(p);
               if (p.filename() == "flat.cpp") builtInputs["flat"] = read(p);
               if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
+              if (p.filename() == "unmarked.cpp") builtInputs["unmarked"] = read(p);
             }
           auto process = caseRunner(spec);
           // Test-only bad analysis: remove a user-pasted callee's positive AST
@@ -385,7 +387,9 @@ int run(int argc, char** argv) {
           if (artifact == "raw") kind = "local";
           check(kind == value("configuration"), "wrong configuration kind: " + kind);
           // The returned bytes are exactly the checked output; no renderer runs afterwards.
-          check(builtInputs.contains(artifact) && bytes == builtInputs.at(artifact), "returned bytes differ from compiled bytes");
+          const auto written = result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
+          check(builtInputs.contains(written) && bytes == builtInputs.at(written), "returned bytes differ from compiled bytes");
+          check((value("lines") == "no") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
         } else {
           check(bytes.empty(), "failed pipeline returned output");
           if (value("kept") == "yes") {

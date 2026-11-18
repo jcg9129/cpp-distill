@@ -178,6 +178,7 @@ Distill options (before the compiler name):
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
 | `--strip-comments` | remove all comments |
+| `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
 | `-v` | progress on stderr |
 
@@ -621,6 +622,37 @@ Textual substitution, not preprocessing:
   writes, and every reader of generated markers applies the same rule
   (`PresumedFile`), rejecting a short marker without a marker in its segment
   ([reviews/2026-11-18-short-line-markers.md](reviews/2026-11-18-short-line-markers.md)).
+- **Opt-in exception** (`--no-line-markers`, user, 2026-11-18): markers
+  only change presumed positions of user text, so they are unobservable in a
+  program that never reads them. Only the pruning parse (§4.7) can show that,
+  so the option applies only to a written `pruned` artifact (else
+  `line markers kept: no parse` or `no checked pruned artifact`). The worker
+  records every *position use* with a user expansion location: expansions of
+  `__LINE__`, `__FILE__`, `__FILE_NAME__`, `__BASE_FILE__`,
+  `__INCLUDE_LEVEL__` (also nested and in conditions); final tokens
+  `__builtin_LINE`/`FILE`/`FILE_NAME`/`COLUMN`/`source_location`,
+  `__PRETTY_FUNCTION__` and MS signature names, `__builtin_dump_struct`;
+  call-site default arguments or default member initializers containing a
+  source-location builtin (including from system headers:
+  `std::source_location::current()`); values, declarations and types of
+  `std::source_location`, `std::basic_stacktrace`, `std::stacktrace_entry`,
+  `std::contracts::contract_violation`, and uses of `std::meta` or
+  `std::contracts`; system macros with a non-standard name invoked from user
+  code (their judge definition is unconstrained). A `-Werror…` option or a
+  user `#pragma GCC|clang diagnostic error` also keeps them (line-dependent
+  warnings would decide compilation). Any one keeps the markers and is
+  reported (`line markers kept: __LINE__ expanded at atl/x.hpp:12`). So does
+  any function-name expression (`__func__` included), source-location
+  builtin, unique-stable-name expression or naming builtin call *anywhere*
+  in the parsed translation unit, system or user, template pattern or
+  instantiation, or in a default argument evaluated at a call (one
+  fail-closed whole-TU visitor; Clang prints `(lambda at file:line)` in
+  function names); this loses omission when libstdc++ assertion paths
+  (`_GLIBCXX_ASSERTIONS`) are parsed.
+  Otherwise the checked `pruned` bytes minus exactly their generated marker
+  lines are checked again (§4.8) and written. This is not "markers on
+  demand" (§8): a program that can observe positions always keeps them
+  ([reviews/2026-11-18-no-line-markers.md](reviews/2026-11-18-no-line-markers.md)).
 
 `raw.cpp` behaves under any judge's preprocessor like the original files
 would with the user headers present.
@@ -1174,6 +1206,17 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   surviving token must have its intended logical file and line, and the
   retained source directives must keep their token sequence and order.
   Failure rejects the candidate.
+- **Marker-free output** (`--no-line-markers`, §4.4): derived only from a
+  `pruned` artifact that passed every check, by deleting exactly the
+  renderer's generated marker lines (each a whole `#line` line). An
+  independent re-lex must find the same tokens, kinds and directive
+  boundaries as the marked output minus its `#line` lines and no line
+  directive; `-E` of both in the `flat` configuration must give the same
+  tokens and `#pragma` boundaries, with tokens of the same presumed file
+  (system headers) on the same line; the result builds and its runs equal
+  `flat`'s. A failure keeps the marked `pruned` bytes. The rendering
+  invariant with line provenance applies to the marked output; the proof
+  that positions are unobserved replaces it for the marker-free one.
 - `--strip-comments` (D3-1-10) is part of rendering every artifact (`raw`,
   `flat`, `pruned`) and keeps token spellings, directive boundaries and
   logical lines: a comment outside a directive becomes one space, or its
@@ -1230,7 +1273,9 @@ The header also names the parse configuration, every pruning-disable
 reason, the pruning-policy version, the ADL registry version and the dialect
 and extension coverage used (D3-2-7); A6 is listed whenever a family was
 removed; a failed candidate's analysis is reported but certifies nothing
-about the artifact written.
+about the artifact written. With `--no-line-markers` the report (and
+stderr) has `line markers omitted: …` and a `pruned without line markers`
+check, or one `line markers kept: <reason>` line per reason (at most ten).
 
 D2e: the report keeps the resolution's own provenance separate from the
 facts each configuration's rerun observed (matching decisions need not use
@@ -1376,7 +1421,8 @@ with the local compiler's macros; preprocessor-based flattening; include
 hoisting and deduplication outside resolution; several `.cpp` files; repair in
 the first version; deciding roots with any constant evaluator; writing
 unchecked files; accepting options by prefix; pruning with unknown
-conditionals left in user code; line markers only on demand.
+conditionals left in user code; line markers only on demand (omitting
+them is opt-in and only when the parse proves no position is observed, §4.4).
 
 ## 9. Open questions
 

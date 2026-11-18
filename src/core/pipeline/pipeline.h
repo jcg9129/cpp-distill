@@ -8,6 +8,9 @@ Result<std::vector<RunSample>> collectRunSamples(const std::vector<std::string>&
                                                 const std::filesystem::path& cwd);
 struct DistillOptions {
   bool noPrune = false, stripComments = false;
+  // Opt-in: omit generated #line markers from a pruned result when the parse
+  // proves no position is observed (docs/reviews/2026-11-18-no-line-markers.md).
+  bool noLineMarkers = false;
   std::vector<std::string> keep;
   std::filesystem::path pruningWorker;
   // CLI selection and internal callers share the same bounded comparisons.
@@ -33,6 +36,8 @@ struct PipelineResult {
   int exitCode = 1;
   std::string artifact, verification = "local", runtime = "not requested", bytes;
   std::string diagnostic, resultLine, report;
+  // With noLineMarkers: "omitted" or "kept: <first reason>"; empty otherwise.
+  std::string lineMarkers;
   std::optional<std::filesystem::path> keptWork;
   std::vector<ArtifactCheck> checks;
   ResolveResult resolution;

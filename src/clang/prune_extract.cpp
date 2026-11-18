@@ -4,6 +4,7 @@
 #include "resources.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Attr.h"
+#include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Mangle.h"
@@ -78,6 +79,21 @@ struct Extraction {
   }
   bool user(clang::SourceLocation loc) const { return loc.isValid() && sm.isWrittenInMainFile(sm.getExpansionLoc(loc)); }
   std::size_t offset(clang::SourceLocation loc) const { return sm.getFileOffset(sm.getExpansionLoc(loc)); }
+  // --no-line-markers (docs/reviews/2026-11-18-no-line-markers.md). Bounded:
+  // any single use keeps the markers, so later ones add nothing.
+  std::set<std::pair<std::size_t,std::string>> positionSeen;
+  void position(clang::SourceLocation loc, std::string what) {
+    if (!user(loc) || model.positionUses.size() >= 64) return;
+    const auto at = offset(loc);
+    if (at > model.text.size() || !positionSeen.emplace(at,what).second) return;
+    model.positionUses.push_back({at,std::move(what)});
+  }
+  // A use without a user location (e.g. instantiated from system code) still
+  // keeps the markers; it is reported at the start of the text.
+  void positionOutside(std::string what) {
+    if (model.positionUses.size() >= 64 || !positionSeen.emplace(0,what).second) return;
+    model.positionUses.push_back({0,std::move(what)});
+  }
   void disable(std::string reason) {
     if (std::find(model.disabledReasons.begin(),model.disabledReasons.end(),reason) == model.disabledReasons.end()) model.disabledReasons.push_back(std::move(reason));
   }
@@ -318,6 +334,18 @@ bool supportedAttribute(const Attr* a, const Decl* declaration, Extraction& e) {
   return true;
 }
 
+// Builtin macros whose expansion is the presumed position (rule 1), and
+// final tokens that read or print presumed positions (rule 2).
+bool positionMacro(std::string_view name) {
+  return name == "__LINE__" || name == "__FILE__" || name == "__FILE_NAME__" || name == "__BASE_FILE__" || name == "__INCLUDE_LEVEL__";
+}
+bool positionToken(std::string_view name) {
+  static const std::set<std::string,std::less<>> names = {
+    "__builtin_LINE", "__builtin_FILE", "__builtin_FILE_NAME", "__builtin_COLUMN", "__builtin_source_location",
+    "__builtin_FUNCSIG", "__PRETTY_FUNCTION__", "__FUNCSIG__", "__FUNCDNAME__", "L__FUNCSIG__", "__builtin_dump_struct"
+  };
+  return names.contains(name);
+}
 class Macros final : public PPCallbacks {
   Extraction& e;
   std::map<std::string,MacroFact,std::less<>> sourceBindings;
@@ -387,6 +415,12 @@ public:
   void finalToken(const clang::Token& token) {
     if (!e.user(token.getLocation())) return;
     attributeToken(token);
+    // Keywords carry identifier info too; annotation and literal tokens don't.
+    if (!token.isAnnotation() && !token.isLiteral()) {
+      const auto* info = token.getIdentifierInfo();
+      if (info && positionToken(std::string_view(info->getName().data(),info->getName().size())))
+        e.position(token.getLocation(),info->getName().str());
+    }
     if (!token.is(tok::identifier)) return;
     const auto name = token.getIdentifierInfo()->getName().str();
     if (sourceBindings.contains(name)) return;
@@ -409,6 +443,7 @@ public:
     if (!e.user(range.getBegin())) return;
     const auto* mi = definition.getMacroInfo(); if (!mi) { e.disable("missing macro expansion definition at " + range.getBegin().printToString(e.sm)); return; }
     const auto offset = e.offset(range.getBegin()); const auto name = token.getIdentifierInfo()->getName().str();
+    if (positionMacro(name)) e.position(range.getBegin(),name + " expanded"); // Conditions included.
     bool condition = false;
     for (auto d : e.conditionRanges) if (d.begin <= offset && offset < d.end) condition = true;
     if (condition) return; // All user conditions have already been resolved or disable pruning.
@@ -421,6 +456,10 @@ public:
     const bool builtin = !source && (mi->isBuiltinMacro() || !def.isValid() ||
         e.sm.isWrittenInBuiltinFile(def) || command || !e.sm.isInSystemHeader(def));
     const bool system = !source && !builtin && def.isValid() && e.sm.isInSystemHeader(def);
+    // Rule 5: invoked from user code (name not spelled inside a system header;
+    // pasted names count) and not constrained by the standard on the judge.
+    if (system && !isStandardMacroName(name) && !e.sm.isInSystemHeader(e.sm.getSpellingLoc(token.getLocation())))
+      e.position(range.getBegin(),"non-standard system macro " + name + " expanded");
     const bool judgePredefined = e.model.judgeInitial.contains(name) &&
         std::any_of(e.model.judgeInitial.at(name).provenance.begin(),e.model.judgeInitial.at(name).provenance.end(),[](auto o) { return o == FactOrigin::compilerBuiltin || o == FactOrigin::specialBuiltin || o == FactOrigin::nativeModel; });
     MacroFact judge;
@@ -787,6 +826,155 @@ public:
     systemCurrent = noFamily;
   }
 };
+// --no-line-markers rules 3 and 4 (docs/reviews/2026-11-18-no-line-markers.md).
+bool stdRoot(const DeclContext* c) {
+  const NamespaceDecl* outer = nullptr;
+  for (; c && !c->isTranslationUnit(); c = c->getParent())
+    if (const auto* ns = dyn_cast<NamespaceDecl>(c); ns && !ns->isInline()) outer = ns;
+  return outer && outer->getName() == "std";
+}
+// std::meta or std::contracts; inline (versioning) namespaces are transparent.
+bool positionNamespace(const DeclContext* c) {
+  std::vector<llvm::StringRef> names;
+  for (; c && !c->isTranslationUnit(); c = c->getParent())
+    if (const auto* ns = dyn_cast<NamespaceDecl>(c); ns && !ns->isInline()) names.push_back(ns->getName());
+  return names.size() >= 2 && names.back() == "std" && (names[names.size()-2] == "meta" || names[names.size()-2] == "contracts");
+}
+bool positionRecord(const RecordDecl* r) {
+  if (!r || !r->getIdentifier()) return false;
+  const auto name = r->getName();
+  return (name == "source_location" || name == "basic_stacktrace" || name == "stacktrace_entry" || name == "contract_violation") &&
+      stdRoot(r->getDeclContext());
+}
+bool positionEntity(const Decl* d) {
+  if (!d) return false;
+  if (const auto* r = dyn_cast<RecordDecl>(d); r && positionRecord(r)) return true;
+  if (const auto* ns = dyn_cast<NamespaceDecl>(d); ns && positionNamespace(ns)) return true;
+  for (const DeclContext* c = d->getDeclContext(); c && !c->isTranslationUnit(); c = c->getParent())
+    if (const auto* r = dyn_cast<RecordDecl>(c); r && positionRecord(r)) return true;
+  return positionNamespace(d->getDeclContext());
+}
+bool positionType(QualType t, unsigned depth = 0) {
+  if (t.isNull()) return false;
+  if (depth > 8) return true;
+  t = t.getNonReferenceType();
+  if (const auto* p = t->getAs<PointerType>()) return positionType(p->getPointeeType(),depth+1);
+  if (const auto* m = t->getAs<MemberPointerType>()) return positionType(m->getPointeeType(),depth+1);
+  if (const auto* a = t->getAsArrayTypeUnsafe()) return positionType(a->getElementType(),depth+1);
+  if (const auto* f = t->getAs<FunctionType>()) return positionType(f->getReturnType(),depth+1);
+  return positionEntity(t->getAsTagDecl());
+}
+// Builtin calls whose result can contain a type name, function name or source
+// position (Clang prints unnamed types and closures with their presumed
+// location). When unsure, a name is included: a false hit only keeps markers.
+bool namingBuiltin(llvm::StringRef name) {
+  for (const char* part : {"dump", "name", "FUNC", "FILE", "LINE", "COLUMN", "source_location", "sycl"})
+    if (name.contains(part)) return true;
+  return false;
+}
+// Codex reviews 1-3: hand-written partial walks (user code, instantiations,
+// local classes) each missed a route by which a function name or position
+// reaches the program (closures and unnamed types print with their presumed
+// location). One RecursiveASTVisitor over the whole translation unit,
+// patterns and instantiations, implicit code, lambdas, local classes,
+// parameter types and attributes, and every evaluated default argument/
+// initializer, records ANY function-name
+// expression, source-location builtin, unique-stable-name expression or
+// naming builtin call, wherever it is: no filtering by location, user-ness
+// or template arguments. The only thing not traversed is a parameter's
+// default argument as a declaration: it is evaluated only through a
+// CXXDefaultArgExpr at a call, which is traversed (so an unused
+// std::source_location::current() declaration doesn't count, a call does).
+class NameExpressions final : public RecursiveASTVisitor<NameExpressions> {
+  Extraction& e;
+  std::size_t visits = 0;
+  std::set<const Expr*> defaults;
+  void use(clang::SourceLocation loc, const std::string& what) {
+    if (e.user(loc)) e.position(loc,what);
+    else e.positionOutside(what + " (outside user code" + (loc.isValid() ? ": " + loc.printToString(e.sm) : std::string()) + ")");
+  }
+  bool evaluated(const Expr* x) {
+    if (!x || !defaults.insert(x).second) return true;
+    return TraverseStmt(const_cast<Expr*>(x));
+  }
+public:
+  explicit NameExpressions(Extraction& x) : e(x) {}
+  bool shouldVisitTemplateInstantiations() const { return true; }
+  bool shouldVisitImplicitCode() const { return true; }
+  bool TraverseParmVarDecl(ParmVarDecl* d) {
+    if (!WalkUpFromParmVarDecl(d)) return false;
+    if (auto* t = d->getTypeSourceInfo()) {
+      if (!TraverseTypeLoc(t->getTypeLoc())) return false;
+    } else if (!TraverseType(d->getType())) return false;
+    for (auto* a : d->attrs()) if (!TraverseAttr(a)) return false;
+    return true; // Default arguments are traversed only at calls below.
+  }
+  bool VisitStmt(Stmt*) {
+    // Fail closed: past the bound, stop and keep the markers.
+    if (++visits <= 50000000) return true;
+    e.positionOutside("AST scan limit for function names and positions");
+    return false;
+  }
+  bool VisitPredefinedExpr(PredefinedExpr* x) { use(x->getBeginLoc(),"function name expression"); return true; }
+  bool VisitSourceLocExpr(SourceLocExpr* x) { use(x->getBeginLoc(),"source position builtin"); return true; }
+  bool VisitSYCLUniqueStableNameExpr(SYCLUniqueStableNameExpr* x) { use(x->getBeginLoc(),"unique stable name expression"); return true; }
+  bool VisitCallExpr(CallExpr* x) {
+    const auto* callee = x->getDirectCallee();
+    if (callee && callee->getBuiltinID() && callee->getIdentifier() && namingBuiltin(callee->getName()))
+      use(x->getBeginLoc(),"builtin " + callee->getName().str());
+    return true;
+  }
+  // RAV may or may not descend into these (version-dependent); do it here.
+  bool VisitCXXDefaultArgExpr(CXXDefaultArgExpr* x) {
+    if (!evaluated(x->getExpr())) return false;
+    const auto* p = x->getParam();
+    if (p && p->hasDefaultArg() && !p->hasUnparsedDefaultArg() && !p->hasUninstantiatedDefaultArg()) return evaluated(p->getDefaultArg());
+    return true;
+  }
+  bool VisitCXXDefaultInitExpr(CXXDefaultInitExpr* x) {
+    if (!evaluated(x->getExpr())) return false;
+    return !x->getField() || evaluated(x->getField()->getInClassInitializer());
+  }
+};
+class Positions final : public RecursiveASTVisitor<Positions> {
+  Extraction& e;
+public:
+  explicit Positions(Extraction& x) : e(x) {}
+  bool shouldVisitTemplateInstantiations() const { return true; }
+  bool shouldVisitImplicitCode() const { return true; }
+  bool VisitExpr(Expr* x) {
+    if (e.user(x->getExprLoc()) && positionType(x->getType())) e.position(x->getExprLoc(),"value of type " + x->getType().getAsString());
+    return true;
+  }
+  bool VisitValueDecl(ValueDecl* d) {
+    if (e.user(d->getLocation()) && positionType(d->getType())) e.position(d->getLocation(),"declaration of type " + d->getType().getAsString());
+    return true;
+  }
+  bool VisitTypeLoc(TypeLoc t) {
+    if (e.user(t.getBeginLoc()) && positionType(t.getType())) e.position(t.getBeginLoc(),"type " + t.getType().getAsString());
+    return true;
+  }
+  bool VisitDeclRefExpr(DeclRefExpr* x) {
+    if (positionEntity(x->getDecl())) e.position(x->getLocation(),"use of " + x->getDecl()->getQualifiedNameAsString());
+    return true;
+  }
+  bool VisitMemberExpr(MemberExpr* x) {
+    if (positionEntity(x->getMemberDecl())) e.position(x->getMemberLoc(),"use of " + x->getMemberDecl()->getQualifiedNameAsString());
+    return true;
+  }
+  bool VisitUsingDirectiveDecl(UsingDirectiveDecl* d) {
+    if (positionEntity(d->getNominatedNamespace())) e.position(d->getLocation(),"using directive for a namespace with source positions");
+    return true;
+  }
+  bool VisitUsingShadowDecl(UsingShadowDecl* d) {
+    if (positionEntity(d->getTargetDecl())) e.position(d->getLocation(),"using declaration of " + d->getTargetDecl()->getQualifiedNameAsString());
+    return true;
+  }
+  bool VisitNamespaceAliasDecl(NamespaceAliasDecl* d) {
+    if (positionEntity(d->getNamespace())) e.position(d->getLocation(),"alias of a namespace with source positions");
+    return true;
+  }
+};
 class Consumer final : public ASTConsumer {
   Extraction& e;
 public:
@@ -807,6 +995,9 @@ public:
     Ownership ownership(e);
     for (auto [d,id] : e.declarations) { (void)id; ownership.TraverseDecl(const_cast<Decl*>(d)); }
     Dependencies dependencies(e); dependencies.run();
+    Positions positions(e); // Whole user TU, independent of family discovery.
+    for (auto* d : context.getTranslationUnitDecl()->decls()) if (e.user(d->getLocation())) positions.TraverseDecl(d);
+    NameExpressions(e).TraverseDecl(context.getTranslationUnitDecl()); // Whole TU, no filtering.
     for (auto [d,id] : e.declarations) {
       for (auto r : e.model.families[id].ranges) for (auto m : e.macroInvocations)
         if ((m.begin < r.begin && r.begin < m.end) || (m.begin < r.end && r.end < m.end))

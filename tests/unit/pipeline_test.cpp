@@ -61,6 +61,13 @@ struct Fixture {
             if (r.begin <= offset && offset < r.end) m.annotations.push_back({offset,id});
         }
         if (fault == "disabled") m.disabledReasons.push_back("test-only extraction refusal at main.cpp:1");
+        // Model the worker's --no-line-markers observations (rules 1 and 3).
+        if (fault == "position") m.positionUses.push_back({m.text.find("__LINE__"),"__LINE__ expanded"});
+        if (fault == "default") m.positionUses.push_back({m.text.find("where()"),"call-site default argument with a source position"});
+        if (fault == "expansion") {
+          PruneMacroExpansion expansion; expansion.offset = m.text.find("__LINE__"); expansion.name = "__LINE__";
+          m.expansions.push_back(expansion);
+        }
         if (fault == "render") {
           auto& range = m.families.front().ranges.front(); ++range.begin; // Split 'int'.
         }
@@ -68,7 +75,7 @@ struct Fixture {
       }
       for (const auto& arg : spec.argv) {
         const auto p = pathFromUtf8(arg);
-        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp")
+        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp")
           built[pathToUtf8(p.stem())] = test::read(p);
       }
       auto result = runProcess(spec);
@@ -77,7 +84,8 @@ struct Fixture {
         result.value().stdoutText = "unrunnable-distill-test-target\n";
       if (result.ok() && spec.argv.size() == 1) {
         if (fault == "stderr") result.value().stderrText = pathToUtf8(program);
-        if ((fault == "raw-stdout" && program == "raw.exe") || (fault == "flat-stdout" && program == "flat.exe"))
+        if ((fault == "raw-stdout" && program == "raw.exe") || (fault == "flat-stdout" && program == "flat.exe") ||
+            (fault == "unmarked-stdout" && program == "unmarked.exe"))
           result.value().stdoutText = "different sample output";
         if (fault == "raw-exit" && program == "raw.exe") ++result.value().exitCode;
         if (fault == "raw-timeout" && program == "raw.exe") result.value().timedOut = true;
@@ -152,6 +160,57 @@ TEST(pipeline_pruned_core_exact_checked_bytes_and_samples) {
   CHECK(r.report.find("assumptions: A6 A7\n") != r.report.npos);
   CHECK(r.report.find("parse configuration:") != r.report.npos);
   CHECK(r.report.find("primary structural bytes") != r.report.npos);
+  // Default (R4-G): markers always, and no line-marker report lines.
+  CHECK(r.bytes.find("#line ") != r.bytes.npos); CHECK(r.lineMarkers.empty());
+  CHECK(r.diagnostic.find("line markers") == r.diagnostic.npos); CHECK(!f.built.contains("unmarked"));
+}
+TEST(pipeline_no_line_markers_omitted_after_checks) {
+  for (bool strip : {false,true}) {
+    Fixture f("int unused(){return 7;}\n/* c */ int main(){return 0;}\n");
+    f.options.noLineMarkers = true; f.options.stripComments = strip;
+    const auto r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned"); CHECK_EQ(r.lineMarkers,"omitted");
+    CHECK(f.built.at("pruned").find("#line ") != std::string::npos);
+    CHECK_EQ(r.bytes,f.built.at("unmarked")); CHECK(r.bytes.find("#line") == r.bytes.npos);
+    CHECK(r.bytes.find("int unused") == r.bytes.npos); CHECK(r.bytes.find("int main(){return 0;}") != r.bytes.npos);
+    CHECK_EQ(r.runtime,"compared 1 samples");
+    CHECK(r.diagnostic.find("line markers omitted: no user code observes presumed source positions\n") != r.diagnostic.npos);
+    CHECK(r.report.find("pruned without line markers: passed\n") != r.report.npos);
+    CHECK(r.resultLine.starts_with("distill: wrote pruned ("));
+  }
+}
+TEST(pipeline_no_line_markers_kept_for_position_uses) {
+  struct Case { const char* fault; const char* source; const char* why; };
+  for (const auto& c : {Case{"position","int unused(){return 7;}\nint main(){return __LINE__ - 2;}\n","__LINE__ expanded at main.cpp:2"},
+                        Case{"expansion","int unused(){return 7;}\nint main(){return __LINE__ - 2;}\n","__LINE__ expanded at main.cpp:2"},
+                        Case{"default","int unused(){return 7;}\nint where(int l=0){return l;}\nint main(){return where();}\n",
+                             "call-site default argument with a source position at main.cpp:3"}}) {
+    Fixture f(c.source); f.options.noLineMarkers = true;
+    const auto r = f.run(c.fault); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
+    CHECK_EQ(r.bytes,f.built.at("pruned")); CHECK(r.bytes.find("#line ") != r.bytes.npos);
+    CHECK(!f.built.contains("unmarked")); CHECK_EQ(r.lineMarkers,std::string("kept: ") + c.why);
+    CHECK(r.diagnostic.find(std::string("line markers kept: ") + c.why + "\n") != r.diagnostic.npos);
+    CHECK(r.report.find(std::string("line markers kept: ") + c.why + "\n") != r.report.npos);
+  }
+}
+TEST(pipeline_no_line_markers_kept_without_parse_or_pruned) {
+  {
+    Fixture f("int main(){return 0;}\n"); f.options.noLineMarkers = true; f.options.noPrune = true;
+    const auto r = f.run(); CHECK_EQ(r.artifact,"flat"); CHECK_EQ(r.bytes,f.built.at("flat"));
+    CHECK_EQ(r.lineMarkers,"kept: no parse"); CHECK(r.diagnostic.find("line markers kept: no parse\n") != r.diagnostic.npos);
+  }
+  {
+    Fixture f("int unused(){return 7;}\nint main(){return 0;}\n"); f.options.noLineMarkers = true;
+    const auto r = f.run("disabled"); CHECK_EQ(r.artifact,"flat"); CHECK_EQ(r.bytes,f.built.at("flat"));
+    CHECK_EQ(r.lineMarkers,"kept: no checked pruned artifact");
+  }
+  {
+    // A failed marker-free check keeps the checked marked pruned bytes.
+    Fixture f("int unused(){return 7;}\nint main(){return 0;}\n"); f.options.noLineMarkers = true;
+    const auto r = f.run("unmarked-stdout"); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
+    CHECK_EQ(r.bytes,f.built.at("pruned")); CHECK(f.built.contains("unmarked"));
+    CHECK(r.lineMarkers.starts_with("kept: marker-free check failed: differs on sample empty sample"));
+    CHECK(r.report.find("pruned without line markers: differs on sample") != r.report.npos);
+  }
 }
 TEST(pipeline_pruned_without_deletions_still_reports_a7) {
   Fixture f("int main(){return 0;}\n");

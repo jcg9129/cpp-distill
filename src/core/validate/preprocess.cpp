@@ -132,6 +132,22 @@ Result<bool> comparePreprocessed(std::string_view left, std::string_view right, 
   };
   return Error{"preprocess difference at token " + std::to_string(i) + ": left " + show(a.value()) + "; right " + show(b.value())};
 }
+Result<bool> compareUnmarkedPreprocessed(std::string_view marked, std::string_view unmarked) {
+  auto a = parsePreprocessed(marked), b = parsePreprocessed(unmarked);
+  if (!a.ok()) return a.error();
+  if (!b.ok()) return b.error();
+  const auto& x = a.value(); const auto& y = b.value();
+  for (std::size_t i = 0; i < x.size() || i < y.size(); ++i) {
+    auto show = [i](const auto& ts) {
+      if (i == ts.size()) return std::string("<end>");
+      const auto& t = ts[i]; return t.text + " at " + t.location.file + ":" + std::to_string(t.location.line);
+    };
+    if (i == x.size() || i == y.size() || x[i].text != y[i].text || x[i].pragmaBoundary != y[i].pragmaBoundary ||
+        (x[i].location.file == y[i].location.file && x[i].location.line != y[i].location.line))
+      return Error{"unmarked preprocess difference at token " + std::to_string(i) + ": marked " + show(x) + "; unmarked " + show(y)};
+  }
+  return true;
+}
 FileMapper originalFileMapper(const InlineResult& raw) {
   std::map<std::string, std::string, std::less<>> names;
   std::map<FileIdentity, std::string> representatives;

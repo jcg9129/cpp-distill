@@ -425,6 +425,8 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
     for (auto offset : m.keepOffsets) if (auto mapped = out.mapOffset(offset)) p.keepOffsets.push_back(*mapped);
     for (auto a : m.annotations) if (auto mapped = out.mapOffset(a.offset)) { a.offset = *mapped; p.annotations.push_back(a); }
     for (auto e : m.expansions) if (auto mapped = out.mapOffset(e.offset)) { e.offset = *mapped; p.expansions.push_back(std::move(e)); }
+    p.positionUses.clear();
+    for (auto u : m.positionUses) if (auto mapped = out.mapOffset(u.offset)) { u.offset = *mapped; p.positionUses.push_back(std::move(u)); }
     return out;
   } catch (const Error& e) { return e; }
   catch (const std::exception& e) { return Error{std::string("render: ")+e.what()}; }
@@ -449,5 +451,77 @@ Result<bool> renderingInvariant(const PruningModel& m, const PruningResult* r, s
     return Error{"rendering invariant at token " + std::to_string(i) + ": expected " + show(expected) + "; got " + show(observed)};
   } catch (const Error& e) { return e; }
   catch (const std::exception& e) { return Error{std::string("rendering invariant: ")+e.what()}; }
+}
+namespace {
+std::string locate(const PruningModel& m, std::size_t offset) {
+  const auto line = static_cast<std::size_t>(std::count(m.text.begin(),m.text.begin() + std::min(offset,m.text.size()),'\n'));
+  if (line < m.lineMap.size() && m.lineMap[line]) return m.lineMap[line]->file + ':' + std::to_string(m.lineMap[line]->line);
+  return "<generated>:" + std::to_string(line + 1);
+}
+bool lineDirective(const LogicalLine& l) {
+  // #line, and GNU linemarkers (# 12 "f"), which the scanner names by number.
+  return l.directive && (l.directive->name == "line" ||
+      (!l.directive->name.empty() && std::isdigit(static_cast<unsigned char>(l.directive->name.front()))));
+}
+std::vector<InvariantToken> unmarkedTokens(std::string_view text, bool marked) {
+  auto scan = take(scanDirectives(text));
+  std::vector<InvariantToken> out;
+  for (const auto& l : scan.lines) {
+    if (lineDirective(l)) {
+      if (!marked) throw Error{"line directive in unmarked text at line " + std::to_string(l.firstLine)};
+      continue;
+    }
+    if (l.directive) out.push_back({"<directive-start>",TokenKind::punctuation,{},1});
+    for (const auto& t : l.tokens) out.push_back({t.text,t.kind,{},0});
+    if (l.directive) out.push_back({"<directive-end>",TokenKind::punctuation,{},2});
+  }
+  return out;
+}
+} // namespace
+std::vector<std::string> lineMarkerObservations(const PruningModel& m, const std::vector<std::string>& argv) {
+  std::vector<std::string> out;
+  auto add = [&](std::string why) { if (std::find(out.begin(),out.end(),why) == out.end()) out.push_back(std::move(why)); };
+  // The worker records every observation (rules 1-5 of the review). Position
+  // macros are checked here again from the expansion facts as a second line.
+  for (const auto& u : m.positionUses) add(u.what + " at " + locate(m,u.offset));
+  for (const auto& e : m.expansions)
+    if (e.name == "__LINE__" || e.name == "__FILE__" || e.name == "__FILE_NAME__" || e.name == "__BASE_FILE__" || e.name == "__INCLUDE_LEVEL__")
+      add(e.name + " expanded at " + locate(m,e.offset));
+  // A warning that depends on line layout must not decide compilation.
+  for (const auto& word : argv) if (word.starts_with("-Werror")) add(word + " makes warnings errors");
+  auto scan = scanDirectives(m.text);
+  if (!scan.ok()) { add("directive scan failure: " + scan.error().message); return out; }
+  for (const auto& l : scan.value().lines) if (l.directive && l.directive->name == "pragma") {
+    const auto& t = l.directive->tokens;
+    if (t.size() >= 3 && (t[0].text == "GCC" || t[0].text == "clang") && t[1].text == "diagnostic" && t[2].text == "error")
+      add("diagnostic error pragma at " + locate(m,l.begin));
+  }
+  return out;
+}
+Result<std::string> withoutLineMarkers(const RenderedSource& rendered) {
+  const auto& text = rendered.provenance.text;
+  auto markers = rendered.provenance.generatedMarkers;
+  std::sort(markers.begin(),markers.end(),[](auto a, auto b) { return a.begin < b.begin; });
+  std::string out; out.reserve(text.size());
+  std::size_t at = 0;
+  for (auto r : markers) {
+    if (r.begin < at || r.end <= r.begin || r.end > text.size() || (r.begin && text[r.begin-1] != '\n') ||
+        text[r.end-1] != '\n' || !std::string_view(text).substr(r.begin,r.end-r.begin).starts_with("#line "))
+      return Error{"generated marker is not a whole #line line at byte " + std::to_string(r.begin)};
+    out.append(text,at,r.begin-at); at = r.end;
+  }
+  out.append(text,at,text.size()-at);
+  return out;
+}
+Result<bool> unmarkedInvariant(std::string_view marked, std::string_view unmarked) {
+  try {
+    const auto expected = unmarkedTokens(marked,true), observed = unmarkedTokens(unmarked,false);
+    std::size_t i = 0;
+    while (i < expected.size() && i < observed.size() && expected[i] == observed[i]) ++i;
+    if (i == expected.size() && i == observed.size()) return true;
+    auto show = [i](const auto& tokens) { return i == tokens.size() ? std::string("<end>") : "'" + tokens[i].text + "'"; };
+    return Error{"unmarked invariant at token " + std::to_string(i) + ": expected " + show(expected) + "; got " + show(observed)};
+  } catch (const Error& e) { return e; }
+  catch (const std::exception& e) { return Error{std::string("unmarked invariant: ")+e.what()}; }
 }
 } // namespace distill

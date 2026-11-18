@@ -35,5 +35,9 @@ private:
 Result<std::vector<PreprocessedToken>> parsePreprocessed(std::string_view, FileMapper = {});
 // Error identifies the first difference, including both logical locations.
 Result<bool> comparePreprocessed(std::string_view left, std::string_view right, FileMapper = {});
+// --no-line-markers: -E of the marked and of the marker-free artifact have the
+// same tokens and #pragma boundaries; tokens whose presumed file is the same in
+// both (system headers) also keep their line.
+Result<bool> compareUnmarkedPreprocessed(std::string_view marked, std::string_view unmarked);
 FileMapper originalFileMapper(const InlineResult&);
 } // namespace distill

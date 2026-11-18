@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# --no-line-markers: with NDEBUG, assert expands to no position, so the
+# checked marker-free bytes are written.
+prune=yes
+lines=no
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+absent=int unused
+absent.1=#line
+diagnostic=line markers omitted: no user code observes presumed source positions
