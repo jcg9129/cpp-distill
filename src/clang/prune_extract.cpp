@@ -8,6 +8,7 @@
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/TypeLoc.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -583,6 +584,48 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     }
     return true;
   }
+  bool inertConstexpr(const VarDecl* v) {
+    // A7 excludes observable limit/cache effects of deleting constant
+    // evaluation. This is only an additional storage-root exemption; ordinary
+    // traversal, attributes, macro gates and specialization unions still apply.
+    if (!v->isConstexpr() || v->getTLSKind() != VarDecl::TLS_None ||
+        v->hasAttrs() || v->getType().isVolatileQualified() ||
+        v->getType()->isReferenceType() || !safeSystemMacros(v)) return false;
+    const VarDecl* written = v;
+    if (v->getTemplateSpecializationKind() == TSK_ImplicitInstantiation) {
+      // A substituted T must not become an as-written builtin. Explicit
+      // specializations instead use their own type and constexpr status.
+      if (const auto* pattern = v->getTemplateInstantiationPattern()) written = pattern;
+    }
+    const auto* info = written->getTypeSourceInfo();
+    if (!info || written->hasAttrs() || !safeSystemMacros(written)) return false;
+    const auto loc = info->getTypeLoc().getUnqualifiedLoc();
+    // Do not desugar aliases, decltype, auto or template-parameter types, even
+    // when Clang's selected canonical type is arithmetic or an empty record.
+    if (loc.getAs<BuiltinTypeLoc>()) return loc.getType()->isArithmeticType();
+    const auto recordLoc = loc.getAs<RecordTypeLoc>();
+    if (!recordLoc) return false;
+    const auto* record = dyn_cast<CXXRecordDecl>(recordLoc.getDecl());
+    if (!record || !(record = record->getDefinition()) || !record->getIdentifier() ||
+        !e.user(record->getBeginLoc()) || record->isUnion() || record->isLocalClass() ||
+        record->isDependentType() || record->getDescribedClassTemplate() ||
+        isa<ClassTemplateSpecializationDecl>(record) || record->hasAttrs() ||
+        record->getNumBases() || !record->field_empty() || record->isPolymorphic() ||
+        record->hasUserDeclaredConstructor() || record->hasUserDeclaredCopyAssignment() ||
+        record->hasUserDeclaredMoveAssignment() || record->hasUserDeclaredDestructor() ||
+        !record->hasTrivialDestructor()) return false;
+    for (const auto* context = record->getDeclContext(); context; context = context->getParent()) {
+      if (context->isDependentContext()) return false;
+      if (const auto* parent = dyn_cast<CXXRecordDecl>(context);
+          parent && (parent->getDescribedClassTemplate() || isa<ClassTemplateSpecializationDecl>(parent))) return false;
+    }
+    const auto* list = dyn_cast_or_null<InitListExpr>(v->getInit());
+    if (!list) return false;
+    if (const auto* syntax = list->getSyntacticForm()) list = syntax;
+    // Inspect the written list, not an implicit zero-argument construction
+    // that could have originated in a call, conversion or default arguments.
+    return list->getNumInits() == 0;
+  }
   std::set<const VarDecl*> inertActive;
   bool inertExpr(const Expr* expr, unsigned depth = 0) {
     if (!expr) return true;
@@ -711,7 +754,7 @@ public:
         e.model.unions.emplace_back(current,e.owner(s->getSpecializedTemplate()));
     }
     if (!v->hasGlobalStorage() || (v->isStaticDataMember() && !v->isThisDeclarationADefinition())) return true;
-    const bool inert = inertType(v->getType()) && safeSystemMacros(v) && inertExpr(v->getInit());
+    const bool inert = (inertType(v->getType()) && safeSystemMacros(v) && inertExpr(v->getInit())) || inertConstexpr(v);
     if (!inert) e.model.families[current].root = "not inert (static or thread storage)";
     return true;
   }

@@ -25,7 +25,7 @@ TEST(prune_empty_and_unreachable_cycles) {
   Model b; CHECK(b.run().families.empty());
   b.add("a","int a(){return b();}"); b.add("b","int b(){return a();}");
   auto r = b.run(); CHECK(!r.families[0].kept); CHECK(!r.families[1].kept);
-  CHECK(r.assumptions.contains("A6")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
+  CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
 }
 TEST(prune_roots_name_ast_association_fixpoint) {
   Model b; auto main = b.add("main","int main(){return invoke();}");
@@ -40,6 +40,7 @@ TEST(prune_roots_name_ast_association_fixpoint) {
   CHECK_EQ(r.keptBytes+r.removedBytes,b.m.text.size());
   auto report = renderPruningReport(b.m,r); CHECK(report.ok());
   CHECK(report.value().find("pruning assumption: A6") != std::string::npos);
+  CHECK(report.value().find("pruning assumption: A7\n") != std::string::npos);
   CHECK(report.value().find("transitive bytes") != std::string::npos);
   CHECK(report.value().find("does not certify an artifact") != std::string::npos);
   std::size_t sum = 0; for (const auto& [reason,bytes] : r.transitiveBytes) { (void)reason; sum += bytes; } CHECK_EQ(sum,r.keptBytes);
@@ -49,6 +50,13 @@ TEST(prune_union_closure_without_merging_ranges) {
   b.m.unions = {{a,c},{d,c},{a,a}}; b.m.families[d].root = "explicit keep";
   auto r = b.run(); for (const auto& f : r.families) CHECK(f.kept);
   CHECK_EQ(b.m.families[a].ranges.size(),1u); CHECK_EQ(r.families[a].initialCause,d);
+}
+TEST(prune_a7_applies_even_without_family_deletion) {
+  Model b; b.add("main","int main(){}");
+  const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
+  CHECK(r.assumptions.contains("A7"));
+  CHECK(!r.assumptions.contains("A6"));
+  CHECK(b.run().policy == "D3d-3");
 }
 TEST(prune_never_removed_rules_and_nonroots) {
   for (int rule = 0; rule < 10; ++rule) {
@@ -134,7 +142,7 @@ TEST(prune_all_disable_reasons_accumulate) {
   Model b; b.add("x","int x;"); b.m.unknownInUserCode = true; b.m.dialect = "c++98";
   b.m.includes = {"ext/rope","ext/pb_ds/assoc_container.hpp","bits/extc++.h","vendor.h"};
   b.m.disabledReasons = {"parse error","limit","parse error"};
-  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6"));
+  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7"));
   CHECK(!staticNameInvariant(b.m,r,"").ok());
 }
 TEST(prune_predefined_macros_source_overrides_and_pasting) {

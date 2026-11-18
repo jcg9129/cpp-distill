@@ -244,6 +244,123 @@ int main(int argc, char** argv) {
       check(family(m,"automatic").root.empty(),"automatic local rooted");
       check(!family(m,"stat").root.empty(),"static local not rooted");
     });
+    run("constexpr arithmetic template members", [&] {
+      m = extract("template<class T> constexpr bool scalar = false;\n"
+                  "template<class T> struct Unused { static constexpr bool x = !scalar<T>; };\n"
+                  "template<class T> struct Used { static constexpr bool x = !scalar<T>; };\n"
+                  "int main(){return Used<int>::x ? 0 : 1;}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"constexpr templates disabled");
+      check(!kept("Unused"),"unused constexpr bool member rooted its record");
+      check(kept("Used") && kept("scalar"),"used member or initializer dependency removed");
+      check(family(m,"Unused").root.empty(),"unused pattern still a storage root");
+      check(r.assumptions.contains("A7"),"A7 not reported");
+      const auto out = take(renderSource(m,&r)).provenance.text;
+      take(renderingInvariant(m,&r,out)); take(staticNameInvariant(m,r,out));
+      check(out.find("struct Unused") == out.npos && out.find("struct Used") != out.npos,"template removal/retention failed");
+    });
+    run("constexpr empty tags", [&] {
+      m = extract("struct UnusedTag {}; inline constexpr UnusedTag unused_tag{};\n"
+                  "namespace n { struct UsedTag {}; } inline constexpr n::UsedTag used_tag = {};\n"
+                  "int main(){return &used_tag == nullptr;}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"empty tags disabled");
+      check(!kept("UnusedTag") && !kept("unused_tag"),"unused tag/type retained");
+      check(kept("n::UsedTag") && kept("used_tag"),"referenced tag/type removed");
+      const auto out = take(renderSource(m,&r)).provenance.text;
+      take(renderingInvariant(m,&r,out)); take(staticNameInvariant(m,r,out));
+      check(out.find("UnusedTag") == out.npos && out.find("n::UsedTag used_tag = {}") != out.npos,"tag removal/retention failed");
+    });
+    run("constexpr calls conversions and local static", [&] {
+      m = extract("struct Convert { constexpr operator int() const { return 7; } constexpr ~Convert(){} };\n"
+                  "constexpr int number(){return 7;}\n"
+                  "constexpr int unused_number=number(); constexpr int converted=Convert{};\n"
+                  "constexpr double floating=number(); constexpr int used_number=number();\n"
+                  "void unused_function(){static constexpr int local=number();}\n"
+                  "int main(){return used_number-7;}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"constexpr scalar calls disabled");
+      for (const auto* name : {"unused_number","converted","floating","unused_function","Convert"})
+        check(!kept(name),std::string("unused constexpr computation retained: ")+name);
+      check(kept("used_number") && kept("number"),"referenced initializer closure removed");
+    });
+    for (const auto& [name,declaration] : std::vector<std::pair<const char*,const char*>>{
+        {"alias", "using Alias=int; constexpr Alias candidate=number();"},
+        {"decltype", "constexpr decltype(number()) candidate=number();"},
+        {"auto", "constexpr auto candidate=number();"},
+        {"constinit", "constinit int candidate=number();"},
+        {"thread_local", "thread_local constexpr int candidate=number();"},
+        {"volatile", "constexpr volatile int candidate=number();"},
+        {"reference", "constexpr int backing=7; constexpr const int& candidate=backing;"},
+        {"nonempty class", "struct Tag { int n; }; constexpr Tag candidate{};"},
+        {"destructor", "struct Tag { constexpr ~Tag(){} }; constexpr Tag candidate{};"},
+        {"defaulted destructor", "struct Tag { ~Tag()=default; }; constexpr Tag candidate{};"},
+        {"constructor", "struct Tag { constexpr Tag(int=0){} }; constexpr Tag candidate{};"},
+        {"base", "struct Base {}; struct Tag:Base {}; constexpr Tag candidate{};"},
+        {"tag alias", "struct Tag {}; using Alias=Tag; constexpr Alias candidate{};"},
+        {"tag decltype", "struct Tag {}; constexpr decltype(Tag{}) candidate{};"},
+        {"tag auto", "struct Tag {}; constexpr auto candidate=Tag{};"},
+        {"tag call", "struct Tag {}; constexpr Tag make(){return {};} constexpr Tag candidate=make();"},
+        {"tag specialization", "template<class T> struct Tag {}; constexpr Tag<int> candidate{};"},
+        {"tag attribute", "struct alignas(8) Tag {}; constexpr Tag candidate{};"},
+        {"variable attribute", "[[maybe_unused]] constexpr int candidate=number();"},
+        {"macro alias", "using Alias=int;\n#define TYPE Alias\nconstexpr TYPE candidate=number();"},
+        {"macro decltype", "#define TYPE decltype(number())\nconstexpr TYPE candidate=number();"}}) {
+      run((std::string("constexpr narrow retains ") + name).c_str(), [&] {
+        m = extract(std::string("constexpr int number(){return 7;}\n") + declaration +
+                    "\nint unrelated(){return 9;} int main(){}\n",o);
+        r = take(computeRetention(m));
+        if (std::string_view(name) == "constinit") {
+          // Clang models constinit as ConstInitAttr: the attribute gate already
+          // disables pruning, which is stricter than keeping a storage root.
+          check(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why) {
+            return why.starts_with("unsupported attribute: constinit"); }),"constinit not refused");
+          return;
+        }
+        check(r.disabledReasons.empty(),"negative unexpectedly disabled");
+        check(kept("candidate") && !family(m,"candidate").root.empty(),"excluded variable lost storage root");
+        check(!kept("unrelated"),"negative did not allow unrelated removal");
+      });
+    }
+    run("constexpr template parameter types stay written", [&] {
+      m = extract("template<class T> struct Parameter { static constexpr T x=7; };\n"
+                  "template<class T> struct Instantiated { static constexpr T x=7; };\n"
+                  "int main(){return Instantiated<int>::x-7;}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"parameter-type control disabled");
+      check(kept("Parameter") && !family(m,"Parameter").root.empty(),"parameter-typed pattern got exemption");
+      check(kept("Instantiated") && !family(m,"Instantiated").root.empty(),"substituted type got exemption");
+    });
+    run("constexpr specialization classified independently", [&] {
+      m = extract("struct Noisy { constexpr Noisy(){} ~Noisy(){} };\n"
+                  "template<class T> constexpr bool flag=true;\n"
+                  "template<> Noisy flag<int>{};\n"
+                  "template<class T> struct Box { static constexpr bool x=true; };\n"
+                  "template<> struct Box<int> { inline static Noisy x{}; };\n"
+                  "int unrelated(){return 9;} int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"specialization disabled");
+      bool specializedRoot = false;
+      for (FamilyId id=0; id<m.families.size(); ++id) {
+        const auto& f = m.families[id];
+        if (f.names.contains("flag") || f.names.contains("Box")) {
+          check(r.families[id].kept,"specialization family removed");
+          specializedRoot |= !f.root.empty();
+        }
+      }
+      check(specializedRoot && kept("Noisy"),"specialization type/destructor root lost");
+      check(!kept("unrelated"),"unrelated function retained");
+      const auto out = take(renderSource(m,&r)).provenance.text;
+      check(out.find("Noisy flag<int>{}") != out.npos && out.find("inline static Noisy x{}") != out.npos,"different-type specialization removed");
+    });
+    run("constexpr builtin macro type keeps other gates", [&] {
+      m = extract("#define TYPE bool\nconstexpr int number(){return 7;}\n"
+                  "constexpr TYPE candidate=number(); int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"user type macro disabled");
+      check(family(m,"candidate").root.empty(),"expanded builtin type did not qualify");
+      // Macro ownership/pinning may independently keep the declaration.
+    });
+    run("constexpr used attribute remains root", [&] {
+      m = extract("constexpr int number(){return 7;}\n"
+                  "[[gnu::used]] constexpr int candidate=number(); int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"used attribute disabled");
+      check(kept("candidate") && !family(m,"candidate").root.empty(),"attribute root erased");
+    });
     run("user paste", [&] {
       m = extract("#define JOIN_I(a,b) a##b\n#define JOIN(a,b) JOIN_I(a,b)\ntemplate<class T> void run(T x){JOIN(custo,mize)(x);}\nnamespace later { template<class T> void customize(T){} }\nint main(){}\n",o);
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"user-only paste disabled");
