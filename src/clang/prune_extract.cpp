@@ -876,8 +876,9 @@ bool namingBuiltin(llvm::StringRef name) {
 // local classes) each missed a route by which a function name or position
 // reaches the program (closures and unnamed types print with their presumed
 // location). One RecursiveASTVisitor over the whole translation unit,
-// patterns and instantiations, implicit code, lambdas, local classes and
-// every evaluated default argument/initializer, records ANY function-name
+// patterns and instantiations, implicit code, lambdas, local classes,
+// parameter types and attributes, and every evaluated default argument/
+// initializer, records ANY function-name
 // expression, source-location builtin, unique-stable-name expression or
 // naming builtin call, wherever it is: no filtering by location, user-ness
 // or template arguments. The only thing not traversed is a parameter's
@@ -900,7 +901,14 @@ public:
   explicit NameExpressions(Extraction& x) : e(x) {}
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  bool TraverseParmVarDecl(ParmVarDecl*) { return true; }
+  bool TraverseParmVarDecl(ParmVarDecl* d) {
+    if (!WalkUpFromParmVarDecl(d)) return false;
+    if (auto* t = d->getTypeSourceInfo()) {
+      if (!TraverseTypeLoc(t->getTypeLoc())) return false;
+    } else if (!TraverseType(d->getType())) return false;
+    for (auto* a : d->attrs()) if (!TraverseAttr(a)) return false;
+    return true; // Default arguments are traversed only at calls below.
+  }
   bool VisitStmt(Stmt*) {
     // Fail closed: past the bound, stop and keep the markers.
     if (++visits <= 50000000) return true;

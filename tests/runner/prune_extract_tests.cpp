@@ -748,6 +748,19 @@ int main(int argc, char** argv) {
       m = extract("enum { anon = 1 };\nstruct C { operator decltype(anon)() const { (void)__func__; return anon; } };\n"
                   "int main(){return C{} - 1;}\n",o);
       check(hasUse("function name expression"),"__func__ in a conversion to an unnamed enum missing:" + uses());
+      m = extract("const char* seen;\n"
+                  "int f(decltype([] {\n"
+                  "  enum { e };\n"
+                  "  struct C {\n"
+                  "    operator decltype(e)() const {\n"
+                  "      seen = __func__;\n"
+                  "      return e;\n"
+                  "    }\n"
+                  "  };\n"
+                  "  return int(C{});\n"
+                  "}) cb) { return cb(); }\n"
+                  "int main(){return f({});}\n",o);
+      check(hasUse("function name expression"),"__func__ in a parameter type's conversion to an unnamed enum missing:" + uses());
       m = extract("#define S(x) #x\nconst char* s = S(__LINE__);\nint main(){}\n",o);
       check(m.positionUses.empty(),"a stringized __LINE__ is not expanded:" + uses());
     });
