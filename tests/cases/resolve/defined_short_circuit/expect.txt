@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+main.cpp:5 false
+main.cpp:6 dead
+main.cpp:10 true
+main.cpp:13 false
+main.cpp:16 true
+main.cpp:19 unknown:unknown macro: __has_include
+main.cpp:22 unknown:builtin invocation: __has_include
+main.cpp:25 unknown:unknown macro: __has_include
