@@ -3,12 +3,24 @@
 #include "core/names/names.h"
 using namespace distill;
 TEST(names_identity_library_coverage) {
-  for (const char* name : {"_MSC_VER", "__clang__", "__MINGW32__", "_WIN32"}) {
+  for (const char* name : {"_MSC_VER", "__clang__", "__MINGW32__", "_WIN32", "__i386__", "__x86_64__", "__LP64__"}) {
     CHECK(isIdentityMacro(name));
     CHECK(isIdentityMacro(name, {"glibc", "libstdc++"}));
     CHECK(isIdentityMacro(name, {"mingw-w64", "libstdc++"}));
     CHECK(!isIdentityMacro(name, {"unknown"}));
   }
+  for (const char* name : {"__ARM_ARCH", "__thumb__"}) {
+    CHECK(!isIdentityMacro(name, {"glibc", "libstdc++"}));
+    CHECK(isIdentityMacro(name, {"mingw-w64", "libstdc++"}));
+    CHECK(!isIdentityMacro(name));
+  }
+  for (const char* name : {"_LP64", "__ILP32__"}) {
+    CHECK(isIdentityMacro(name, {"glibc", "libstdc++"}));
+    CHECK(!isIdentityMacro(name, {"macos-libc"}));
+    CHECK(!isIdentityMacro(name));
+  }
+  CHECK(!isIdentityMacroName("i386"));
+  CHECK(NameLists{}.protectedUserMacro("i386"));
   for (const char* name : {"_M_X64", "_M_AMD64", "_M_IX86", "_M_ARM", "_M_ARM64", "_M_ARM64EC", "_WIN64"}) {
     CHECK(isIdentityMacro(name, {"glibc", "libstdc++"}));
     CHECK(isIdentityMacro(name, {"macos-libc"}));

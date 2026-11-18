@@ -250,6 +250,37 @@ TEST(resolve_real_approximate_identity_respects_mingw_headers) {
     CHECK_EQ(r.decisions.at(0).external.at(0).fact.provenance, (std::vector{FactOrigin::allowList}));
   }
 }
+TEST(resolve_real_approximate_shipped_x86_identity_after_headers) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path);
+  if (!e) throw test::Skip{"GCC unavailable"};
+  const std::string guard = "#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)\nx86\n#endif\n";
+  for (const auto* selector : {"qoj", "cses", "kattis"}) {
+    auto loaded = lookupProfile(selector); CHECK(loaded.ok()); if (!loaded.ok()) continue;
+    const auto& p = loaded.value(); CHECK(!p.reproduced);
+    CHECK_EQ(p.initialState("__i386__").state, MacroState::undefined);
+    CHECK(!p.snapshotFacts.contains("__i386__"));
+    ResolveOptions o; o.profile = &p;
+    auto r = resolve("#include <cstdint>\n#ifdef __i386__\ni386_only\n#endif\n" + guard, *e, o);
+    CHECK(!r.unknownInUserCode);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
+    CHECK_EQ(r.decisions.at(0).external.at(0).fact.state, MacroState::undefined);
+    CHECK_EQ(r.decisions.at(0).external.at(0).fact.provenance, (std::vector{FactOrigin::allowList}));
+    CHECK_EQ(r.decisions.at(2).decision, Decision::trueValue);
+    CHECK_EQ(r.decisions.at(2).external.size(), 4u);
+    CHECK(r.text.find("i386_only") == r.text.npos); CHECK(r.text.find("#if") == r.text.npos);
+    // Non-reserved i386 already has A5/A2 protection without an identity entry.
+    r = resolve("#include <cstdint>\n#ifdef i386\nx\n#endif\n", *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
+    for (const auto* write : {"#undef __i386__\n", "#define __i386__ 1\n"}) {
+      r = resolve(std::string(write) + "#include <cstdint>\n" + guard, *e, o);
+      CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+    }
+    r = resolve("#include <vendor.h>\n#include <cstdint>\n" + guard, *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+  }
+  const auto r = resolve("#include <cstdint>\n" + guard, *e);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+}
 TEST(resolve_fake_identity_source_writes_and_library_restrictions) {
   Fake e; auto p = profile(); ResolveOptions o; o.profile = &p;
   for (const auto* write : {"#define _MSC_VER 1930\n", "#undef _MSC_VER\n"}) {
