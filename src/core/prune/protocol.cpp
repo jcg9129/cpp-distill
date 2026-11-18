@@ -79,7 +79,9 @@ struct Archive {
   void field(PruneMacroExpansion& x) {
     field("offset",x.offset); field("name",x.name); field("user",x.user); field("condition",x.condition); field("predefined",x.predefined);
     field("parse",x.parse); field("judge",x.judge); field("paste",x.paste); field("externalPasteOperand",x.externalPasteOperand); field("pasteOperandsKnown",x.pasteOperandsKnown);
+    field("hashOperator",x.hashOperator);
   }
+  void field(LiteralWidths& x) { field("intBits",x.intBits); field("longBits",x.longBits); field("longLongBits",x.longLongBits); }
   void field(PruneFamily& x) {
     field("kind",x.kind); field("label",x.label); field("names",x.names); field("callableNames",x.callableNames); field("dependentNames",x.dependentNames);
     field("ranges",x.ranges); field("edges",x.edges); field("associatedTypes",x.associatedTypes); field("original",x.original);
@@ -93,7 +95,7 @@ struct Archive {
     field("text",x.text); field("dialect",x.dialect); field("families",x.families); field("unions",x.unions); field("generatedMarkers",x.generatedMarkers);
     field("sourceDirectives",x.sourceDirectives); field("lineMap",x.lineMap); field("annotations",x.annotations); field("keepOffsets",x.keepOffsets); field("keepNames",x.keepNames); field("expansions",x.expansions);
     field("systemEntities",x.systemEntities); field("systemUses",x.systemUses); field("includes",x.includes); field("disabledReasons",x.disabledReasons);
-    field("untranslatedOptions",x.untranslatedOptions); field("parseArgv",x.parseArgv); field("judgeInitial",x.judgeInitial); field("judgeProfile",x.judgeProfile);
+    field("untranslatedOptions",x.untranslatedOptions); field("parseArgv",x.parseArgv); field("judgeInitial",x.judgeInitial); field("parseWidths",x.parseWidths); field("judgeProfile",x.judgeProfile);
     field("judgeComplete",x.judgeComplete); field("unknownInUserCode",x.unknownInUserCode);
   }
 };

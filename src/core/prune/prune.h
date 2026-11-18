@@ -7,7 +7,7 @@
 namespace distill {
 using FamilyId = std::size_t;
 inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
-inline constexpr std::string_view pruningPolicyVersion = "D3d-3";
+inline constexpr std::string_view pruningPolicyVersion = "D3d-4";
 struct EditRange {
   std::size_t begin = 0, end = 0;
   bool operator==(const EditRange&) const = default;
@@ -31,6 +31,15 @@ struct PruneMacroExpansion {
   bool user = true, condition = false, predefined = false;
   MacroFact parse, judge;
   bool paste = false, externalPasteOperand = false, pasteOperandsKnown = true;
+  // A macro whose definition has a #, #@ or ## operator (any provenance) expands
+  // within the same physical user invocation span: the replacement's spelling
+  // may reach a stringize/paste operand. Conservative; see the D3d-4 review.
+  bool hashOperator = false;
+};
+// Integer literal widths of the Clang parse target, reported by the worker.
+struct LiteralWidths {
+  unsigned intBits = 0, longBits = 0, longLongBits = 0;
+  bool operator==(const LiteralWidths&) const = default;
 };
 struct SystemEntity {
   std::string label;
@@ -53,6 +62,7 @@ struct PruningModel {
   std::vector<SystemUse> systemUses;
   std::vector<std::string> includes, disabledReasons, untranslatedOptions, parseArgv;
   MacroFacts judgeInitial; // Effective initial judge facts, not checking-compiler facts.
+  std::optional<LiteralWidths> parseWidths; // Set by the worker from Clang's TargetInfo.
   bool judgeProfile = false, judgeComplete = false;
   bool unknownInUserCode = false;
 };
