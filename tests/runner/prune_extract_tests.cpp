@@ -812,8 +812,10 @@ int main(int argc, char** argv) {
       withHeader(signature + "template<class T> struct Outer { struct Inner {}; };\n",
                  "int main(){auto l = []{}; return signature(Outer<decltype(l)>::Inner{})[0] == 0;}\n");
       check(hasUse("function name expression"),"nested type of a closure specialization:" + uses());
+      // Use an in-range value without a named enumerator so the printed
+      // argument includes the unnamed enum's type and source location.
       withHeader("template<auto V> const char* valueSignature() { return __PRETTY_FUNCTION__; }\n",
-                 "enum { anon_value = 1 };\nint main(){return valueSignature<static_cast<decltype(anon_value)>(42)>()[0] == 0;}\n");
+                 "enum { anon_value = 1 };\nint main(){return valueSignature<static_cast<decltype(anon_value)>(0)>()[0] == 0;}\n");
       check(hasUse("function name expression"),"integral argument of an unnamed enum:" + uses());
       std::string nested = "decltype(l)";
       for (int i = 0; i < 20; ++i) nested = "W<" + nested + ">";
