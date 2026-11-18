@@ -17,6 +17,14 @@ Result<Configuration> probeConfiguration(CompileCommand c, std::string kind, con
   auto& p = result.facts;
   p.name = "configuration"; p.compiler = result.probe.identity; p.triple = result.probe.triple;
   p.dialect = result.probe.dialect;
+  // A1/A2 library policy for the supported target families, also needed by
+  // satisfaction reruns. Unknown targets retain the conservative intersection.
+  if (p.triple.find("mingw") != p.triple.npos || p.triple.find("cygwin") != p.triple.npos)
+    p.libraries = {"mingw-w64", "libstdc++"};
+  else if (p.triple.find("linux") != p.triple.npos)
+    p.libraries = {"glibc", "libstdc++"};
+  else if (p.triple.find("darwin") != p.triple.npos)
+    p.libraries = {"macos-libc", "libstdc++"};  // Homebrew GCC: libstdc++ headers too.
   // Complete registered local GCCs supply exhaustive observations. Unsupported
   // releases remain approximate, just like an incomplete snapshot registry.
   p.reproduced = !specialBuiltins(p.compiler).empty();

@@ -262,13 +262,21 @@ struct Engine {
       const auto header = t[0].text.substr(1, t[0].text.size() - 2);
       const bool standard = isStandardHeader(header);
       for (auto& [name, f] : state) {
+        // Source writes (including an equal-valued branch join) do not inherit
+        // A2's external identity guarantee. Neither do earlier invalidations.
+        const bool externalFact = !f.provenance.empty() && std::all_of(f.provenance.begin(), f.provenance.end(), [](auto o) {
+          return o != FactOrigin::source && o != FactOrigin::systemHeader && o != FactOrigin::pragma && o != FactOrigin::join;
+        });
+        const bool identity = options.profile && externalFact && f.state != MacroState::unknown &&
+            isIdentityMacro(name, options.profile->libraries);
         bool builtin = false;
         if (options.profile) {
           const auto external = options.profile->initialState(name);
           builtin = (external.state == MacroState::known || external.state == MacroState::definedUnknown) &&
               (origin(external, FactOrigin::compilerBuiltin) || origin(external, FactOrigin::specialBuiltin) || origin(external, FactOrigin::nativeModel));
         } else builtin = name == "__cplusplus" && requirements.dialect.has_value();
-        if (!standard || (!builtin && !options.names.protectedUserMacro(name, options.profile ? options.profile->libraries : std::vector<std::string>{})))
+        if (isIdentityMacroName(name)) builtin = builtin && externalFact;
+        if (!standard || (!identity && !builtin && !options.names.protectedUserMacro(name, options.profile ? options.profile->libraries : std::vector<std::string>{})))
           f = {MacroState::unknown, {}, {FactOrigin::systemHeader}};
       }
     } else if (d.name == "pragma" && t.size() >= 2 && t[0].text == "GCC" &&

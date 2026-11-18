@@ -12,6 +12,9 @@ std::vector<std::string> standardHeaders();
 bool isStandardHeader(std::string_view headerName);
 bool isStandardMacroName(std::string_view name);
 bool isReserved(std::string_view name);
+// Empty inventories require coverage by every supported library.
+bool isIdentityMacro(std::string_view name, const std::vector<std::string>& libraries = {});
+bool isIdentityMacroName(std::string_view name);
 using ExtensionLists = std::map<std::string, std::set<std::string, std::less<>>, std::less<>>;
 using ExtensionNames = std::set<std::string, std::less<>>;
 Result<ExtensionNames> parseExtensionList(std::string_view text, std::string_view file);

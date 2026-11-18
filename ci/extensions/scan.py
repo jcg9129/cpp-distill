@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from generate import generate, reachable, ROOT
+from identity import scan_identities
 
 
 def run(argv):
@@ -53,12 +54,20 @@ def scan(platform, compiler, output_dir, headers_version):
     reached = reachable(search)
     libraries = {'linux': ('glibc', 'libstdc++'), 'mingw': ('mingw-w64', 'libstdc++'), 'macos': ('macos-libc',)}[platform]
     provenance = [f'{version}; {triple}; {headers_version}']
+    violations = []
     for library in libraries:
         files = {p for p in reached if attribute(p, platform, search) == library}
         if not files:
             raise ValueError('no reachable headers attributed to ' + library)
         count = generate(library, files, output_dir / (library + '.txt'), provenance)
         print(f'{library}: {len(files)} headers, {count} names')
+        try:
+            count = scan_identities(library, files, output_dir / (library + '-identity.json'), provenance)
+            print(f'{library}: {count} identity names defined (per-library exclusions only)')
+        except ValueError as error:
+            violations.append(str(error))
+    if violations:
+        raise ValueError('\n'.join(violations))
 
 
 if __name__ == '__main__':

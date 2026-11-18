@@ -2,6 +2,22 @@
 #include "support.h"
 #include "core/names/names.h"
 using namespace distill;
+TEST(names_identity_library_coverage) {
+  for (const char* name : {"_MSC_VER", "__clang__", "__MINGW32__", "_WIN32"}) {
+    CHECK(isIdentityMacro(name));
+    CHECK(isIdentityMacro(name, {"glibc", "libstdc++"}));
+    CHECK(isIdentityMacro(name, {"mingw-w64", "libstdc++"}));
+    CHECK(!isIdentityMacro(name, {"unknown"}));
+  }
+  for (const char* name : {"_M_X64", "_M_AMD64", "_M_IX86", "_M_ARM", "_M_ARM64", "_M_ARM64EC", "_WIN64"}) {
+    CHECK(isIdentityMacro(name, {"glibc", "libstdc++"}));
+    CHECK(isIdentityMacro(name, {"macos-libc"}));
+    CHECK(!isIdentityMacro(name));
+    CHECK(!isIdentityMacro(name, {"mingw-w64", "libstdc++"}));
+  }
+  for (const char* name : {"_WIN32_WINNT", "__GLIBC__", "__cpp_lib_ranges", "_M_IA64", "__has_builtin"})
+    CHECK(!isIdentityMacro(name, {"glibc"}));
+}
 TEST(names_standard_headers_through_cpp26_and_c23) {
   for (auto s : {"vector", "codecvt", "strstream", "meta", "contracts", "hive", "inplace_vector", "linalg", "hazard_pointer", "rcu", "simd", "debugging", "stdfloat", "ccomplex", "stdatomic.h", "stdbit.h", "stdckdint.h", "threads.h", "bits/stdc++.h", "ext/pb_ds/assoc_container.hpp", "ext/pb_ds/detail/anything.hpp", "ext/rope"}) CHECK(isStandardHeader(s));
   for (auto s : {"user.h", "Vector", "<vector>", "ext/pb_ds", "ext/rope_extra", "sys/types.h"}) CHECK(!isStandardHeader(s));

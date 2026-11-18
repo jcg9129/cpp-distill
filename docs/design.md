@@ -93,7 +93,15 @@ these, and only these; the report lists each one an output depended on, and
 - **A2** Those headers never `#undef` or redefine a non-reserved macro the
   user's code defines, unless the name is in the lists of A1. Also (user,
   2026-11-15): (a) they never `#undef` or redefine a macro the compiler
-  predefines (`__GNUC__`, `_WIN32`, …); (b) an expansion of one of their
+  predefines (`__GNUC__`, `_WIN32`, …). Amendment (user, 2026-11-18): for
+  compiler/target identity names in `data/names/identity-macros.txt`, they
+  also never define a name absent from the compiler's initial environment,
+  subject to the registry's library coverage. All selected libraries must
+  cover the name; an absent inventory uses the intersection of the supported
+  libraries. MinGW-w64 coverage excludes its six synthesized `_M_*` aliases
+  and `_WIN64`. This preserves known external initial facts, including
+  profile command operations, not facts written by source `#define`/`#undef`;
+  (b) an expansion of one of their
   macros refers to a user-declared name only if that name appears verbatim as
   an identifier token in the invocation's arguments (no names synthesized with
   `##`, R5-3).
@@ -609,8 +617,16 @@ profile.
 - An include of a header on the **standard-header list** (C and C++ standard
   headers, `<bits/stdc++.h>`, `<ext/pb_ds/…>`, `<ext/rope>`): every name in
   the *may-define set* becomes *unknown*; user macros and compiler-predefined
-  macros keep their state (A2 (a), R4-A). The may-define set = every
-  reserved name that is not compiler-predefined ∪ the macro names the C and
+  macros keep their state (A2 (a), R4-A). Also (user, 2026-11-18), known
+  external facts for covered compiler/target identity names keep their state,
+  including known-undefined facts from reproduced-profile absence (A4) or
+  explicit profile `-U`. The identity registry supplies no initial facts:
+  approximate-profile unknowns and no-profile unknowns stay unknown. A source
+  definition or undefinition of an identity name loses this protection,
+  including the positive compiler-predefine exemption, even after an
+  equal-valued join with an external fact. Earlier header/pragma invalidation
+  is never undone. The may-define set = every
+  reserved name without one of these external exemptions ∪ the macro names the C and
   C++ standards specify (one embedded list, the same one A1 refers to) ∪ the
   extension list for the library (with a profile, its `library`; without, the
   union of all lists). An include never makes a macro *defined*, only
@@ -634,6 +650,25 @@ profile.
 collects non-reserved `#define` names from those libraries' headers across the
 versions in the compatibility matrix, and reviewed by PR. They overapproximate:
 a name in the list only costs a resolution.
+
+**Identity registry** (A2(a), user, 2026-11-18) is a separate sorted embedded
+table of reserved names and covered libraries. Unlike A1's overapproximation,
+an incorrect entry can remove live code; entries need a header audit. The
+extension CI scans the same reachable headers for identity `#define`s,
+including inactive branches, writes per-library reports, and fails both scanning
+and merging if a covered name is defined. Excluded names are reported too.
+Computed include operands and unscanned versions remain limitations. This does
+not permit arbitrary compiler-looking or library-feature macros to survive.
+
+Satisfaction reruns use the observed configuration's supported target-family
+library policy (Linux: glibc/libstdc++; MinGW/Cygwin: MinGW-w64/libstdc++;
+Darwin: macOS libc), with the conservative intersection for other targets.
+This is the supported-library assumption, not discovery of custom sysroots.
+An empty-source probe and a resolver rerun do not independently test A2.
+Actual raw/flat preprocessing comparison (§4.6) rejects a header violation that
+changes user tokens or their locations in a checking configuration; an
+unavailable judge still relies on A2. Local command `-D`/`-U` keep their existing
+baseline/raw scope and do not become judge identity facts.
 
 **Evaluating a condition** (R3 "expansion model"):
 

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+requires=reproduced-linux
+profile=fixture
+prune=yes
+artifact=pruned
+verification=fixture
+exit=0
+configuration=local
+contains=#include <cstdint>
+absent=int unrelated
+absent.1=intrin.h
+absent.2=defined(_MSC_VER)
+report=pruned: passed

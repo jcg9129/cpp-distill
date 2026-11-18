@@ -150,6 +150,10 @@ int run(int argc, char** argv) {
       if (value("requires") == "linux" && fixture.triple.find("linux") == fixture.triple.npos) {
         std::cout << "SKIP " << name << ": requires Linux GCC\n"; continue;
       }
+      if (value("requires") == "reproduced-linux" &&
+          (!fixture.reproduced || fixture.triple.find("linux") == fixture.triple.npos)) {
+        std::cout << "SKIP " << name << ": requires reproduced Linux fixture\n"; continue;
+      }
       if (value("requires") == "x86_64" && !fixture.triple.starts_with("x86_64-")) {
         std::cout << "SKIP " << name << ": requires x86_64 GCC\n"; continue;
       }

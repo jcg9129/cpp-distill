@@ -556,6 +556,20 @@ int main(int argc, char** argv) {
       check(r.disabledReasons.empty(),"builtin/defaults retention unexpectedly disabled");
       check(kept("main"),"main missing after builtin parsing");
     });
+    run("scalar overflow builtin argument dependencies", [&] {
+      m = extract("int value(){return 2;}\nint storage;\nint* destination(){return &storage;}\n"
+                  "int unrelated(){return 99;}\n"
+                  "int main(){bool a=__builtin_add_overflow(value(),3,destination());\n"
+                  "bool b=__builtin_sub_overflow(value(),1,destination());\n"
+                  "bool c=__builtin_mul_overflow(value(),4,destination());return a||b||c;}\n",o);
+      r = take(computeRetention(m));
+      check(m.disabledReasons.empty(),"overflow extraction disabled");
+      check(r.disabledReasons.empty(),"overflow retention disabled");
+      check(kept("value"),"value argument dependency lost");
+      check(kept("destination"),"pointer argument dependency lost");
+      check(kept("storage"),"pointer destination dependency lost");
+      check(!kept("unrelated"),"unrelated function retained");
+    });
     run("standard library and builtin functions", [&] {
       // Use the native GCC's target and header search, just like extraction
       // cases; the header-free synthetic models above use a fixed target.

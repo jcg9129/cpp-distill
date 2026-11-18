@@ -148,6 +148,27 @@ TEST(pipeline_pruned_reproduced_diagnostic_separate_from_result_line) {
   CHECK_EQ(r.verification,profile.reproduced ? "target" : "local");
   CHECK_EQ(r.resultLine,"distill: wrote pruned (" + r.verification + "), runtime compared 1 samples");
 }
+TEST(pipeline_identity_satisfaction_and_header_violation) {
+  Fixture f("#include <cstdint>\n#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))\n"
+            "#include <intrin.h>\n#endif\nint unused(){return 7;}\nint main(){return 0;}\n");
+  auto profile = take(testing::captureProfile(f.gcc,f.temp.path));
+  if (profile.triple.find("linux") == profile.triple.npos || !profile.reproduced)
+    throw test::Skip{"requires reproduced Linux fixture"};
+  f.options.profile = &profile;
+  auto r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
+  CHECK(!r.resolution.unknownInUserCode);
+  CHECK(r.bytes.find("intrin.h") == r.bytes.npos); CHECK(r.bytes.find("int unused") == r.bytes.npos);
+  CHECK(r.assumptions.contains("A2"));
+  // Simulate a replacement standard header violating A2. Both model reruns
+  // agree on initial absence; the actual preprocessing comparison must reject.
+  f.options.noPrune = true;
+  std::filesystem::create_directory(f.temp.path / "system");
+  f.temp.write("system/cstdint", "#define _MSC_VER 1\n");
+  f.temp.write("main.cpp", "#include <cstdint>\n#ifdef _MSC_VER\nint chosen=1;\n#else\nint chosen=0;\n#endif\nint main(){return chosen;}\n");
+  f.command = take(parseCompileCommand({pathToUtf8(f.gcc),"-std=gnu++20","-isystem","system","main.cpp"},f.temp.path));
+  r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"raw");
+  CHECK(r.diagnostic.find("preprocess difference") != r.diagnostic.npos);
+}
 TEST(pipeline_pruned_core_disabled_and_render_fallback) {
   for (const auto& fault : {"disabled","render","stdout"}) {
     Fixture f("int unused(){return 7;}\nint main(){return 0;}\n");

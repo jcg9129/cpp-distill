@@ -11,6 +11,8 @@ extern const std::string_view headers[];
 extern const std::size_t headersCount;
 extern const std::string_view macros[];
 extern const std::size_t macrosCount;
+extern const std::string_view identityNames[], identityScopes[];
+extern const std::size_t identityCount;
 const std::string_view* extensionData(std::size_t index);
 std::size_t extensionCount(std::size_t index);
 }
@@ -56,6 +58,22 @@ bool isStandardMacroName(std::string_view name) {
 }
 bool isReserved(std::string_view name) {
   return name.find("__") != name.npos || (name.size() >= 2 && name[0] == '_' && name[1] >= 'A' && name[1] <= 'Z');
+}
+bool isIdentityMacroName(std::string_view name) {
+  return std::binary_search(embedded::identityNames, embedded::identityNames + embedded::identityCount, name);
+}
+bool isIdentityMacro(std::string_view name, const std::vector<std::string>& libraries) {
+  const auto* end = embedded::identityNames + embedded::identityCount;
+  const auto* found = std::lower_bound(embedded::identityNames, end, name);
+  if (found == end || *found != name) return false;
+  const auto scope = embedded::identityScopes[found - embedded::identityNames];
+  const auto covered = [&](const std::string& library) { return scope.find("|" + library + "|") != scope.npos; };
+  if (libraries.empty()) {
+    for (const char* library : {"glibc", "libstdc++", "mingw-w64", "macos-libc"})
+      if (!covered(library)) return false;
+    return true;
+  }
+  return std::all_of(libraries.begin(), libraries.end(), covered);
 }
 Result<ExtensionNames> parseExtensionList(std::string_view text, std::string_view file) {
   ExtensionNames names;

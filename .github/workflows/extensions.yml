@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-name: A1 reachable-header extension inventories
+name: A1 inventories and A2 identity enforcement
 on:
   workflow_dispatch:
 permissions:
@@ -76,9 +76,12 @@ jobs:
         shell: bash
         run: python3 ci/extensions/scan.py --platform macos --output-dir out/extensions --headers-version "$(sw_vers -productVersion); $(uname -m)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
         with:
           name: extensions-${{ matrix.label }}
-          path: out/extensions/*.txt
+          path: |
+            out/extensions/*.txt
+            out/extensions/*-identity.json
           if-no-files-found: error
   merge:
     needs: scan

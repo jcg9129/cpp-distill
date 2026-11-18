@@ -205,6 +205,60 @@ TEST(resolve_real_headers_and_pragmas) {
   r = resolve("#pragma GCC target(\"avx2\")\n#ifdef __AVX2__\nx\n#endif\n#ifdef __OPTIMIZE__\nx\n#endif\n", *e, o);
   CHECK_EQ(r.decisions[0].decision, Decision::unknown); CHECK_EQ(r.decisions[2].decision, Decision::unknown);
 }
+TEST(resolve_real_external_identity_after_headers) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path);
+  if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = profile(); ResolveOptions o; o.profile = &p;
+  const std::string guard = "#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))\n#include <intrin.h>\n#endif\n";
+  auto r = resolve("#include <cstdint>\n#include <vector>\n" + guard, *e, o);
+  CHECK(!r.unknownInUserCode); CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
+  CHECK(r.text.find("intrin.h") == r.text.npos);
+  CHECK_EQ(r.decisions.at(0).external.size(), 3u);
+  for (const auto& use : r.decisions.at(0).external) {
+    CHECK_EQ(use.fact.state, MacroState::undefined);
+    CHECK_EQ(use.fact.provenance, (std::vector<FactOrigin>{FactOrigin::a4}));
+  }
+  // Local command operations cannot become judge facts.
+  r = resolve("#include <cstdint>\n" + guard, *e, o, {"-D_MSC_VER=1930", "-D_M_X64=100"});
+  CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
+  // Profile operations, in contrast, establish external facts, including -U.
+  p.snapshotFacts["_MSC_VER"] = {MacroState::known, Macro{false, {}, false, "1930"}, {FactOrigin::commandOperation}};
+  p.snapshotFacts["_M_X64"] = {MacroState::known, Macro{false, {}, false, "100"}, {FactOrigin::compilerBuiltin}};
+  p.snapshotFacts["_M_ARM64"] = {MacroState::undefined, {}, {FactOrigin::commandOperation}};
+  r = resolve("#include <cstdint>\n" + guard, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
+  // The live intrin.h then invalidates all facts, even known compiler names.
+  r = resolve("#include <vendor.h>\n" + guard, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+  r = resolve("#include <cstdint>\n" + guard, *e);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+  p = profile(); p.reproduced = false;
+  r = resolve("#include <cstdint>\n" + guard, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+}
+TEST(resolve_fake_identity_source_writes_and_library_restrictions) {
+  Fake e; auto p = profile(); ResolveOptions o; o.profile = &p;
+  for (const auto* write : {"#define _MSC_VER 1930\n", "#undef _MSC_VER\n"}) {
+    auto r = resolve(std::string(write) + "#ifdef _MSC_VER\nbefore\n#endif\n#include <cstdint>\n#ifdef _MSC_VER\nafter\n#endif\n", e, o);
+    CHECK_EQ(r.decisions.at(2).decision, Decision::unknown);
+    CHECK(r.decisions.at(2).external.empty());
+  }
+  // Equal source and compiler definitions joined across an unknown branch
+  // must not acquire external-only protection at the following include.
+  p.snapshotFacts["_MSC_VER"] = {MacroState::known, Macro{false, {}, false, "1930"}, {FactOrigin::compilerBuiltin}};
+  p.snapshotFacts["__UNKNOWN"] = {MacroState::unknown, {}, {FactOrigin::nativeModel}};
+  auto r = resolve("#if __UNKNOWN\n#define _MSC_VER 1930\n#endif\n#include <cstdint>\n#ifdef _MSC_VER\nx\n#endif\n", e, o);
+  CHECK_EQ(r.decisions.at(2).decision, Decision::unknown);
+  for (const auto& libraries : {std::vector<std::string>{"mingw-w64", "libstdc++"}, {"missing"}, {}}) {
+    p = profile(); p.libraries = libraries;
+    r = resolve("#include <cstdint>\n#ifdef _M_X64\nx\n#endif\n", e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+  }
+  // No header exemption may restore a fact lost at an earlier nonstandard one.
+  p = profile();
+  r = resolve("#include <vendor.h>\n#include <cstdint>\n#ifdef _MSC_VER\nx\n#endif\n", e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+}
 TEST(resolve_real_library_features_before_include) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
   auto p = featureProfile();
