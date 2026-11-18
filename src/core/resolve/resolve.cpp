@@ -47,6 +47,7 @@ struct Engine {
   std::map<std::size_t, std::size_t> records;
   std::vector<SourceLocation> locations;
   std::vector<bool> keep, resync;
+  std::size_t verbatim = 0; // Depth of enclosing demoted blocks.
   Engine(const InlineResult& r, const CompileCommand& c, ConditionEvaluator& e, const ResolveOptions& o)
       : raw(r), cmd(c), evaluator(e), options(o), requirements(o.requirements) {}
   MacroFact initial(const std::string& name) const {
@@ -300,11 +301,20 @@ struct Engine {
       if (!groups.contains(i)) { transition(i, state); continue; }
       const auto& g = groups.at(i);
       bool unknown = false, selected = false;
+      // Demotion: the first forced alternative (a forced #else/#endif forces
+      // the whole block); inside a demoted block every alternative is forced.
+      std::optional<std::size_t> forced;
+      if (verbatim) forced = 0;
+      const auto& demote = options.forcedUnknown;
+      if (demote.contains(record(g.end).rawLine)) forced = 0;
+      for (std::size_t j = 0; j < g.branches.size() && !forced; ++j) if (demote.contains(record(g.branches[j]).rawLine))
+        forced = scan.lines[g.branches[j]].directive->name == "else" ? 0 : j;
       std::vector<std::size_t> possible;
       for (std::size_t j = 0; j < g.branches.size(); ++j) {
         const auto branch = g.branches[j]; const auto& d = *scan.lines[branch].directive;
         if (selected) continue;
         if (unknown) decide(branch, Decision::unknown, "prior unknown condition");
+        else if (forced == j) decide(branch, Decision::unknown, verbatim ? "inside demoted conditional" : "demoted: configuration disagrees");
         else if (d.name == "else") decide(branch, Decision::trueValue);
         else condition(branch, state);
         const auto choice = record(branch).decision;
@@ -315,11 +325,16 @@ struct Engine {
       decide(g.end, unknown ? Decision::unknown : Decision::trueValue, unknown ? "unknown block" : "");
       if (unknown) {
         std::vector<States> paths;
+        const bool nested = forced.has_value();
+        // Forced blocks keep their contents verbatim (identical to raw), so no
+        // decision only the judge's alternative would exercise is made here.
+        if (nested) ++verbatim;
         for (auto j : possible) {
           auto path = state;
           walk(g.branches[j] + 1, j + 1 < g.branches.size() ? g.branches[j + 1] : g.end, path);
           paths.push_back(std::move(path));
         }
+        if (nested) --verbatim;
         if (scan.lines[g.branches.back()].directive->name != "else") paths.push_back(state);
         state = join(paths);
       } else {
@@ -404,6 +419,38 @@ Result<ResolveResult> resolveConditions(const InlineResult& raw, const CompileCo
   catch (const Error& e) { return e; }
   catch (const std::exception& e) { return Error{std::string("resolve: ") + e.what()}; }
   catch (...) { return Error{"resolve: unknown failure"}; }
+}
+std::vector<std::size_t> disagreements(const ResolveResult& a, const ResolveResult& b) {
+  std::vector<std::size_t> found;
+  if (!a.disabledReasons.empty() || !b.disabledReasons.empty() || a.decisions.size() != b.decisions.size()) return found;
+  for (std::size_t i = 0; i < a.decisions.size(); ++i) {
+    const auto& x = a.decisions[i]; const auto& y = b.decisions[i];
+    if (x.rawLine != y.rawLine || x.original != y.original || x.directive != y.directive) return {};
+    if ((x.decision == Decision::trueValue || x.decision == Decision::falseValue) && y.decision != Decision::dead && x.decision != y.decision)
+      found.push_back(i);
+  }
+  return found;
+}
+Result<ResolveResult> demoteDisagreements(const InlineResult& raw, const CompileCommand& cmd, ConditionEvaluator& evaluator,
+                                          ResolveOptions options, ResolveResult resolution, const ResolveResult& observed,
+                                          std::vector<ResolutionDecision>* demoted) {
+  // The forced set grows strictly, so this ends after at most one round per directive.
+  for (std::size_t round = 0; !sameDecisions(resolution, observed); ++round) {
+    if (round > resolution.decisions.size()) return Error{"demotion did not converge"};
+    if (options.deadline && std::chrono::steady_clock::now() >= *options.deadline) return Error{"demotion deadline exceeded"};
+    const auto found = disagreements(resolution, observed);
+    std::size_t added = 0;
+    for (auto i : found) if (options.forcedUnknown.insert(resolution.decisions[i].rawLine).second) {
+      ++added;
+      if (demoted) demoted->push_back(resolution.decisions[i]);
+    }
+    if (!added) return Error{"configuration disagreement cannot be demoted"};
+    auto rerun = resolveConditions(raw, cmd, evaluator, options);
+    if (!rerun.ok()) return rerun.error();
+    resolution = std::move(rerun.value());
+    if (!resolution.disabledReasons.empty()) return Error{"resolution disabled during demotion"};
+  }
+  return resolution;
 }
 bool sameDecisions(const ResolveResult& a, const ResolveResult& b) {
   if (!a.disabledReasons.empty() || !b.disabledReasons.empty() || a.decisions.size() != b.decisions.size()) return false;

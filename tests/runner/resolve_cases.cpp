@@ -232,6 +232,71 @@ Profile localProfile(const ProbeResult& probe, const std::filesystem::path& cwd,
   write(cwd / "local-predefined.txt", snapshot);
   return p;
 }
+// Cross-host demotion (docs/reviews/2026-11-18-cross-host-demotion.md) with
+// synthetic judge/host profiles that disagree only on target identity.
+void demotionSelfTest(ConditionEvaluator& evaluator, const std::filesystem::path& cwd) {
+  auto profile = [](bool x86) {
+    Profile p; p.name = x86 ? "judge" : "host"; p.reproduced = true; p.dialect = {"gnu++20", true, 202002};
+    const MacroFact defined{MacroState::known, Macro{false, {}, false, "1"}, {FactOrigin::compilerBuiltin}};
+    const MacroFact undefined{MacroState::undefined, {}, {FactOrigin::a4}};
+    p.snapshotFacts["__x86_64__"] = x86 ? defined : undefined;
+    p.snapshotFacts["__aarch64__"] = x86 ? undefined : defined;
+    return p;
+  };
+  const auto judge = profile(true), host = profile(false);
+  const auto command = require(parseCompileCommand({"g++", "main.cpp", "-std=gnu++20"}, cwd));
+  InlineResult raw;
+  raw.text = "#if defined(__x86_64__)\n"        // 1: judge true, host false -> demoted
+             "#define WIDE 1\n"
+             "#if defined(NESTED)\n"            // 3: nested in the demoted block -> verbatim
+             "int nested;\n"
+             "#endif\n"
+             "#else\n"                          // 6
+             "#define WIDE (1)\n"
+             "#endif\n"                         // 8
+             "#if WIDE\n"                       // 9: both true, but WIDE is joined -> unknown
+             "int wide;\n"
+             "#endif\n"
+             "#ifdef UNRELATED\n"               // 12: both false, stays resolved
+             "int unrelated;\n"
+             "#endif\n"
+             "int main(){return 0;}\n";
+  for (std::size_t line = 1; line <= 15; ++line) raw.lineMap.push_back(SourceLocation{"main.cpp", line});
+  auto at = [](const ResolveResult& r, std::size_t line) -> const ResolutionDecision& {
+    for (const auto& d : r.decisions) if (d.rawLine == line) return d;
+    throw std::runtime_error("no decision at raw line " + std::to_string(line));
+  };
+  ResolveOptions judgeOptions; judgeOptions.profile = &judge;
+  ResolveOptions hostOptions; hostOptions.profile = &host;
+  const auto a = require(resolveConditions(raw, command, evaluator, judgeOptions));
+  const auto b = require(resolveConditions(raw, command, evaluator, hostOptions));
+  check(at(a, 1).decision == Decision::trueValue && at(b, 1).decision == Decision::falseValue, "demotion fixture: identity facts");
+  check(at(a, 9).decision == Decision::trueValue && at(b, 9).decision == Decision::trueValue, "demotion fixture: agreeing WIDE");
+  check(!sameDecisions(a, b), "demotion fixture: host must not satisfy judge resolution");
+  check(disagreements(a, b) == std::vector<std::size_t>{0}, "demotion: only the identity #if disagrees");
+  // (1)+(2): the contradicted conditional is kept and its effects cascade.
+  std::vector<ResolutionDecision> demoted;
+  const auto d = require(demoteDisagreements(raw, command, evaluator, judgeOptions, a, b, &demoted));
+  check(sameDecisions(d, b), "demotion: host satisfies demoted resolution");
+  check(demoted.size() == 1 && demoted[0].rawLine == 1 && demoted[0].directive == "if", "demotion: demoted entries");
+  check(at(d, 1).decision == Decision::unknown && at(d, 1).reason.starts_with("demoted"), "demotion: #if kept unknown");
+  check(at(d, 3).decision == Decision::unknown && at(d, 3).reason == "inside demoted conditional", "demotion: nested kept verbatim");
+  check(at(d, 6).decision == Decision::unknown && at(d, 8).decision == Decision::unknown, "demotion: #else/#endif kept");
+  check(at(d, 9).decision == Decision::unknown && at(d, 9).reason == "unknown macro: WIDE", "demotion: cascade to WIDE: " + at(d, 9).reason);
+  check(at(d, 12).decision == Decision::falseValue, "demotion: independent decision stays resolved");
+  const std::string block = "#if defined(__x86_64__)\n#define WIDE 1\n#if defined(NESTED)\nint nested;\n#endif\n#else\n#define WIDE (1)\n#endif\n#if WIDE\n";
+  check(d.text.find(block) != std::string::npos, "demotion: demoted block not verbatim:\n" + d.text);
+  check(d.text.find("UNRELATED") == std::string::npos, "demotion: resolved block not removed:\n" + d.text);
+  // A forced #endif demotes its whole block.
+  auto viaEnd = judgeOptions; viaEnd.forcedUnknown = {8};
+  check(at(require(resolveConditions(raw, command, evaluator, viaEnd)), 1).decision == Decision::unknown, "demotion: forced #endif");
+  // (3) No regression when the configuration agrees.
+  check(sameDecisions(a, a) && disagreements(a, a).empty(), "demotion: agreeing configuration");
+  std::vector<ResolutionDecision> none;
+  const auto same = require(demoteDisagreements(raw, command, evaluator, judgeOptions, a, a, &none));
+  check(none.empty() && same.text == a.text, "demotion: agreeing configuration changed resolution");
+  std::cout << "PASS demotion self-test\n";
+}
 std::string decisionName(const ResolutionDecision& d) {
   if (d.decision == Decision::trueValue) return "true";
   if (d.decision == Decision::falseValue) return "false";
@@ -245,6 +310,7 @@ int run(int argc, char** argv) {
   const auto gcc = testing::testGcc();
   auto evaluator = testing::testEvaluator(temporary.path);
   if (!evaluator) { std::cout << "SKIP resolver cases: GCC unavailable\n"; return 0; }
+  demotionSelfTest(*evaluator, temporary.path);
   const std::string compiler = gcc ? pathToUtf8(*gcc) : "g++";
   auto fixtureCommand = require(parseCompileCommand({compiler, "main.cpp", "-std=gnu++20", "-fsigned-char", "-O0", "-DDISTILL_FIXTURE_JUDGE=1"}, temporary.path));
   ProbeOptions po; po.temporaryRoot = temporary.path;

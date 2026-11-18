@@ -793,8 +793,15 @@ the configuration's compiler probes identically to the snapshot (macros and
 special builtins) under the profile's full `flags`, and the command has no
 host-dependent option (a local `-march=native` describes the local host,
 P2-6); otherwise `local`. If no configuration satisfies the facts a
-`flat` resolution used, `flat` and `pruned` are not candidates and `raw` is
-written, with the reason in the report. A build in a non-satisfying
+`flat` resolution used, each candidate in order is retried with
+**demotion** (docs/reviews/2026-11-18-cross-host-demotion.md): the
+directives whose true/false decision it contradicts are forced unknown and the
+resolver re-runs from raw with the judge's facts, until the candidate
+satisfies; a demoted block, including its nested conditionals, stays
+verbatim, and each demotion is reported (`flat: demoted <file>:<line>
+(#if): local configuration disagrees`). Only if that fails too are `flat`
+and `pruned` not candidates and `raw` is written, with the reason in the
+report. A build in a non-satisfying
 configuration may be run as a diagnostic and is reported as such; it never
 certifies anything.
 

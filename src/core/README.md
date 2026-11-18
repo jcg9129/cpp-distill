@@ -427,6 +427,10 @@ link options; the local fallback keeps local link options and records each
 omitted profile link argument and why. Relative system/library paths become
 absolute before generated builds change cwd. `satisfies` reruns the resolver on
 raw using the observed facts and compares directionally with `sameDecisions`.
+If no candidate satisfies, `demoteDisagreements` retries each probed candidate:
+it forces the contradicted directives unknown (`ResolveOptions::forcedUnknown`,
+raw lines) and re-resolves until the candidate satisfies; demoted blocks stay
+verbatim, nested conditionals included.
 Candidates are available `check` compilers in profile order, then the local
 fallback. After probing, a check candidate must pass
 `compatibleProfileTriple(profile.triple, probe.triple)`; an incompatible target

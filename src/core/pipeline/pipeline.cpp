@@ -266,12 +266,16 @@ struct Pipeline {
           for (const auto& r : result.resolution.disabledReasons) why += ": " + r;
           throw Error{why};
         }
-        auto flatChecked = strip(sourceModel(result.resolution.text,result.resolution.lineMap,result.resolution.keepOffsets));
-        result.resolution.text = std::move(flatChecked.text);
-        result.resolution.lineMap = std::move(flatChecked.lineMap);
-        result.resolution.keepOffsets = std::move(flatChecked.keepOffsets);
-        if (Clock::now() >= deadline) throw Error{"flat rendering deadline exceeded"};
-        write(flatPath, result.resolution.text);
+        auto publish = [&](ResolveResult resolution) {
+          auto flatChecked = strip(sourceModel(resolution.text,resolution.lineMap,resolution.keepOffsets));
+          resolution.text = std::move(flatChecked.text);
+          resolution.lineMap = std::move(flatChecked.lineMap);
+          resolution.keepOffsets = std::move(flatChecked.keepOffsets);
+          if (Clock::now() >= deadline) throw Error{"flat rendering deadline exceeded"};
+          write(flatPath, resolution.text);
+          result.resolution = std::move(resolution);
+        };
+        publish(std::move(result.resolution));
         step("select configuration");
         std::vector<std::pair<std::filesystem::path, bool>> candidates;
         if (options.profile) for (const auto& compiler : options.profile->check) {
@@ -280,7 +284,39 @@ struct Pipeline {
           else result.diagnostic += "check compiler unavailable: " + compiler + '\n';
         }
         candidates.emplace_back(command.compiler, false);
+        auto checkFlat = [&](const Configuration& c, const ResolveResult& observed) {
+          step("flat checks");
+          try {
+            compare(c, rawPath, false, flatPath, raw);
+            if (!options.samples.empty()) runs["original flat configuration"] = execute(c,build(c,command.source,false,"original-flat"));
+            const auto flatProgram = build(c,flatPath,true,"flat");
+            runs["flat"] = execute(c,flatProgram);
+            compareRuns(runs["original flat configuration"],runs["flat"]);
+            checkedBytes(rawPath, rawChecked.text); checkedBytes(flatPath, result.resolution.text);
+            if (Clock::now() >= deadline) throw Error{"flat checks deadline exceeded"};
+            result.checks.push_back({"flat", "passed", c, observed.decisions});
+            result.artifact = "flat"; result.bytes = result.resolution.text; flatConfiguration = c;
+            for (const auto& d : result.resolution.decisions) if (d.decision == Decision::trueValue || d.decision == Decision::falseValue) {
+              if (options.profile && (d.requirements.integers || d.requirements.dialect)) result.assumptions.insert("A4");
+              for (const auto& u : d.external) {
+                for (const auto origin : u.fact.provenance) {
+                  if (origin == FactOrigin::a3) result.assumptions.insert("A3");
+                  if (origin == FactOrigin::a5) result.assumptions.insert("A5");
+                }
+                if (options.profile && !u.fact.provenance.empty()) result.assumptions.insert("A4");
+              }
+              if (std::any_of(raw.systemIncludes.begin(), raw.systemIncludes.end(), [](const auto& i) { return i.standard; })) {
+                result.assumptions.insert("A1"); result.assumptions.insert("A2");
+              }
+            }
+            result.verification = targetEquivalent(c, options.profile, hostDependent(command)) ? "target" : "local";
+          } catch (const Error& e) {
+            result.checks.push_back({"flat", e.message, c, observed.decisions});
+            result.diagnostic += "flat rejected: " + e.message + "; using raw\n";
+          }
+        };
         bool selected = false;
+        std::vector<std::pair<Configuration, ResolveResult>> disagreeing;
         for (const auto& [compiler, check] : candidates) {
           if (Clock::now() >= deadline) { result.diagnostic += "configuration selection deadline exceeded\n"; break; }
           try {
@@ -297,40 +333,37 @@ struct Pipeline {
             auto satisfied = take(satisfies(c, raw, command, result.resolution, evaluator, deadline, &observed));
             if (Clock::now() >= deadline) throw Error{"configuration satisfaction deadline exceeded"};
             if (!satisfied) {
-              result.checks.push_back({"flat", "configuration does not satisfy resolution", c, observed.decisions}); continue;
+              result.checks.push_back({"flat", "configuration does not satisfy resolution", c, observed.decisions});
+              disagreeing.emplace_back(std::move(c), std::move(observed)); continue;
             }
             selected = true;
-            step("flat checks");
-            try {
-              compare(c, rawPath, false, flatPath, raw);
-              if (!options.samples.empty()) runs["original flat configuration"] = execute(c,build(c,command.source,false,"original-flat"));
-              const auto flatProgram = build(c,flatPath,true,"flat");
-              runs["flat"] = execute(c,flatProgram);
-              compareRuns(runs["original flat configuration"],runs["flat"]);
-              checkedBytes(rawPath, rawChecked.text); checkedBytes(flatPath, result.resolution.text);
-              if (Clock::now() >= deadline) throw Error{"flat checks deadline exceeded"};
-              result.checks.push_back({"flat", "passed", c, observed.decisions});
-              result.artifact = "flat"; result.bytes = result.resolution.text; flatConfiguration = c;
-              for (const auto& d : result.resolution.decisions) if (d.decision == Decision::trueValue || d.decision == Decision::falseValue) {
-                if (options.profile && (d.requirements.integers || d.requirements.dialect)) result.assumptions.insert("A4");
-                for (const auto& u : d.external) {
-                  for (const auto origin : u.fact.provenance) {
-                    if (origin == FactOrigin::a3) result.assumptions.insert("A3");
-                    if (origin == FactOrigin::a5) result.assumptions.insert("A5");
-                  }
-                  if (options.profile && !u.fact.provenance.empty()) result.assumptions.insert("A4");
-                }
-                if (std::any_of(raw.systemIncludes.begin(), raw.systemIncludes.end(), [](const auto& i) { return i.standard; })) {
-                  result.assumptions.insert("A1"); result.assumptions.insert("A2");
-                }
-              }
-              result.verification = targetEquivalent(c, options.profile, hostDependent(command)) ? "target" : "local";
-            } catch (const Error& e) {
-              result.checks.push_back({"flat", e.message, c, observed.decisions});
-              result.diagnostic += "flat rejected: " + e.message + "; using raw\n";
-            }
+            checkFlat(c, observed);
             break; // The first satisfying configuration is authoritative, even on failure.
           } catch (const Error& e) { result.diagnostic += "configuration " + pathToUtf8(compiler) + ": " + e.message + '\n'; }
+        }
+        // Only when nothing satisfies as is: keep exactly the conditionals a
+        // candidate disagrees with unknown, so its own compiler evaluates them
+        // (docs/reviews/2026-11-18-cross-host-demotion.md).
+        for (const auto& [c, observed] : disagreeing) {
+          if (selected) break;
+          if (Clock::now() >= deadline) { result.diagnostic += "demotion deadline exceeded\n"; break; }
+          auto demotion = ro; demotion.deadline = deadline;
+          std::vector<ResolutionDecision> demoted;
+          auto demotedResolution = demoteDisagreements(raw, command, evaluator, demotion, result.resolution, observed, &demoted);
+          if (!demotedResolution.ok()) {
+            result.diagnostic += "configuration " + pathToUtf8(c.command.compiler) + ": no demotion: " + demotedResolution.error().message + '\n';
+            continue;
+          }
+          publish(std::move(demotedResolution.value()));
+          for (const auto& d : demoted) {
+            result.diagnostic += "flat: demoted ";
+            if (d.original) result.diagnostic += d.original->file + ':' + std::to_string(d.original->line);
+            else result.diagnostic += "<generated>:" + std::to_string(d.rawLine);
+            result.diagnostic += " (#" + d.directive + "): " + c.kind + " configuration disagrees\n";
+          }
+          selected = true;
+          checkFlat(c, observed);
+          break;
         }
         if (!selected) throw Error{"no configuration satisfies resolution; using raw"};
       } catch (const Error& e) { result.diagnostic += e.message + '\n'; }
