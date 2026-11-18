@@ -799,6 +799,14 @@ explicit specializations are classified independently. Every pruned artifact
 reports A7, including deletions unrelated to variables (enum cache seeds).
 Constexpr resource-flag support remains deferred.
 
+Policy D3d-4 (`docs/reviews/2026-11-18-equal-literal-macros.md`) accepts a
+predefined macro whose parse and judge definitions are each one integer literal
+(decimal/octal/hex, u/l/ll) with equal value and equal [lex.icon] type under
+both the worker-reported parse widths and the judge's `__SIZEOF_*` widths, e.g.
+GCC `__SCHAR_MAX__ 0x7f` vs Clang `127`. Not when pasted, inside a user
+directive, or `hashOperator` (a macro with `#`/`#@`/`##` expands in the same
+physical invocation span).
+
 Policy D3d-2 also accepts `NoUniqueAddressAttr` only for the standard,
 argument-free `[[no_unique_address]]` spelling on a non-static, non-bit-field
 `FieldDecl` owned by its enclosing record. Empty and nonempty fields, templates,

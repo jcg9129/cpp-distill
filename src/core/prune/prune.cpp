@@ -3,6 +3,10 @@
 #include "core/names/adl.h"
 #include "core/names/names.h"
 #include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 #include <queue>
 
@@ -22,6 +26,82 @@ std::string macroTokens(const Macro& m) {
 bool equalMacro(const MacroFact& a, const MacroFact& b) {
   return a.state == MacroState::known && b.state == MacroState::known && a.definition && b.definition &&
       macroTokens(*a.definition) == macroTokens(*b.definition);
+}
+// D3d-4: a single integer-literal token, classified per [lex.icon]. Only
+// decimal/octal/hex with standard u/l/ll suffixes; everything else is rejected.
+struct IntegerLiteral { std::uint64_t value = 0; bool decimal = false, isUnsigned = false; int length = 0; };
+std::optional<IntegerLiteral> integerLiteral(const MacroFact& f) {
+  if (f.state != MacroState::known || !f.definition || f.definition->functionLike) return {};
+  auto scan = scanDirectives(f.definition->replacement); if (!scan.ok()) return {};
+  std::vector<Token> tokens;
+  for (const auto& l : scan.value().lines) { if (l.directive) return {}; tokens.insert(tokens.end(),l.tokens.begin(),l.tokens.end()); }
+  if (tokens.size() != 1 || tokens[0].kind != TokenKind::number) return {};
+  const std::string_view text = tokens[0].text;
+  IntegerLiteral out; int base = 10; std::size_t digits = 0;
+  if (text.starts_with("0x") || text.starts_with("0X")) { base = 16; digits = 2; }
+  else if (text.starts_with('0')) { base = 8; digits = 1; }
+  out.decimal = base == 10;
+  auto end = digits;
+  auto digit = [&](char c) { return base == 16 ? std::isxdigit(static_cast<unsigned char>(c)) != 0 : base == 8 ? c >= '0' && c <= '7' : c >= '0' && c <= '9'; };
+  while (end < text.size() && digit(text[end])) ++end;
+  if (base != 8 && end == digits) return {};
+  if (end > digits) {
+    auto parsed = std::from_chars(text.data() + digits, text.data() + end, out.value, base);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + end) return {};
+  }
+  std::string_view suffix = text.substr(end);
+  auto take = [&](std::string_view s) { if (!suffix.starts_with(s)) return false; suffix.remove_prefix(s.size()); return true; };
+  auto unsignedSuffix = [&] { return take("u") || take("U"); };
+  auto lengthSuffix = [&] { if (take("ll") || take("LL")) return 2; if (take("l") || take("L")) return 1; return 0; };
+  out.isUnsigned = unsignedSuffix(); out.length = lengthSuffix();
+  if (!out.isUnsigned && out.length) out.isUnsigned = unsignedSuffix();
+  if (!suffix.empty()) return {};
+  return out;
+}
+// Type index in [lex.icon] Table 8 order: int, unsigned int, long, unsigned
+// long, long long, unsigned long long. Values fitting no standard type (the
+// extended-integer-type case) are unclassified.
+std::optional<int> literalType(const IntegerLiteral& l, const std::optional<LiteralWidths>& w) {
+  if (!w) return {};
+  const unsigned bits[] = {w->intBits, w->longBits, w->longLongBits};
+  for (auto b : bits) if (b == 0 || b > 64) return {};
+  for (int type = 2 * l.length; type < 6; ++type) {
+    const bool isUnsigned = type % 2;
+    if ((l.isUnsigned && !isUnsigned) || (l.decimal && !l.isUnsigned && isUnsigned)) continue;
+    const auto b = bits[type / 2] - (isUnsigned ? 0 : 1);
+    const auto max = b >= 64 ? std::numeric_limits<std::uint64_t>::max() : (std::uint64_t{1} << b) - 1;
+    if (l.value <= max) return type;
+  }
+  return {};
+}
+std::optional<LiteralWidths> judgeWidths(const PruningModel& m) {
+  auto number = [&](const char* name) -> std::optional<unsigned> {
+    auto i = m.judgeInitial.find(name); if (i == m.judgeInitial.end()) return {};
+    const auto& f = i->second;
+    // -D/-U can lie about the physical representation (as profileRequirements).
+    if (std::find(f.provenance.begin(),f.provenance.end(),FactOrigin::commandOperation) != f.provenance.end()) return {};
+    if (f.state != MacroState::known || !f.definition || f.definition->functionLike) return {};
+    const auto& s = f.definition->replacement; unsigned n = 0;
+    auto parsed = std::from_chars(s.data(), s.data() + s.size(), n);
+    if (parsed.ec != std::errc{} || parsed.ptr != s.data() + s.size() || n == 0 || n > 128) return {};
+    return n;
+  };
+  auto cb = number("__CHAR_BIT__"), i = number("__SIZEOF_INT__"), l = number("__SIZEOF_LONG__"), ll = number("__SIZEOF_LONG_LONG__");
+  if (!cb || !i || !l || !ll) return {};
+  return LiteralWidths{*cb * *i, *cb * *l, *cb * *ll};
+}
+// Equal value and equal type under both the parse and the judge widths.
+bool equalIntegerLiteral(const MacroFact& parse, const MacroFact& judge,
+                         const std::optional<LiteralWidths>& parseWidths, const std::optional<LiteralWidths>& judgeModel) {
+  auto p = integerLiteral(parse), j = integerLiteral(judge);
+  if (!p || !j || p->value != j->value) return false;
+  std::optional<int> type;
+  for (const auto* l : {&*p, &*j}) for (const auto* w : {&parseWidths, &judgeModel}) {
+    auto t = literalType(*l, *w);
+    if (!t || (type && *type != *t)) return false;
+    type = t;
+  }
+  return true;
 }
 std::string macroValue(const MacroFact& f) {
   if (f.state == MacroState::undefined) return "undefined";
@@ -135,6 +215,9 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     for (auto o : f.provenance) if (static_cast<unsigned>(o) > static_cast<unsigned>(FactOrigin::noProfile)) return false;
     return true;
   };
+  if (m.parseWidths && (m.parseWidths->intBits == 0 || m.parseWidths->longBits == 0 || m.parseWidths->longLongBits == 0 ||
+      std::max({m.parseWidths->intBits, m.parseWidths->longBits, m.parseWidths->longLongBits}) > 128))
+    return invalid("invalid parse integer widths","model.parseWidths");
   std::size_t index = 0;
   for (const auto& [name,fact] : m.judgeInitial) {
     (void)name;
@@ -168,6 +251,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     if (!isStandardHeader(header)) disable("non-standard system header: " + header);
     else if (!extensionPruningCovered(header)) disable("unaudited GNU extension header: " + header);
   }
+  const auto judgeModel = judgeWidths(m);
   for (const auto& e : m.expansions) if (e.user && !e.condition) {
     // These two intrinsic replacements are certified by D3b's independent
     // location invariant. Explicit source/command definitions are ordinary
@@ -175,7 +259,12 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     const bool locationIntrinsic = (e.name == "__LINE__" || e.name == "__FILE__") &&
         e.parse.state == MacroState::definedUnknown && !e.parse.definition &&
         (e.judge.activeSpecialBuiltin() || (!m.judgeProfile && e.judge.state == MacroState::unknown && !e.judge.definition));
-    if (e.predefined && !locationIntrinsic && !equalMacro(e.parse, e.judge)) {
+    // D3d-4: an equal-value, equal-type integer literal spelled differently is
+    // indistinguishable unless its spelling reaches #, ## or a directive.
+    const bool equalLiteral = !e.paste && !e.hashOperator &&
+        std::none_of(m.sourceDirectives.begin(), m.sourceDirectives.end(), [&](auto r) { return contains(r, e.offset); }) &&
+        equalIntegerLiteral(e.parse, e.judge, m.parseWidths, judgeModel);
+    if (e.predefined && !locationIntrinsic && !equalMacro(e.parse, e.judge) && !equalLiteral) {
       const auto prefix = "predefined macro " + e.name;
       if (e.judge.state == MacroState::unknown || e.judge.state == MacroState::definedUnknown ||
           (e.judge.state == MacroState::known && !e.judge.definition))
