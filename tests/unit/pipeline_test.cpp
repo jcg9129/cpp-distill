@@ -190,16 +190,40 @@ TEST(pipeline_approximate_shipped_profile_identity_and_uint64_constant) {
     throw test::Skip{"requires LP64 Linux GCC for the shipped QOJ constant definitions"};
   auto profile = take(lookupProfile("qoj")); CHECK(!profile.reproduced);
   f.options.profile = &profile;
-  auto r = f.run("uint64");
-  CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "pruned");
-  CHECK(!r.resolution.unknownInUserCode); CHECK(f.constantExpansionObserved);
-  CHECK(r.bytes.find("intrin.h") == r.bytes.npos); CHECK(r.bytes.find("int unused") == r.bytes.npos);
-  CHECK(r.bytes.find("UINT64_C(0)") != r.bytes.npos);
-  CHECK_EQ(r.runtime, "compared 1 samples");
+  auto diagnose = [](const PipelineResult& r, int before) {
+    if (test::failures == before) return;
+    std::cerr << r.diagnostic;
+    if (r.pruningModel) std::cerr << "pruning model disabled reasons: " << test::show(r.pruningModel->disabledReasons) << '\n';
+    if (r.retention) std::cerr << "pruning retention disabled reasons: " << test::show(r.retention->disabledReasons) << '\n';
+  };
+  PipelineResult r;
+  for (const bool nativeCheck : {false, true}) {
+    if (nativeCheck) {
+      // Also exercise the compatible check path on LP64 aarch64 hosts, where
+      // the shipped x86_64 triple otherwise selects the local fallback.
+      profile.triple = local.triple;
+      profile.check = {pathToUtf8(f.gcc)};
+    }
+    const auto before = test::failures;
+    r = f.run("uint64");
+    CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "pruned");
+    CHECK(!r.resolution.unknownInUserCode); CHECK(f.constantExpansionObserved);
+    CHECK(r.bytes.find("intrin.h") == r.bytes.npos); CHECK(r.bytes.find("int unused") == r.bytes.npos);
+    CHECK(r.bytes.find("UINT64_C(0)") != r.bytes.npos);
+    CHECK_EQ(r.runtime, "compared 1 samples");
+    if (nativeCheck) CHECK(std::any_of(r.checks.begin(), r.checks.end(), [](const auto& check) {
+      return check.artifact == "flat" && check.status == "passed" && check.configuration &&
+          check.configuration->kind == "check" && std::any_of(check.configuration->command.args.begin(),
+              check.configuration->command.args.end(), [](const auto& a) { return a.spelling == std::vector<std::string>{"-lm"}; });
+    }));
+    diagnose(r, before);
+  }
   profile.snapshotFacts.at("__UINT64_C").definition->replacement = "c ## ULL";
+  const auto before = test::failures;
   r = f.run("uint64");
   CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "flat");
   CHECK(r.diagnostic.find("predefined macro __UINT64_C: unknown judge fact") != r.diagnostic.npos);
+  diagnose(r, before);
 }
 TEST(pipeline_pruned_core_disabled_and_render_fallback) {
   for (const auto& fault : {"disabled","render","stdout"}) {

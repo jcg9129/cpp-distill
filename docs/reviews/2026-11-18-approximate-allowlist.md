@@ -152,3 +152,69 @@ with a shipped Linux profile for `<cstdint>`, the MSVC `<intrin.h>` guard and
 `UINT64_C`, and verify removal of an unrelated function. The synthetic model
 must explicitly report the predefined constant expansion to exercise the
 pruner's unknown-judge-fact check; real Clang extraction remains CI coverage.
+
+## Linux CI failure: compatible check configuration and profile link flags
+
+The GCC 13.3 registry gap is real but does **not** require disabling this
+test's pruning. `specialBuiltins` keys on GCC major/minor, and the embedded
+GCC 13 registry is `gcc-13.2.txt`, so `probeConfiguration` marks GCC 13.3's
+observed local facts approximate. It still records the actual macro dump,
+startup-header definitions, union special-builtin probes and command operations.
+`Profile::initialState` admits the facts this example needs: initial absence
+of `_MSC_VER`, `_M_X64` and `_M_ARM64` for audited GCC 13–16, preserved across
+`<cstdint>` under the Linux/glibc A2 rule. `__UINT64_C` is not a conditional
+dependency here: retention compares the known parse expansion against the
+judge helper admitted by the exact/least type derivation. The observed local
+LP64 helper also passes that derivation. No complete special-builtin registry
+is needed for those particular facts.
+
+The determining difference is the selected **check configuration**, not its
+compiler version. QOJ has `check = ["g++-15", "g++"]`, an x86_64 Linux triple,
+`std = "c++23"`, and `link = ["-lm"]`. On Ubuntu x86_64, the available `g++`
+check candidate has a compatible triple, satisfies the resolved boolean guard,
+and is selected with `-lm`. On aarch64 the x86_64 check target is incompatible;
+the pipeline selects the local fallback, which omits profile link flags.
+The original `flatCommand` appended **every** profile link flag as
+`Class::libraries`. This produced both `external library option: -lm` and
+`untranslated semantic option: -lm`, disabling retention on the check path.
+These reasons arise after successful resolution and configuration satisfaction.
+The explicit profile dialect is used on both paths; this guard does not depend
+on a numeric `__cplusplus` comparison or the compiler's default `-std`.
+
+The product fix preserves the command parser's existing harmless classifications
+when appending profile link arguments. In particular, `-lm`, `-lpthread` and
+`-lstdc++` already belong to the design's standard-library exception (§1.2,
+§4.1); standard static/strip options are likewise already harmless. Applying
+that same policy to profile arguments removes an accidental inconsistency,
+without extending A6 or asserting that arbitrary external libraries cannot
+call user code. Exact build arguments and order are preserved; harmless link
+flags are omitted from cc1 as before for ordinary compile commands. Unknown
+libraries, library search paths and opaque linker arguments such as `-Wl,...`
+retain the conservative external-library classification and translation refusal.
+Local fallback link omission and judge reproduction requirements are unchanged.
+
+Validation uses LLVM-free tests and the existing synthetic extraction worker.
+The pipeline regression now also copies the QOJ profile with the native LP64
+Linux triple and the explicit local compiler as its check candidate, ensuring
+that aarch64 runs exercise the profile `-lm` path too. It checks the selected
+configuration, pruning, constant expansion, runtime comparison and rejection of
+the forged `ULL` helper. On failure it prints the pipeline diagnostic and both
+model and retention disabled reasons. A separate command-policy regression
+covers harmless profile links, external links and local fallback omission.
+
+No GCC 13 binary is installed locally. A worktree-local wrapper around the
+real GCC 15.2 probe changed only the `-dM` GCC identity to 13.3.0 and optionally
+`-dumpmachine` to x86_64 Linux. Before the fix, the unmodified aarch64 triple
+passed through the fallback; the compatible x86_64 simulation reproduced both
+`-lm` blockers exactly. The latter also reports that x86_64 binaries cannot be
+run on this host, an expected simulation limitation. This isolates the registry
+gap from check selection; it is not a claim to have executed Ubuntu GCC 13.3
+or real Clang extraction. The native-triple GCC 13.3 identity simulation also
+exercises the new compatible-check regression with real builds and sample runs.
+
+Final local verification: LLVM-free Debug builds with `cmake --build build -j2`
+and `ctest --test-dir build --output-on-failure -j1` pass all six suites, both
+with normal spawning and with `DISTILL_FORCE_FORK_SPAWN=ON`. Each unit run has
+253 passes, no failures and the Windows-only skip. The targeted pipeline test
+also passes with the simulated GCC 13.3 identity. No LLVM build or package
+installation was used.

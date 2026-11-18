@@ -78,10 +78,15 @@ Result<CompileCommand> flatCommand(const CompileCommand& local, const Profile* p
       word += a.spelling.size();
     }
   }
-  // Link options were already validated by the profile loader, separately from
-  // compile options (which intentionally reject -Wl). Preserve their exact argv.
-  if (result.ok() && p && check) for (const auto& flag : p->link)
-    result.value().args.push_back({{flag}, Class::libraries, flag, {}});
+  // Reuse the command parser's harmless link classifications (e.g. -lm).
+  // Opaque profile link options, including -Wl which that parser rejects,
+  // retain the conservative external-library classification and exact argv.
+  if (result.ok() && p && check) for (const auto& flag : p->link) {
+    auto parsed = parseCompileCommand({pathToUtf8(compiler), pathToUtf8(local.source), flag}, local.cwd);
+    if (parsed.ok() && parsed.value().args.back().classification == Class::harmless)
+      result.value().args.push_back(std::move(parsed.value().args.back()));
+    else result.value().args.push_back({{flag}, Class::libraries, flag, {}});
+  }
   return result;
 }
 Result<bool> satisfies(const Configuration& c, const InlineResult& raw, const CompileCommand& command,
