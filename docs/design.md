@@ -377,10 +377,36 @@ recorded it as undefined).
   the native dependency model give it;
 - approximate profile: only allow-listed facts (compiler identity, target OS
   and architecture, dialect, type sizes and limits, character signedness) are
-  taken from its snapshot; every other reserved name is *unknown* (P2-1);
+  taken from its snapshot, with the conditional additions below; every other
+  reserved name is *unknown* (P2-1);
 - every profile: an unlisted non-reserved name is *undefined* (A5); an
   unlisted reserved name is *undefined* for a reproduced build (A4) and
   *unknown* for an approximate one.
+
+**Approximate GCC additions** (user, 2026-11-18), audited in
+[`reviews/2026-11-18-approximate-allowlist.md`](reviews/2026-11-18-approximate-allowlist.md):
+for GCC 13–16 snapshots, the finite non-GCC identity list in
+`approximate-allowlist.txt` licenses initial **absence only** (`_MSC_VER`,
+the listed `_M_*`, Clang, Intel, CUDA and Emscripten identities). Unexpected
+positive definitions remain unknown. This relies on A4's GCC/command assertion;
+it does not rule out downstream specs or unrecorded command definitions.
+Existing A2 library restrictions still apply after headers, notably MinGW's
+six `_M_*` aliases. Explicit profile `-D`/`-U` operations retain precedence.
+
+For the ten `__INTn_C`/`__UINTn_C`/`__INTMAX_C`/`__UINTMAX_C` helpers,
+only positive compiler-builtin definitions matching GCC's mechanical rule
+are admitted. Require known, allow-listed, compiler-builtin type facts from
+the same snapshot: exact-width and matching least-width types for `n`, or
+the corresponding MAX type. Recognize canonical standard integer spellings;
+unsigned char/short additionally need their width and int width to apply
+integer promotions. Require GCC's single `c` parameter and exact `c` or
+`c ## SUFFIX` replacement. Missing, overridden or inconsistent prerequisites,
+unsupported types, missing helpers and inconsistent definitions stay unknown.
+The derivation never rewrites the snapshot. It establishes consistency
+conditional on already trusted type facts, including inferred ABIs, and
+does not upgrade the profile to reproduced. `--judge-check` remains
+presence-only for these function-like helpers and does not probe every newly
+admitted absent identity; no additional detection coverage is claimed.
 
 ### 4.3.1 Profile names, aliases and the judge probe
 
@@ -620,7 +646,8 @@ profile.
   macros keep their state (A2 (a), R4-A). Also (user, 2026-11-18), known
   external facts for covered compiler/target identity names keep their state,
   including known-undefined facts from reproduced-profile absence (A4) or
-  explicit profile `-U`. The identity registry supplies no initial facts:
+  the conditional approximate allow-list (§4.3), or explicit profile `-U`.
+  The identity registry supplies no initial facts:
   approximate-profile unknowns and no-profile unknowns stay unknown. A source
   definition or undefinition of an identity name loses this protection,
   including the positive compiler-predefine exemption, even after an

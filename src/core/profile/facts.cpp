@@ -2,6 +2,7 @@
 #include "core/profile/profile.h"
 #include "core/names/names.h"
 #include <algorithm>
+#include <charconv>
 #include <regex>
 #include <sstream>
 
@@ -24,6 +25,70 @@ FactOrigin origin(const std::string& text) {
   if (text == "special-builtin") return FactOrigin::specialBuiltin;
   if (text == "native-model") return FactOrigin::nativeModel;
   throw Error{"invalid fact provenance: " + text};
+}
+bool auditedGcc(const Profile& p) {
+  return p.compiler.family == CompilerFamily::gcc && p.compiler.major >= 13 && p.compiler.major <= 16;
+}
+bool nonGccIdentity(std::string_view name) {
+  static const std::set<std::string, std::less<>> names{
+    "_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_M_X64", "_M_AMD64", "_M_IX86",
+    "_M_ARM", "_M_ARM64", "_M_ARM64EC", "__clang__", "__clang_major__",
+    "__clang_minor__", "__clang_patchlevel__", "__INTEL_COMPILER",
+    "__INTEL_LLVM_COMPILER", "__NVCC__", "__CUDACC__", "__EMSCRIPTEN__"};
+  return names.contains(name);
+}
+std::string constantType(std::string_view name) {
+  for (const auto* base : {"INT8", "INT16", "INT32", "INT64", "UINT8", "UINT16", "UINT32", "UINT64", "INTMAX", "UINTMAX"})
+    if (name == "__" + std::string(base) + "_C") return "__" + std::string(base) + "_TYPE__";
+  return {};
+}
+std::optional<std::string> builtinObject(const Profile& p, const std::string& name) {
+  const auto it = p.snapshotFacts.find(name);
+  if (!approximateAllowed(name) || it == p.snapshotFacts.end()) return {};
+  const auto& f = it->second;
+  // -D of a type/width macro changes its spelling, not GCC's internal node.
+  if (f.state != MacroState::known || !f.definition || f.provenance != std::vector{FactOrigin::compilerBuiltin}) return {};
+  const auto& m = *f.definition;
+  if (m.functionLike || m.variadic || !m.parameters.empty()) return {};
+  return m.replacement;
+}
+std::optional<unsigned> builtinWidth(const Profile& p, const std::string& name) {
+  const auto text = builtinObject(p, name);
+  if (!text) return {};
+  unsigned value = 0;
+  const auto [end, error] = std::from_chars(text->data(), text->data() + text->size(), value);
+  if (error != std::errc{} || end != text->data() + text->size() || !value) return {};
+  return value;
+}
+bool consistentConstant(const Profile& p, const std::string& typeName, const MacroFact& fact) {
+  // GCC 15.2.0, 5115c7e447fc07457443df874bf57840e8316d5f:
+  // gcc/c-family/c-cppbuiltin.cc, builtin_define_stdint_macros,
+  // type_suffix and builtin_define_constants. See the 2026-11-18 audit.
+  if (!auditedGcc(p) || fact.state != MacroState::known || !fact.definition ||
+      fact.provenance != std::vector{FactOrigin::compilerBuiltin}) return false;
+  const auto type = builtinObject(p, typeName);
+  if (!type) return false;
+  if (typeName != "__INTMAX_TYPE__" && typeName != "__UINTMAX_TYPE__") {
+    auto least = typeName;
+    least.insert(least.starts_with("__UINT") ? 6 : 5, "_LEAST");
+    if (builtinObject(p, least) != type) return false;
+  }
+  std::string suffix;
+  if (*type == "signed char" || *type == "short int" || *type == "int") suffix = "";
+  else if (*type == "unsigned char" || *type == "short unsigned int") {
+    const auto width = builtinWidth(p, *type == "unsigned char" ? "__SCHAR_WIDTH__" : "__SHRT_WIDTH__");
+    const auto intWidth = builtinWidth(p, "__INT_WIDTH__");
+    if (!width || !intWidth || *width > *intWidth) return false;
+    suffix = *width < *intWidth ? "" : "U";
+  } else if (*type == "unsigned int") suffix = "U";
+  else if (*type == "long int") suffix = "L";
+  else if (*type == "long unsigned int") suffix = "UL";
+  else if (*type == "long long int") suffix = "LL";
+  else if (*type == "long long unsigned int") suffix = "ULL";
+  else return false;
+  const auto& macro = *fact.definition;
+  return macro.functionLike && !macro.variadic && macro.parameters == std::vector<std::string>{"c"} &&
+      macro.replacement == (suffix.empty() ? "c" : "c ## " + suffix);
 }
 }
 bool MacroFact::activeSpecialBuiltin() const {
@@ -66,7 +131,10 @@ MacroFact Profile::initialState(std::string_view name) const {
     auto fact = found->second;
     const bool command = std::find(fact.provenance.begin(), fact.provenance.end(), FactOrigin::commandOperation) != fact.provenance.end();
     if (reproduced || command) return fact;
-    if (approximateAllowed(name)) { fact.provenance.push_back(FactOrigin::allowList); return fact; }
+    const auto type = constantType(name);
+    const bool permitted = !type.empty() ? consistentConstant(*this, type, fact) :
+        (!nonGccIdentity(name) || (auditedGcc(*this) && fact.state == MacroState::undefined));
+    if (approximateAllowed(name) && permitted) { fact.provenance.push_back(FactOrigin::allowList); return fact; }
     return {MacroState::unknown, {}, fact.provenance};
   }
   // Profiles without snapshots still establish explicit ordered command operations.
@@ -79,7 +147,8 @@ MacroFact Profile::initialState(std::string_view name) const {
   }
   if (!isReserved(name)) return {MacroState::undefined, {}, {FactOrigin::a5}};
   if (reproduced) return {MacroState::undefined, {}, {FactOrigin::a4}};
-  if (snapshot && approximateAllowed(name)) return {MacroState::undefined, {}, {FactOrigin::allowList}};
+  if (snapshot && approximateAllowed(name) && constantType(name).empty() &&
+      (!nonGccIdentity(name) || auditedGcc(*this))) return {MacroState::undefined, {}, {FactOrigin::allowList}};
   return {MacroState::unknown, {}, {}};
 }
 Result<bool> parseProfileSnapshot(Profile& p, std::string_view text) {

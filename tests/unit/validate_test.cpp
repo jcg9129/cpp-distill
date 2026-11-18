@@ -189,6 +189,37 @@ TEST(validate_configuration_preserves_link_order) {
     CHECK(std::find(argv.begin(), argv.end(), "-Iinc") == argv.end());
   }
 }
+TEST(validate_profile_link_options_use_command_pruning_policy) {
+  auto loaded = lookupProfile("qoj"); CHECK(loaded.ok());
+  auto p = loaded.value();
+  const auto cwd = std::filesystem::current_path();
+  const auto local = parseCompileCommand({"g++", "main.cpp"}, cwd).value();
+  ResolveResult flat; flat.text = "int main(){}\n";
+  for (const auto* flag : {"-lm", "-lpthread", "-lstdc++", "-static", "-static-libstdc++", "-static-libgcc", "-s",
+                           "-lssl", "-Llocal", "-Wl,--stack=268435456"}) {
+    p.link = {flag};
+    Configuration c; c.command = flatCommand(local, &p, "g++", true).value();
+    c.probe.triple = p.triple; c.probe.dialect = p.dialect;
+    const auto argv = c.command.buildArgv("flat.cpp", "program", true, {});
+    CHECK_EQ(std::count(argv.begin(), argv.end(), flag), 1);
+    const auto model = preparePruning(c, {}, flat, &p).value();
+    const bool external = std::string_view(flag) == "-lssl" || std::string_view(flag) == "-Llocal" ||
+        std::string_view(flag).starts_with("-Wl,");
+    CHECK_EQ(c.command.pruningAllowed().allowed, !external);
+    if (external) {
+      CHECK_EQ(model.disabledReasons, (std::vector<std::string>{"external library option: " + std::string(flag),
+          "untranslated semantic option: " + std::string(flag)}));
+    } else {
+      CHECK(model.disabledReasons.empty());
+      CHECK(computeRetention(model).value().disabledReasons.empty());
+      const auto direct = parseCompileCommand({"g++", "main.cpp", flag}, cwd).value();
+      CHECK_EQ(c.command.args.back().classification, direct.args.back().classification);
+    }
+    // The local fallback omits profile link options, regardless of classification.
+    const auto fallback = flatCommand(local, &p, "g++", false).value().buildArgv("flat.cpp", "program", true, {});
+    CHECK(std::find(fallback.begin(), fallback.end(), flag) == fallback.end());
+  }
+}
 TEST(validate_atcoder_flat_pruning_remaining_reasons_and_link_provenance) {
   auto loaded = lookupProfile("atcoder-gcc15-gnupp23"); CHECK(loaded.ok());
   const auto& p = loaded.value();
