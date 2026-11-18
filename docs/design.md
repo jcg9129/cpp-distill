@@ -99,7 +99,10 @@ these, and only these; the report lists each one an output depended on, and
   subject to the registry's library coverage. All selected libraries must
   cover the name; an absent inventory uses the intersection of the supported
   libraries. MinGW-w64 coverage excludes its six synthesized `_M_*` aliases
-  and `_WIN64`. This preserves known external initial facts, including
+  and `_WIN64`. Audited target architecture and data-model names are included;
+  glibc coverage excludes `__ARM_ARCH` and `__thumb__`, and macOS coverage
+  excludes `_LP64` and `__ILP32__` (see the registry's audit). This preserves
+  known external initial facts, including
   profile command operations, not facts written by source `#define`/`#undef`;
   (b) an expansion of one of their
   macros refers to a user-declared name only if that name appears verbatim as
@@ -688,9 +691,9 @@ a name in the list only costs a resolution.
 **Identity registry** (A2(a), user, 2026-11-18) is a separate sorted embedded
 table of reserved names and covered libraries. Unlike A1's overapproximation,
 an incorrect entry can remove live code; entries need a header audit. The
-extension CI scans the same reachable headers for identity `#define`s,
+extension CI scans the same reachable headers for identity `#define`s and `#undef`s,
 including inactive branches, writes per-library reports, and fails both scanning
-and merging if a covered name is defined. Excluded names are reported too.
+and merging if a covered name is written. Excluded names are reported too.
 Computed include operands and unscanned versions remain limitations. This does
 not permit arbitrary compiler-looking or library-feature macros to survive.
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A2 identity registry and textual definition reports (including inactive code)."""
+"""A2 identity registry and textual macro-write reports (including inactive code)."""
 import json
 import re
 from generate import ROOT, LIBRARIES, IDENTIFIER, directive_text
@@ -23,7 +23,9 @@ def registry(path=ROOT / 'data/names/identity-macros.txt'):
 
 
 def definitions(text):
-    return set(re.findall(r'^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z_0-9]*)',
+    # The report's historical "definitions" field includes undefinitions:
+    # either operation can invalidate an external known initial fact.
+    return set(re.findall(r'^[ \t]*#[ \t]*(?:define|undef)[ \t]+([A-Za-z_][A-Za-z_0-9]*)',
                           directive_text(text, mask_literals=True), re.M))
 
 

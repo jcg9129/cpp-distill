@@ -232,6 +232,26 @@ TEST(pipeline_approximate_shipped_profile_identity_and_uint64_constant) {
   CHECK(r.diagnostic.find("predefined macro __UINT64_C: unknown judge fact") != r.diagnostic.npos);
   diagnose(r, before);
 }
+TEST(pipeline_approximate_shipped_profile_x86_identity) {
+  Fixture f("#include <cstdint>\n"
+            "#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)\n"
+            "int unused(){return 7;}\nint main(){return 0;}\n"
+            "#else\n#error expected x86 target\n#endif\n");
+  const auto local = take(probeCompiler(f.gcc, f.command, {true, {}, f.temp.path}));
+  if (local.triple.find("linux") == local.triple.npos || !local.macros.contains("__x86_64__"))
+    throw test::Skip{"requires x86_64 Linux GCC for the shipped QOJ architecture"};
+  auto profile = take(lookupProfile("qoj")); CHECK(!profile.reproduced);
+  f.options.profile = &profile;
+  const auto before = test::failures;
+  const auto r = f.run();
+  CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "pruned");
+  CHECK(!r.resolution.unknownInUserCode);
+  CHECK_EQ(r.resolution.decisions.at(0).decision, Decision::trueValue);
+  CHECK(r.bytes.find("#if") == r.bytes.npos); CHECK(r.bytes.find("#error") == r.bytes.npos);
+  CHECK(r.bytes.find("int unused") == r.bytes.npos);
+  CHECK_EQ(r.runtime, "compared 1 samples"); CHECK(r.assumptions.contains("A2"));
+  if (test::failures != before) std::cerr << r.diagnostic;
+}
 TEST(pipeline_pruned_core_disabled_and_render_fallback) {
   for (const auto& fault : {"disabled","render","stdout"}) {
     Fixture f("int unused(){return 7;}\nint main(){return 0;}\n");

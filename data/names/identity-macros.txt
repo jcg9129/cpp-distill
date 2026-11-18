@@ -2,6 +2,8 @@
 # A2(a), user 2026-11-18. Sorted NAME followed by covered libraries.
 # Audit: docs/reviews/2026-11-18-a2-identity-macros.md
 # MinGW synthesizes six _M_* aliases; _cygwin.h defines _WIN64.
+# Architecture audit: glibc writes __ARM_ARCH/__thumb__; Apple writes _LP64/__ILP32__.
+_LP64 glibc libstdc++ mingw-w64
 _MSC_BUILD glibc libstdc++ macos-libc mingw-w64
 _MSC_FULL_VER glibc libstdc++ macos-libc mingw-w64
 _MSC_VER glibc libstdc++ macos-libc mingw-w64
@@ -14,17 +16,45 @@ _M_X64 glibc libstdc++ macos-libc
 _WIN32 glibc libstdc++ macos-libc mingw-w64
 _WIN64 glibc libstdc++ macos-libc
 __APPLE__ glibc libstdc++ macos-libc mingw-w64
+__ARM_ARCH libstdc++ macos-libc mingw-w64
 __CUDACC__ glibc libstdc++ macos-libc mingw-w64
 __CYGWIN__ glibc libstdc++ macos-libc mingw-w64
 __EMSCRIPTEN__ glibc libstdc++ macos-libc mingw-w64
+__ILP32__ glibc libstdc++ mingw-w64
 __INTEL_COMPILER glibc libstdc++ macos-libc mingw-w64
 __INTEL_LLVM_COMPILER glibc libstdc++ macos-libc mingw-w64
+__LP64__ glibc libstdc++ macos-libc mingw-w64
 __MACH__ glibc libstdc++ macos-libc mingw-w64
 __MINGW32__ glibc libstdc++ macos-libc mingw-w64
 __MINGW64__ glibc libstdc++ macos-libc mingw-w64
 __NVCC__ glibc libstdc++ macos-libc mingw-w64
+__PPC__ glibc libstdc++ macos-libc mingw-w64
+__aarch64__ glibc libstdc++ macos-libc mingw-w64
+__amd64 glibc libstdc++ macos-libc mingw-w64
+__amd64__ glibc libstdc++ macos-libc mingw-w64
+__arm__ glibc libstdc++ macos-libc mingw-w64
 __clang__ glibc libstdc++ macos-libc mingw-w64
 __clang_major__ glibc libstdc++ macos-libc mingw-w64
 __clang_minor__ glibc libstdc++ macos-libc mingw-w64
 __clang_patchlevel__ glibc libstdc++ macos-libc mingw-w64
+__i386 glibc libstdc++ macos-libc mingw-w64
+__i386__ glibc libstdc++ macos-libc mingw-w64
+__i486__ glibc libstdc++ macos-libc mingw-w64
+__i586__ glibc libstdc++ macos-libc mingw-w64
+__i686__ glibc libstdc++ macos-libc mingw-w64
 __linux__ glibc libstdc++ macos-libc mingw-w64
+__loongarch__ glibc libstdc++ macos-libc mingw-w64
+__mips__ glibc libstdc++ macos-libc mingw-w64
+__powerpc64__ glibc libstdc++ macos-libc mingw-w64
+__powerpc__ glibc libstdc++ macos-libc mingw-w64
+__ppc__ glibc libstdc++ macos-libc mingw-w64
+__riscv glibc libstdc++ macos-libc mingw-w64
+__riscv_xlen glibc libstdc++ macos-libc mingw-w64
+__s390__ glibc libstdc++ macos-libc mingw-w64
+__s390x__ glibc libstdc++ macos-libc mingw-w64
+__thumb__ libstdc++ macos-libc mingw-w64
+__wasm32__ glibc libstdc++ macos-libc mingw-w64
+__wasm64__ glibc libstdc++ macos-libc mingw-w64
+__wasm__ glibc libstdc++ macos-libc mingw-w64
+__x86_64 glibc libstdc++ macos-libc mingw-w64
+__x86_64__ glibc libstdc++ macos-libc mingw-w64
