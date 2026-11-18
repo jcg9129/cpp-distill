@@ -748,6 +748,10 @@ int main(int argc, char** argv) {
       m = extract("enum { anon = 1 };\nstruct C { operator decltype(anon)() const { (void)__func__; return anon; } };\n"
                   "int main(){return C{} - 1;}\n",o);
       check(hasUse("function name expression"),"__func__ in a conversion to an unnamed enum missing:" + uses());
+      // Fourth review: a parameter's type is traversed (only its default is not).
+      m = extract("const char* seen;\nint f(decltype([] { enum { e };\n  struct C { operator decltype(e)() const { seen = __func__; return e; } };\n"
+                  "  return int(C{}); }) cb) { return cb(); }\nint main(){return f({});}\n",o);
+      check(hasUse("function name expression"),"__func__ in a lambda in a parameter type missing:" + uses());
       m = extract("#define S(x) #x\nconst char* s = S(__LINE__);\nint main(){}\n",o);
       check(m.positionUses.empty(),"a stringized __LINE__ is not expanded:" + uses());
     });

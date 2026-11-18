@@ -10,4 +10,4 @@ configuration=local
 absent=int unused
 contains=#line
 diagnostic=line markers kept: __builtin_LINE at main.cpp:3
-diagnostic.1=line markers kept: call-site default argument with a source position at main.cpp:4
+diagnostic.1=line markers kept: source position builtin at main.cpp:3
