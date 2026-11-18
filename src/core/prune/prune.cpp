@@ -279,6 +279,10 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     } else out.removedBytes += bytes;
   }
   if (std::any_of(out.families.begin(),out.families.end(),[](const auto& f) { return !f.kept; })) out.assumptions.insert("A6");
+  // Even an enum or unused template can seed constant-evaluation caches.
+  // Every enabled pruning result relies on A7, including a pruned artifact
+  // whose families all survived (rendering may still remove empty shells).
+  if (out.disabledReasons.empty()) out.assumptions.insert("A7");
   return out;
 }
 Result<bool> staticNameInvariant(const PruningModel& m, const PruningResult& r, std::string_view rendered) {

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+api=yes
+milestone=D3d
+report=policy: D3d-3
+report.a7=pruning assumption: A7
+contains=struct Used {
+contains.1=inline constexpr UsedTag used_tag{};
+contains.2=Reporter flag<int>{};
+contains.3=~Reporter() { std::puts("specialized"); }
+absent=struct Unused {
+absent.1=UnusedTag
+absent.2=struct Convert {
+absent.3=constexpr int converted
+absent.4=int unrelated()

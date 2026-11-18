@@ -539,3 +539,172 @@ was set to `build/constexpr-inert-review/tmp` for compilation and testing.
   writes outside the worktree were performed. The pinned LLVM 23.1.5 extraction
   behavior remains unmeasured; local compiler probes and the core model must not
   be represented as worker end-to-end tests.
+
+## Under A7 (2026-11-18)
+
+**Verdict: the narrow rule is sound under A1–A7 and the existing pruning
+preconditions. Phase 2 may proceed.** This supersedes the narrow-rule verdict
+above for this amended contract; it does not approve the original broad
+constexpr/constinit proposal.
+
+The user added **A7** (2026-11-18): “The program's observable behaviour does not
+depend on constant evaluation reaching an implementation limit (constexpr call
+depth, loop/operation limits, template instantiation depth); in particular no
+constraint, SFINAE or if-constexpr outcome is decided by limit exhaustion or by
+compiler evaluation caches.” Every pruned artifact relies on A7, including
+artifacts produced without using the new variable exception. The report must
+list A7 alongside its other applicable assumptions.
+
+### Exact boundary approved here
+
+Keep the existing positive `inertType && safeSystemMacros && inertExpr`
+whitelist. Add an alternative storage-root exemption with all of:
+
+- **A:** a defining `constexpr` variable with static storage, no thread storage,
+  no volatile or reference type and no attributes on the variable. `constinit`
+  alone supplies no exemption. Existing attribute, macro, parse-error,
+  dependency, ownership and explicit-instantiation rules still apply.
+- **B1:** its expanded, as-written type is builtin arithmetic (`bool`, character,
+  integer or floating types), ignoring cv qualification only. No canonical-type
+  inference, aliases, `decltype`, `auto`, template-parameter/member types,
+  pointers, arrays or enums gain this exemption. Its initializer may be
+  value-dependent on a template pattern; the type must remain fixed as written.
+- **B2, alternatively:** the written type directly names a complete, named,
+  non-local, non-template, non-dependent user class, not a union or class
+  specialization. It has no bases, non-static data members, user-declared
+  constructors, copy/move assignments or destructor, virtual functions, or
+  attributes. Its destructor is trivial. Require an actually empty list
+  initializer (`{}` or `= {}`), not an arbitrary expression that Clang happens
+  to lower to a zero-argument construction. Nested enums and static members
+  remain subject to ordinary traversal and their own root classification.
+- **C:** `safeSystemMacros` still holds. The exemption only avoids adding a
+  storage root; it never erases an existing root or skips dependency traversal.
+
+A class nested inside a template/specialization does not get B2 through an
+instantiated concrete type. Explicit variable/member specializations are
+classified from their own written declarations, never from the primary's
+constexpr status or type. Existing family unions mean an effectful
+specialization retains its primary as well.
+
+### Remaining attacks
+
+The scalar warmup, template-member warmup and empty-tag nested-enum warmup
+counterexamples above all change a constraint through limit exhaustion and
+compiler caching. They violate A7. **A7 also closes the pre-existing enum
+cache-seed hole in the contract**, without requiring an enum-root code change:
+removing a cache seed cannot observably change an A7-conforming program's
+selection. This is a restriction of supported programs, not a claim to repair
+compiler caches or detect every A7 violation.
+
+**Lifetime extension:** excluding references alone was insufficient for the
+original proposal, because a class could contain a reference member. B1 has
+no such member; B2 excludes all non-static data members and bases. Neither can
+carry a reference or initializer-list backing array with a lifetime-extended,
+effectful temporary. See [class.temporary](https://timsong-cpp.github.io/cppwp/n4950/class.temporary).
+
+**Implicit conversions:** B1 can create class temporaries while computing an
+arithmetic result. A valid instantiated constexpr declaration requires the
+entire initialization full-expression, including destruction of those
+temporaries, to be constant evaluation. There is no runtime full-expression
+left with an effectful temporary destructor, nor a scalar reference extending
+its lifetime to program exit. A dependent initializer need not be evaluated
+on the uninstantiated pattern; valid GCC instantiations still have the same
+requirement. Ill-formed instantiations are outside successful-input semantics.
+B2's source-empty aggregate initialization and structural restrictions exclude
+user constructors, conversion arguments and default arguments. See
+[dcl.constexpr](https://timsong-cpp.github.io/cppwp/n4950/dcl.constexpr).
+
+**Types and macros:** inspecting expanded TypeLocs, without desugaring aliases
+or deduced types, rejects `decltype`, `auto` and alias spellings even if Clang's
+canonical result is arithmetic or an empty record. User macros producing
+builtin keywords or direct eligible tag names can qualify; macros producing
+aliases or `decltype` cannot. External paste, predefined-macro equality,
+system-macro restrictions, macro ownership/pinning and unsupported-attribute
+refusal remain independent gates. A7 does not excuse any preprocessing or
+cross-compiler type-selection disagreement unrelated to resource exhaustion.
+
+**Specializations and destruction:** explicit specializations can have a
+different type and different constexpr status; inspect each separately and
+retain a specialization with an effectful initializer/destructor. For B2, an
+ordinary non-template class with no bases, fields or user-declared special
+members has no hidden destruction to import from Clang's choice of an overload
+or specialization. Nonempty classes, references, `constinit`, thread storage
+and template-parameter-typed members receive no new exemption. None of the
+remaining requested attacks survives these restrictions under A7. See
+[temp.expl.spec](https://timsong-cpp.github.io/cppwp/n4950/temp.expl.spec).
+
+### Reconsidering parse flags without implementing translations
+
+**Yes: a resource-only `-fconstexpr-depth=N` translation is sound under A7**
+for GCC-accepted supported inputs, subject to the existing error/refusal gates.
+The earlier equal-limit/cache and larger-Clang-limit constraint counterexamples
+all violate A7. A larger Clang budget can turn a GCC depth-failed requirement
+into a successful requirement only when that outcome depended on exhaustion,
+which A7 expressly excludes. A GCC rejection of a required constant expression
+is outside the accepted-input contract. A lower/equal Clang budget that emits
+a diagnostic must still disable pruning; silently changed constraint outcomes
+are excluded by A7. This establishes the resource-policy argument, not general
+GCC/Clang semantic equivalence. The pinned option spelling was audited in the
+[earlier depth audit](2026-11-17-atl-pruning-blockers.md#step-2a-depth-audit-why-translation-remains-disabled).
+A7 similarly removes the resource/cache objection to loop/operation-budget
+handling, but does not establish an exact GCC-loop/GCC-operation to Clang-step
+mapping. Numeric validation, ordered options, the pinned cc1 mapping and worker
+regressions still belong to a separate implementation. **No flag translation
+or omission is implemented here.**
+
+A7 supplies no argument for OpenMP, modules, CPU options, external linkage or
+trivial-auto-init semantics. Their separate audit obligations remain. Nor does
+A7 justify the original broad destructor inference or bypass the error-recovery
+gates. The keep-rule amendment below is deliberately limited to A/B/C.
+
+### Phase 2 implementation and verification under A7
+
+Policy **D3d-3** implements the additional exemption in `VisitVarDecl` using
+expanded TypeLocs and the empty record's definition and syntactic initializer.
+Implicit instantiations consult the pattern's written type; explicit
+specializations keep independent classification. The old positive whitelist,
+root reasons, traversal, unions and refusal gates remain in place. Every
+enabled retention result carries A7, and the pipeline propagates it only after
+successfully checking a pruned artifact. Disabled analysis and flat/raw
+fallback artifacts do not acquire A7 as an output assumption.
+
+Extraction regressions cover unused/referenced constexpr-bool class templates,
+empty tags, arithmetic calls, conversion temporaries, local statics, aliases,
+`decltype`, `auto`, `constinit`, thread storage, volatile, references, nonempty
+classes, destructors (including defaulted), constructors/default arguments,
+bases, class specializations, attributes, macro-produced types,
+template-parameter-typed members and different-type explicit specializations.
+The `constexpr_inert` pipeline fixture checks whole-template/tag removal and
+retains an unused specialized object whose destructor prints. Report tests
+cover deletion, no family deletion, disabled analysis and rejected candidates.
+
+Persistent probe sources, downloaded API headers, binaries and build outputs
+are under this worktree's ignored `build/` directory. All test temporary
+directories remain inside the worktree; compiler `TMPDIR` is `build/tmp`.
+No LLVM build, commits or credential searches were performed.
+
+- GCC 15.2.0 and Clang 22.1.8 on AArch64: **16 asserted compile-and-run checks**
+  of the runtime fixture and a manually reduced control across C++20/C++23 and
+  `-O0`/`-O2`, with `-pedantic-errors`. Every execution exits 0 and prints
+  `0 1\nspecialized\n`; the conversion temporary produces no runtime output.
+  These controls exercise the language argument, not worker extraction.
+- All **28 new header-free extraction inputs** pass syntax checks with both
+  installed compilers in C++20, including every negative retention input.
+  Sources and `a7-results.json` are in `build/constexpr-inert-review/`.
+- The LLVM-free Debug build uses `DISTILL_LLVM_DIR` empty,
+  `DISTILL_PROFILE_ONLY=OFF`, `CMAKE_CXX_FLAGS_DEBUG='-O0 -g0'` and
+  `cmake --build build -j2`. The extraction-test harness builds without LLVM;
+  `src/clang/prune_extract.cpp` itself requires the pinned SDK and was not
+  compiled in this build. Existing profile missing-initializer warnings remain.
+- The new pinned-worker extraction regressions and worker-backed pipeline
+  fixture were **not run**. No pinned LLVM 23.1.5 extraction/removal result is
+  claimed from the installed compiler probes or LLVM-free tests.
+- LLVM-free CTest run (`--output-on-failure --timeout 120 -j2`): inline cases,
+  resolver cases, pipeline cases, checker models and caide assertion tokens
+  passed. The unit suite reached its existing 120-second timeout with no
+  failed assertions, after passing the pruning regressions and first A7
+  pipeline report test. Rerunning the complete unit executable alone passed:
+  **247 passed, 0 failed, 1 platform skip; 0 failed checks**, including both
+  A7 pipeline report cases and fallback exclusions. See `build/unit-rerun.log`.
+- `git diff --check` passed. Changes are uncommitted; parse-option translation
+  remains unchanged.

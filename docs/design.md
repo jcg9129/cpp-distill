@@ -79,7 +79,7 @@ user code after resolution; an include of a system header outside the
 standard-header list; libraries other than `-lm`, `-lpthread`, `-lstdc++`
 (external code can call into user code, R4-K).
 
-### 1.3 Trust assumptions (user, 2026-11-15)
+### 1.3 Trust assumptions (user, amended through 2026-11-18)
 
 Some judge facts can't be proved from the user's machine. The design relies on
 these, and only these; the report lists each one an output depended on, and
@@ -139,6 +139,13 @@ these, and only these; the report lists each one an output depended on, and
   are not in the registry; separate rules cover them (§4.7). A6 covers the
   standard headers only, not GNU extension headers (§4.7 preconditions); an
   unsupported dialect disables pruning.
+- **A7** (user, 2026-11-18) The program's observable behaviour does not depend on
+  constant evaluation reaching an implementation limit (constexpr call depth,
+  loop/operation limits, template instantiation depth); in particular no
+  constraint, SFINAE or if-constexpr outcome is decided by limit exhaustion or
+  by compiler evaluation caches. Every pruned artifact relies on A7, including
+  deletion of unused enums or templates that could otherwise seed an
+  evaluation cache. The report lists A7 for every pruned artifact.
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -875,12 +882,13 @@ omission disables pruning. This semantic gate is independent of the profile's
 preprocessing-only `inert` permission exemption: that list supplies no proof of
 dependency-preserving omission. Modules, OpenMP and CPU options currently have
 no supported translation and retain their semantic disables.
-`-fconstexpr-depth=N` also remains untranslated: matching the nested-call
-resource unit does not establish equivalent evaluation success. GCC's constexpr
-cache can avoid recursion that Clang performs, and a depth failure inside a
-requirement can silently change template selection. Equal or larger Clang limits
-therefore lack the required guarantee; see the
-[step 2a audit](reviews/2026-11-17-atl-pruning-blockers.md#step-2a-depth-audit-why-translation-remains-disabled).
+`-fconstexpr-depth=N` also remains untranslated. Under A7, the resource/cache
+counterexamples in the
+[step 2a audit](reviews/2026-11-17-atl-pruning-blockers.md#step-2a-depth-audit-why-translation-remains-disabled)
+are excluded, so a resource-only depth translation is sound subject to the
+existing error/refusal gates. Translation, numeric validation and pinned-worker
+regressions are deferred; this policy change adds no parse-option support. See
+[the A7 reassessment](reviews/2026-11-18-constexpr-inert-roots.md#under-a7-2026-11-18).
 Without a profile, local checking facts do not become judge facts; unknown judge
 conditions or predefined macro values still disable pruning. The report names the parse
 configuration separately from the checking configuration. A `target` level
@@ -968,9 +976,25 @@ template parameter names and local names are not indexed.
    type keywords or names the next link directly — no templates, `decltype`,
    dependent or member types anywhere in the chain (R5-2) — or `std::size_t`,
    `std::ptrdiff_t` or an `<cstdint>` type.
-   Everything else, including every class-type variable whatever its
-   constructor and `constinit` or `constexpr` status, is a root. A
-   function-local variable without static storage is never a root by itself.
+   Policy **D3d-3**, under A7, additionally exempts defining `constexpr`
+   variables with static storage, no thread storage, volatile/reference type or
+   variable attributes, when `safeSystemMacros` holds and either:
+   (a) their expanded, as-written type is builtin arithmetic, ignoring cv
+   qualification only, even with a value-dependent initializer; or
+   (b) their written type directly names a complete, named, non-local,
+   non-template, non-dependent user class, not a union or specialization, with
+   no bases, non-static data members, user-declared special members, virtual
+   functions or attributes, a trivial destructor and an empty list initializer
+   (`{}` or `= {}`). Classes nested in templates/specializations are excluded.
+   This added exemption rejects aliases, `auto`, `decltype`, parameter-typed
+   members, pointers, arrays and enums; the original whitelist still applies
+   independently. Implicit instantiations use the pattern's written type;
+   explicit specializations are classified from their own declarations.
+   Neither exemption erases attribute roots or skips ordinary dependency
+   traversal. Everything else remains a root, including `constinit` or thread
+   storage outside the original whitelist. See the
+   [soundness review under A7](reviews/2026-11-18-constexpr-inert-roots.md#under-a7-2026-11-18).
+   A function-local variable without static storage is never a root by itself.
 2. **Name rule:** a family is kept if one of its indexed names appears as an
    identifier token in the kept text outside the family itself (kept
    families, macro definitions, unparsed branches, all never-removed text).
@@ -1145,7 +1169,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A6) the output relied on. Then one
+date, option classes, the assumptions (A1–A7) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

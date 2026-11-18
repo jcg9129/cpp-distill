@@ -787,6 +787,14 @@ Inherited/implicit attributes do not expand physical ownership into an earlier
 declaration; macro prefixes remain pinned. All other declaration and statement
 attributes still disable unless covered by the D3d roots below.
 
+Policy D3d-3 adds the narrow constexpr storage-root exemption reviewed in
+`docs/reviews/2026-11-18-constexpr-inert-roots.md` under A7: builtin arithmetic
+as written, or structurally empty non-template user tags with empty list
+initialization. Aliases/deduced/dependent types receive no new exemption;
+explicit specializations are classified independently. Every pruned artifact
+reports A7, including deletions unrelated to variables (enum cache seeds).
+Constexpr resource-flag support remains deferred.
+
 Policy D3d-2 also accepts `NoUniqueAddressAttr` only for the standard,
 argument-free `[[no_unique_address]]` spelling on a non-static, non-bit-field
 `FieldDecl` owned by its enclosing record. Empty and nonempty fields, templates,
@@ -843,8 +851,9 @@ builtin declarations, after checking for an owned user declaration. It does
 not excuse arbitrary builtins or explicitly declared user functions.
 `ordinary_builtins` covers the common forms.
 
-Static/thread storage roots use a positive syntactic initializer/type classifier,
-not a constant evaluator: calls (including constexpr calls), mutation, classes,
+Static/thread storage roots retain the positive syntactic initializer/type
+classifier, plus D3d-3's narrow constexpr exception above. Outside that
+exception, calls (including constexpr calls), mutation, classes,
 deduced/template/member types and non-whitelisted system macro origins are not
 certified inert. Unrecognized alias/initializer forms over-retain. Ordinary
 locals have no independent root. PP callbacks observe synthesized/rescanned
@@ -963,7 +972,7 @@ sources. Missing local APIs skip only their pipeline builds. Extraction still
 parses the actual user customization code against minimal standard-interface
 headers in `tests/support/pruning/`, inserted as system headers only for that
 probe's missing feature. These models use specified/reserved names and the
-specified `from_stream` ADL mechanism, staying within A1–A6. Model results are
+specified `from_stream` ADL mechanism, staying within A1–A7. Model results are
 labelled `MODEL`; they do not certify an implementation of the missing library.
 The measurement corpus always uses the real system headers.
 
@@ -984,7 +993,7 @@ Rendering fixtures simulate an extra deleted token and a shifted logical line.
 The constructor fixture compares stdout on an empty sample. The LP64 iterator
 fixture demonstrates a local limit despite its A6 retention obligation; the
 pasted branch helper demonstrates a sample limit, with a separate `x` witness
-that must fail runtime comparison. Neither limit violates A1–A6.
+that must fail runtime comparison. Neither limit violates A1–A7.
 
 `distill_pipeline_cases --checker-models` runs these checker mechanisms without
 LLVM using explicit, fixture-owned `model.<label>=<source fragment>` family
