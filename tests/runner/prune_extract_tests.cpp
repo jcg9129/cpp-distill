@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
                   "int main(){return &used_tag == nullptr;}\n",o);
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"empty tags disabled");
       check(!kept("UnusedTag") && !kept("unused_tag"),"unused tag/type retained");
-      check(kept("UsedTag") && kept("used_tag"),"referenced tag/type removed");
+      check(kept("n::UsedTag") && kept("used_tag"),"referenced tag/type removed");
       const auto out = take(renderSource(m,&r)).provenance.text;
       take(renderingInvariant(m,&r,out)); take(staticNameInvariant(m,r,out));
       check(out.find("UnusedTag") == out.npos && out.find("n::UsedTag used_tag = {}") != out.npos,"tag removal/retention failed");
@@ -306,7 +306,15 @@ int main(int argc, char** argv) {
       run((std::string("constexpr narrow retains ") + name).c_str(), [&] {
         m = extract(std::string("constexpr int number(){return 7;}\n") + declaration +
                     "\nint unrelated(){return 9;} int main(){}\n",o);
-        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"negative unexpectedly disabled");
+        r = take(computeRetention(m));
+        if (std::string_view(name) == "constinit") {
+          // Clang models constinit as ConstInitAttr: the attribute gate already
+          // disables pruning, which is stricter than keeping a storage root.
+          check(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why) {
+            return why.starts_with("unsupported attribute: constinit"); }),"constinit not refused");
+          return;
+        }
+        check(r.disabledReasons.empty(),"negative unexpectedly disabled");
         check(kept("candidate") && !family(m,"candidate").root.empty(),"excluded variable lost storage root");
         check(!kept("unrelated"),"negative did not allow unrelated removal");
       });
