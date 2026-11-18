@@ -11,7 +11,7 @@ struct CliOptions {
   std::optional<std::string> output, judge, report;
   std::optional<std::string> judgeProbe, judgeCheck, part, record;
   std::vector<std::string> judgeOutputs;
-  bool noPrune = false, stripComments = false;
+  bool noPrune = false, stripComments = false, noLineMarkers = false;
   std::vector<std::string> compile, keep, verifyRun;
 };
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>&);

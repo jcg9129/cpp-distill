@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# --no-line-markers: assert without NDEBUG reads the position in user code,
+# so the markers stay. Recent glibc spells it __builtin_LINE () for C++ when
+# the parser has the builtin, older glibc, MinGW and macOS __LINE__; either
+# is reported at the assert's line.
+prune=yes
+lines=no
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+absent=int unused
+contains=#line
+diagnostic=line markers kept: __
+diagnostic.1=at main.cpp:4

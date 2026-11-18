@@ -14,6 +14,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (a == "--strict") o.strict = true;
     else if (a == "-v") o.verbose = true;
     else if (a == "--strip-comments") o.stripComments = true;
+    else if (a == "--no-line-markers") o.noLineMarkers = true;
     else if (a == "--keep" || a == "--verify-run") {
       if (++i == args.size() || args[i].empty() || args[i].starts_with('-')) return Error{"missing value for " + a};
       (a == "--keep" ? o.keep : o.verifyRun).push_back(args[i]);
@@ -33,7 +34,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || o.stripComments || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        o.noPrune || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
@@ -59,6 +60,8 @@ std::string distillHelp() {
       "  --no-prune         inline and resolve only\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
       "  --strip-comments   remove comments during checked rendering\n"
+      "  --no-line-markers  omit #line markers from a pruned result when no user code\n"
+      "                     can observe source positions (else kept; report says why)\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"

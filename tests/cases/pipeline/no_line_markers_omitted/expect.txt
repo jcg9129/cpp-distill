@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# --no-line-markers: nothing observes presumed positions, so the checked
+# marker-free bytes are written (docs/reviews/2026-11-18-no-line-markers.md).
+prune=yes
+lines=no
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+absent=int unused
+absent.1=#line
+contains=int main(){return 0;}
+diagnostic=line markers omitted: no user code observes presumed source positions
+report=pruned without line markers: passed

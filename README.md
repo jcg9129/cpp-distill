@@ -106,6 +106,7 @@ must include the target's C/C++ standard headers and libraries.
 | `--no-prune` | Inline and resolve only. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
+| `--no-line-markers` | Omit generated `#line` markers from a `pruned` result when the analysis proves no user code observes source positions (`__LINE__`, `__FILE__`, `__builtin_LINE`, `assert` without `NDEBUG`, call-site default arguments, …); otherwise they stay and the report says `line markers kept: <why>`. |
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
 | `-v` | Show progress on stderr. |
@@ -177,6 +178,7 @@ For a fallback, start with `--report report.txt`. Common reason text/prefixes:
 | `Clang parse error` / `pruning worker deadline exceeded` | GCC may accept code the analysis cannot handle; simplify it or accept the checked fallback. |
 | `resolution disabled: __COUNTER__` (also `_Pragma`, `push_macro`, `pop_macro`) / `unmodelled option:` | Remove the feature/option if unnecessary; otherwise expect `raw`. |
 | `check compiler unavailable:` / `configuration does not satisfy resolution` | Install a compatible compiler named by the profile; if no configuration satisfies the facts, expect `raw`. |
+| `line markers kept: <what> at <file>:<line>` / `line markers kept: no parse` | With `--no-line-markers`: the named code may observe source positions, or no checked `pruned` artifact (and so no analysis) exists; the markers are kept. Remove the observation (or define `NDEBUG` for `assert`) if you want them omitted. |
 | `pruned rejected:` / `flat rejected:` | Inspect the failed build, invariant or sample check; distill keeps the last checked artifact. |
 
 To retain a declaration, add its indexed name with `--keep` or put this comment before it:

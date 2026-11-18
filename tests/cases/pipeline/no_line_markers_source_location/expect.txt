@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# --no-line-markers never reaches std::source_location in user code: the
+# inliner rejects it (§1.2), so nothing is written. Routes that don't spell it
+# (a system default argument) are worker extraction cases.
+prune=yes
+lines=no
+artifact=
+verification=local
+exit=1
+configuration=local
+reason=unsupported identifier: source_location

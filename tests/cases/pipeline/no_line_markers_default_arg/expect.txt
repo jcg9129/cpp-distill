@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# --no-line-markers: a user function with a defaulted position parameter
+# (the call site's line is observed), so the markers stay.
+prune=yes
+lines=no
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+absent=int unused
+contains=#line
+diagnostic=line markers kept: __builtin_LINE at main.cpp:3
+diagnostic.1=line markers kept: call-site default argument with a source position at main.cpp:4

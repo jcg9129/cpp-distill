@@ -807,6 +807,16 @@ GCC `__SCHAR_MAX__ 0x7f` vs Clang `127`. Not when pasted, inside a user
 directive, or `hashOperator` (a macro with `#`/`#@`/`##` expands in the same
 physical invocation span).
 
+`--no-line-markers` (`docs/reviews/2026-11-18-no-line-markers.md`): the worker
+adds bounded `positionUses` (offset, description; at most 64) for user-code
+constructs that may observe presumed positions; `lineMarkerObservations`
+(render) turns them, `__LINE__`-family expansion facts, `-Werror…` in the
+checking argv and `#pragma GCC|clang diagnostic error` into `line markers kept:`
+reasons. Only an accepted `pruned` artifact is unmarked: `withoutLineMarkers`
+deletes the renderer's marker spans, then `unmarkedInvariant` (re-lex),
+`compareUnmarkedPreprocessed` (`-E` of both), a build and the samples check
+`unmarked.cpp`; any failure keeps the marked bytes.
+
 Policy D3d-2 also accepts `NoUniqueAddressAttr` only for the standard,
 argument-free `[[no_unique_address]]` spelling on a non-static, non-bit-field
 `FieldDecl` owned by its enclosing record. Empty and nonempty fields, templates,

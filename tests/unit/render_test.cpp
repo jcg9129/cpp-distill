@@ -379,3 +379,43 @@ TEST(render_inline_namespace_reopening_preserves_implicit_lookup) {
     CHECK(out.find(text) != out.npos);
   }
 }
+TEST(render_without_line_markers_and_invariant) {
+  auto m = source("int dead;\nint a;\nint gone;\n#define X 1\nint b;\n");
+  const auto out = render(m,{{0,9},{m.text.find("int gone"),m.text.find("int gone")+9}});
+  CHECK_EQ(out.provenance.text,"#line 2 \"a.cpp\"\nint a;\n#line 4\n#define X 1\nint b;\n");
+  const auto unmarked = take(withoutLineMarkers(out));
+  CHECK_EQ(unmarked,"int a;\n#define X 1\nint b;\n");
+  CHECK(unmarkedInvariant(out.provenance.text,unmarked).ok());
+  // An independent re-lex rejects glued or lost tokens, lost directive
+  // boundaries and any remaining line directive or GNU linemarker.
+  for (const auto& corrupt : {std::string("int a;\n#define X 1 int b;\n"), std::string("int a;#define X 1\nint b;\n"),
+                              std::string("int a;\n#define X 1\nint\n"), std::string("#line 2\nint a;\n#define X 1\nint b;\n"),
+                              std::string("# 2 \"a.cpp\"\nint a;\n#define X 1\nint b;\n"), std::string("inta;\n#define X 1\nint b;\n")}) {
+    auto check = unmarkedInvariant(out.provenance.text,corrupt); CHECK(!check.ok());
+  }
+  auto bad = out; bad.provenance.generatedMarkers.front().end -= 1; // Not a whole line.
+  CHECK(!withoutLineMarkers(bad).ok());
+  bad = out; bad.provenance.generatedMarkers.front() = {16,22}; // Not a marker.
+  CHECK(!withoutLineMarkers(bad).ok());
+  // Rendering maps position uses like other offset provenance.
+  m.positionUses = {{m.text.find("int b"),"__LINE__ expanded"}};
+  const auto mapped = render(m,{{0,9}});
+  CHECK_EQ(mapped.provenance.positionUses.front().offset,mapped.provenance.text.find("int b"));
+}
+TEST(render_line_marker_observations) {
+  auto m = source("int a = 1;\n#pragma GCC diagnostic warning \"-Wall\"\nint b = 2;\n",10,"lib/x.hpp");
+  CHECK(lineMarkerObservations(m,{"g++","-O2","-Wall","-Wno-error"}).empty());
+  m.positionUses = {{m.text.find("2;"),"__LINE__ expanded"},{m.text.find("2;"),"__LINE__ expanded"}};
+  CHECK_EQ(lineMarkerObservations(m,{}),(std::vector<std::string>{"__LINE__ expanded at lib/x.hpp:12"}));
+  m.positionUses.clear();
+  PruneMacroExpansion x; x.offset = m.text.find("1;"); x.name = "__FILE__"; m.expansions = {x};
+  CHECK_EQ(lineMarkerObservations(m,{}),(std::vector<std::string>{"__FILE__ expanded at lib/x.hpp:10"}));
+  x.name = "__COUNTER__"; m.expansions = {x}; // Not a position.
+  CHECK(lineMarkerObservations(m,{}).empty());
+  CHECK_EQ(lineMarkerObservations(m,{"g++","-Werror=misleading-indentation"}),
+           (std::vector<std::string>{"-Werror=misleading-indentation makes warnings errors"}));
+  auto p = source("#pragma GCC diagnostic error \"-Wmisleading-indentation\"\nint a;\n");
+  CHECK_EQ(lineMarkerObservations(p,{}),(std::vector<std::string>{"diagnostic error pragma at a.cpp:1"}));
+  p.lineMap[0].reset(); // A generated line has no original location.
+  CHECK_EQ(lineMarkerObservations(p,{}),(std::vector<std::string>{"diagnostic error pragma at <generated>:1"}));
+}

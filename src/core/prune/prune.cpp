@@ -231,6 +231,9 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     if (!factValid(e.parse)) return invalid("invalid expansion fact",field+".parse");
     if (!factValid(e.judge)) return invalid("invalid expansion fact",field+".judge");
   }
+  for (std::size_t i = 0; i < m.positionUses.size(); ++i)
+    if (m.positionUses[i].offset > m.text.size() || m.positionUses[i].what.empty())
+      return invalid("invalid position use","model.positionUses["+std::to_string(i)+"]");
   return true;
 }
 Result<PruningResult> computeRetention(const PruningModel& m) {

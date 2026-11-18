@@ -47,6 +47,14 @@ struct SystemEntity {
   std::vector<std::size_t> systemEdges;
 };
 struct SystemUse { FamilyId family = noFamily; std::size_t entity = 0; };
+// A construct in user code whose behaviour may depend on presumed source
+// positions; any one keeps generated #line markers under --no-line-markers
+// (docs/reviews/2026-11-18-no-line-markers.md). Offset: user expansion offset.
+struct PositionUse {
+  std::size_t offset = 0;
+  std::string what;
+  bool operator==(const PositionUse&) const = default;
+};
 struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
 struct PruningModel {
   std::string text, dialect;
@@ -65,6 +73,7 @@ struct PruningModel {
   std::optional<LiteralWidths> parseWidths; // Set by the worker from Clang's TargetInfo.
   bool judgeProfile = false, judgeComplete = false;
   bool unknownInUserCode = false;
+  std::vector<PositionUse> positionUses; // Set by the worker.
 };
 struct FamilyRetention {
   bool kept = false;

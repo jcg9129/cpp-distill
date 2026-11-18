@@ -88,6 +88,7 @@ struct Archive {
     field("pinned",x.pinned); field("neverRemoved",x.neverRemoved); field("root",x.root); field("nonMemberOperator",x.nonMemberOperator);
     field("namespaceUsing",x.namespaceUsing); field("externCDefinition",x.externCDefinition); field("systemSpecialization",x.systemSpecialization);
   }
+  void field(PositionUse& x) { field("offset",x.offset); field("what",x.what); }
   void field(KeepAnnotation& x) { field("offset",x.offset); field("family",x.family); }
   void field(SystemEntity& x) { field("label",x.label); field("userEdges",x.userEdges); field("systemEdges",x.systemEdges); }
   void field(SystemUse& x) { field("family",x.family); field("entity",x.entity); }
@@ -96,7 +97,7 @@ struct Archive {
     field("sourceDirectives",x.sourceDirectives); field("lineMap",x.lineMap); field("annotations",x.annotations); field("keepOffsets",x.keepOffsets); field("keepNames",x.keepNames); field("expansions",x.expansions);
     field("systemEntities",x.systemEntities); field("systemUses",x.systemUses); field("includes",x.includes); field("disabledReasons",x.disabledReasons);
     field("untranslatedOptions",x.untranslatedOptions); field("parseArgv",x.parseArgv); field("judgeInitial",x.judgeInitial); field("parseWidths",x.parseWidths); field("judgeProfile",x.judgeProfile);
-    field("judgeComplete",x.judgeComplete); field("unknownInUserCode",x.unknownInUserCode);
+    field("judgeComplete",x.judgeComplete); field("unknownInUserCode",x.unknownInUserCode); field("positionUses",x.positionUses);
   }
 };
 }
