@@ -881,8 +881,7 @@ bool namingBuiltin(llvm::StringRef name) {
 // expression, source-location builtin, unique-stable-name expression or
 // naming builtin call, wherever it is: no filtering by location, user-ness
 // or template arguments. The only thing not traversed is a parameter's
-// default argument as a declaration (its type and attributes are, since a
-// type can hold a lambda in decltype): it is evaluated only through a
+// default argument as a declaration: it is evaluated only through a
 // CXXDefaultArgExpr at a call, which is traversed (so an unused
 // std::source_location::current() declaration doesn't count, a call does).
 class NameExpressions final : public RecursiveASTVisitor<NameExpressions> {
@@ -901,12 +900,7 @@ public:
   explicit NameExpressions(Extraction& x) : e(x) {}
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
-  bool TraverseParmVarDecl(ParmVarDecl* p) {
-    if (!p) return true;
-    if (auto* t = p->getTypeSourceInfo(); t && !TraverseTypeLoc(t->getTypeLoc())) return false;
-    for (auto* a : p->attrs()) if (!TraverseAttr(a)) return false;
-    return true;
-  }
+  bool TraverseParmVarDecl(ParmVarDecl*) { return true; }
   bool VisitStmt(Stmt*) {
     // Fail closed: past the bound, stop and keep the markers.
     if (++visits <= 50000000) return true;
