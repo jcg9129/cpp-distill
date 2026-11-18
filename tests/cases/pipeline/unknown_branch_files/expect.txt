@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Markers after kept unknown #if/#else/#endif keep the file name even when
+# the textually previous marker names the same file; resolved ones are short.
+prune=diagnostics
+artifact=flat
+verification=local
+exit=0
+configuration=local
+report=unknown conditional in user code at main.cpp:2 (#if)
+contains.else=#else
+contains.after_else=#line 5 "main.cpp"
+contains.after_endif=#endif
+contains.endif_marker=#line 7 "main.cpp"
+contains.short=#line 10
+contains.short_last=#line 12
+absent=#line 10 "

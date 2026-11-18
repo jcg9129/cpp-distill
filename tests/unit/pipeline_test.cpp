@@ -288,15 +288,18 @@ TEST(pipeline_written_artifacts_only_name_original_sources) {
     for (const auto* artifact : {"raw","flat","pruned"}) {
       const auto& bytes = f.built.at(artifact);
       auto scan = take(scanDirectives(bytes));
-      std::size_t markers = 0;
+      std::size_t markers = 0, shortMarkers = 0;
+      PresumedFile presumed; // Short markers inherit the file of their segment.
       for (const auto& l : scan.lines) if (l.directive && l.directive->name == "line") {
         auto text = std::string_view(bytes).substr(l.begin,l.end-l.begin);
         if (text.ends_with('\n')) text.remove_suffix(1);
         SourceLocation at;
-        CHECK(take(parseLineMarker(text,at))); ++markers;
+        CHECK(take(presumed.parse(text,at))); ++markers;
+        shortMarkers += text.find('"') == text.npos;
         CHECK(at.file == "main.cpp" || at.file == "lib/ds.h");
-      }
+      } else if (l.directive) presumed.directive(l.directive->name);
       CHECK(markers > 0);
+      if (std::string_view(artifact) == "pruned") CHECK(shortMarkers > 0);
       CHECK(bytes.find("#define DISTILL_ONCE_") != bytes.npos);
       if (std::string_view(artifact) == "raw") CHECK(bytes.find("#ifndef DISTILL_ONCE_") != bytes.npos);
       else CHECK(bytes.find("#ifndef DISTILL_ONCE_") == bytes.npos);

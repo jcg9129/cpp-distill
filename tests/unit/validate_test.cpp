@@ -13,6 +13,31 @@ TEST(validate_preprocess_markers_flags_blanks_escapes) {
   CHECK(!parseLineMarker("# 1 \"a\" 8", at).ok());
   CHECK(!parseLineMarker("# 1 \"a", at).ok());
   CHECK(!parseLineMarker("# 1 a", at).ok());
+  // [cpp.line]: without a file name the presumed file is kept.
+  bool named = true; at = {"kept", 1};
+  CHECK(parseLineMarker("#line 7", at, nullptr, &named).value());
+  CHECK(!named); CHECK_EQ(at.file, std::string("kept")); CHECK_EQ(at.line, 7u);
+}
+TEST(validate_short_markers_only_within_a_segment) {
+  PresumedFile p;
+  CHECK_EQ(p.marker({"a", 1}), std::string("#line 1 \"a\"\n")); // The first one names its file.
+  CHECK_EQ(p.marker({"a", 5}), std::string("#line 5\n"));
+  p.directive("define"); p.directive("undef"); p.directive("pragma");
+  CHECK_EQ(p.marker({"a", 9}), std::string("#line 9\n"));
+  CHECK_EQ(p.marker({"q\"\\", 1}), std::string("#line 1 \"q\\\"\\\\\"\n"));
+  for (const char* d : {"if", "ifdef", "ifndef", "elif", "elifdef", "elifndef", "else", "endif", "include", "include_next", "line", "embed"}) {
+    p.directive(d);
+    CHECK_EQ(p.marker({"q\"\\", 2}), std::string("#line 2 \"q\\\"\\\\\"\n"));
+  }
+  PresumedFile q; SourceLocation at;
+  CHECK(!q.parse("#line 3", at).ok()); // No preceding marker.
+  CHECK(q.parse("#line 2 \"x\"", at).value());
+  CHECK(q.parse("#line 4", at).value()); CHECK_EQ(at.file, std::string("x")); CHECK_EQ(at.line, 4u);
+  q.directive("define");
+  CHECK(q.parse("#line 6", at).value()); CHECK_EQ(at.file, std::string("x"));
+  q.directive("endif"); // A previous branch may have changed the presumed file.
+  CHECK(!q.parse("#line 8", at).ok());
+  CHECK(!q.parse("int x;", at).value());
 }
 TEST(validate_preprocess_first_difference) {
   const auto a = "# 10 \"a.cpp\"\nx ++ y;\n";

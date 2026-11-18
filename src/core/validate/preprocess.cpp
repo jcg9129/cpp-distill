@@ -6,7 +6,7 @@
 #include <set>
 
 namespace distill {
-Result<bool> parseLineMarker(std::string_view s, SourceLocation& at, bool* system) {
+Result<bool> parseLineMarker(std::string_view s, SourceLocation& at, bool* system, bool* named) {
   auto spaces = [&] { while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r')) s.remove_prefix(1); };
   spaces();
   if (!s.starts_with('#')) return false;
@@ -17,6 +17,11 @@ Result<bool> parseLineMarker(std::string_view s, SourceLocation& at, bool* syste
   auto n = std::from_chars(s.data(), s.data() + s.size(), line);
   if (n.ec != std::errc{}) return Error{"invalid preprocessor line number"};
   s.remove_prefix(n.ptr - s.data()); spaces();
+  if (s.empty()) {
+    at.line = line;
+    if (named) *named = false;
+    return true;
+  }
   if (!s.starts_with('"')) return Error{"missing preprocessor file name"};
   s.remove_prefix(1); std::string name;
   bool closed = false;
@@ -48,6 +53,31 @@ Result<bool> parseLineMarker(std::string_view s, SourceLocation& at, bool* syste
   }
   at = {std::move(name), line};
   if (system) *system = isSystem;
+  if (named) *named = true;
+  return true;
+}
+void PresumedFile::directive(std::string_view name) {
+  if (name != "define" && name != "undef" && name != "pragma") file.reset();
+}
+std::string PresumedFile::marker(const SourceLocation& at) {
+  auto text = "#line " + std::to_string(at.line);
+  if (file != at.file) {
+    text += " \"";
+    for (char c : at.file) { if (c == '\\' || c == '"') text += '\\'; text += c; }
+    text += '"';
+    file = at.file;
+  }
+  return text + '\n';
+}
+Result<bool> PresumedFile::parse(std::string_view line, SourceLocation& at) {
+  bool named = false;
+  auto parsed = parseLineMarker(line, at, nullptr, &named);
+  if (!parsed.ok() || !parsed.value()) return parsed;
+  if (!named) {
+    if (!file) return Error{"short line marker without a preceding marker in its segment"};
+    at.file = *file;
+  }
+  file = at.file;
   return true;
 }
 Result<std::vector<PreprocessedToken>> parsePreprocessed(std::string_view output, FileMapper map) {

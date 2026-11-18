@@ -3,6 +3,7 @@
 #include "core/validate/preprocess.h"
 #include <algorithm>
 #include <cctype>
+#include <map>
 
 namespace distill {
 namespace {
@@ -13,6 +14,7 @@ struct Input {
   ScanResult scan;
   std::vector<EditRange> deletions, markers;
   std::vector<SourceLocation> locations;
+  std::map<std::size_t, SourceLocation> markerAt; // Parsed generated markers by begin offset.
   Input(const PruningModel& m, const PruningResult* r) : model(m), scan(take(scanDirectives(m.text))) {
     take(validatePruningModel(m));
     if (r) {
@@ -24,9 +26,11 @@ struct Input {
     joinDeletions();
     if (r) removeEmptyShells();
     joinDeletions();
+    std::map<std::size_t, std::string_view> directives; // Other directives by physical start.
     for (const auto& l : scan.lines) {
       const bool generated = generatedMarker(l);
       if (generated) markers.push_back({l.begin,l.end});
+      else if (l.directive) directives[l.begin] = l.directive->name;
       for (const auto& t : l.tokens) for (auto d : touching({t.begin,t.end}))
         if (!contains(d,{t.begin,t.end})) throw Error{"deletion splits token '" + t.text + "' at byte " + std::to_string(t.begin)};
       if (l.directive && !generated && !touching({l.begin,l.end}).empty())
@@ -38,15 +42,21 @@ struct Input {
     // is ordinary source. D2 provenance overrides the presumed coordinates.
     // An unset presumed location must never invent an internal artifact name.
     // Inliner output establishes the original file before generated guards.
+    // Short markers are checked against their segment (PresumedFile).
     SourceLocation at{"",1};
+    PresumedFile presumed;
+    auto directive = directives.begin();
     std::size_t physical = 1;
     for (std::size_t begin = 0; begin < m.text.size(); ++physical) {
       auto end = m.text.find('\n',begin); if (end == m.text.npos) end = m.text.size();
+      for (; directive != directives.end() && directive->first < begin; ++directive) presumed.directive(directive->second);
       locations.push_back(physical <= m.lineMap.size() && m.lineMap[physical-1] ? *m.lineMap[physical-1] : at);
       if (std::binary_search(markers.begin(),markers.end(),EditRange{begin,end + (end < m.text.size())},
           [](auto a,auto b) { return a.begin < b.begin; })) {
-        if (!take(parseLineMarker(std::string_view(m.text).substr(begin,end-begin),at)))
-          throw Error{"invalid generated marker at line " + std::to_string(physical)};
+        auto parsed = presumed.parse(std::string_view(m.text).substr(begin,end-begin),at);
+        if (!parsed.ok()) throw Error{"invalid generated marker at line " + std::to_string(physical) + ": " + parsed.error().message};
+        if (!parsed.value()) throw Error{"invalid generated marker at line " + std::to_string(physical)};
+        markerAt[begin] = at;
       } else ++at.line;
       begin = end + (end < m.text.size());
     }
@@ -272,11 +282,6 @@ std::string newlines(std::string_view s) {
   }
   return out;
 }
-std::string markerText(const SourceLocation& at) {
-  std::string escaped;
-  for (char c : at.file) { if (c == '\\' || c == '"') escaped += '\\'; escaped += c; }
-  return "#line " + std::to_string(at.line) + " \"" + escaped + "\"\n";
-}
 bool switchDirective(const LogicalLine& l) {
   if (!l.directive) return false;
   const auto& n = l.directive->name;
@@ -327,6 +332,7 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
       }
     };
     bool forceMarker = false;
+    PresumedFile presumed; // Of the output: every marker is spelled here.
     std::size_t commentIndex = 0, conditionalDepth = 0;
     for (const auto& l : in.scan.lines) {
       const auto directive = l.directive ? l.directive->name : std::string{};
@@ -336,13 +342,12 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
       if (directive == "endif" && conditionalDepth) --conditionalDepth;
       if (in.marker(l)) {
         if (!retention) {
-          const auto begin = p.text.size();
-          out.copied.push_back({{l.begin,l.end},begin});
-          append(std::string_view(m.text).substr(l.begin,l.end-l.begin),{});
+          // Re-spelled, not copied: its short form depends on this output.
+          if (!p.text.empty() && p.text.back() != '\n') throw Error{"no safe marker boundary at source line " + std::to_string(l.firstLine)};
+          current = in.markerAt.at(l.begin);
+          const auto begin = p.text.size(); append(presumed.marker(current),{});
           p.generatedMarkers.push_back({begin,p.text.size()});
-          auto text = std::string_view(m.text).substr(l.begin,l.end-l.begin);
-          if (!text.empty() && text.back() == '\n') text.remove_suffix(1);
-          take(parseLineMarker(text,current)); forceMarker = false;
+          forceMarker = false;
         } else forceMarker = true;
         continue;
       }
@@ -356,10 +361,11 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
       if (forceMarker || current != at) {
         if (at.file.empty()) throw Error{"missing source location for rendered line " + std::to_string(l.firstLine)};
         if (!p.text.empty() && p.text.back() != '\n') throw Error{"no safe marker boundary at source line " + std::to_string(l.firstLine)};
-        const auto begin = p.text.size(); append(markerText(at),{});
+        const auto begin = p.text.size(); append(presumed.marker(at),{});
         p.generatedMarkers.push_back({begin,p.text.size()}); current = at;
       }
       forceMarker = retention && switchDirective(l); // A marker in the previous branch may be skipped.
+      if (l.directive) presumed.directive(l.directive->name);
       struct Edit { EditRange range; std::string replacement; };
       std::vector<Edit> edits;
       for (auto d : ds) {

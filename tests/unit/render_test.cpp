@@ -68,7 +68,7 @@ TEST(render_generated_guards_require_original_presumed_file) {
   m.lineMap[4] = SourceLocation{"a.h",1};
   PruningResult r;
   CHECK_EQ(take(renderSource(m,&r)).provenance.text,
-           "#line 1 \"a.h\"\n#ifndef G\n#line 2 \"a.h\"\n#define G\n#line 1 \"a.h\"\nint live;\n#endif\n");
+           "#line 1 \"a.h\"\n#ifndef G\n#line 2 \"a.h\"\n#define G\n#line 1\nint live;\n#endif\n");
   // Missing initial provenance must fail instead of introducing flat.cpp.
   m.text.erase(0,m.text.find('\n')+1); m.lineMap.erase(m.lineMap.begin());
   auto invalid = renderSource(m,&r);
@@ -100,11 +100,30 @@ TEST(render_strip_preserves_literals_headers_and_raw_strings) {
   const std::string text = "#include <a//b>\nconst char*s=\"/*stay*/\";\nauto r=R\"x(//stay\n/*stay*/)x\"; //gone\n";
   CHECK_EQ(stripped(source(text)),"#line 1 \"a.cpp\"\n" + text.substr(0,text.find("//gone")) + " \n");
 }
+TEST(render_short_markers_not_after_kept_conditionals) {
+  // The X branch ends in b.h and the other in a.h: the marker after #endif must
+  // name a.h although the textually previous marker names a.h too.
+  auto m = source("#line 1 \"a.h\"\nint a;\n#if X\n#line 1 \"b.h\"\nint b;\n#else\nint c;\n#endif\nint d;\nint gone;\nint e;\n");
+  m.lineMap = {std::nullopt,SourceLocation{"a.h",1},SourceLocation{"a.h",2},std::nullopt,SourceLocation{"b.h",1},
+               SourceLocation{"a.h",4},SourceLocation{"a.h",5},SourceLocation{"a.h",6},SourceLocation{"a.h",7},
+               SourceLocation{"a.h",8},SourceLocation{"a.h",9}};
+  const auto gone = m.text.find("int gone;\n");
+  const auto text = render(m,{{gone,gone+10}}).provenance.text;
+  CHECK_EQ(text,"#line 1 \"a.h\"\nint a;\n#if X\n#line 1 \"b.h\"\nint b;\n#line 4 \"a.h\"\n#else\n#line 5 \"a.h\"\nint c;\n"
+                "#endif\n#line 7 \"a.h\"\nint d;\n#line 9\nint e;\n");
+  // The independent re-lex rejects a short marker whose segment has no marker.
+  PruningResult r; PruneFamily f; f.ranges = {{gone,gone+10}}; m.families.push_back(f); r.families.push_back({});
+  for (const auto& [from, to] : {std::pair{"#line 7 \"a.h\"", "#line 7"}, {"#line 5 \"a.h\"", "#line 5"}}) {
+    auto forged = text; forged.replace(forged.find(from), std::string_view(from).size(), to);
+    CHECK(!renderingInvariant(m,&r,forged).ok());
+  }
+  CHECK(renderingInvariant(m,&r,text).ok());
+}
 TEST(render_strip_multiline_define_resynchronizes) {
   CHECK_EQ(stripped(source("#define VALUE 1 /* one\ntwo\nthree */ + 2\nint x=VALUE+__LINE__;\n")),
-           "#line 1 \"a.cpp\"\n#define VALUE 1   + 2\n#line 4 \"a.cpp\"\nint x=VALUE+__LINE__;\n");
+           "#line 1 \"a.cpp\"\n#define VALUE 1   + 2\n#line 4\nint x=VALUE+__LINE__;\n");
   CHECK_EQ(stripped(source("#define VALUE(x) \\\n  (x /*one\ntwo*/ + 2)\nint y=__LINE__;\n")),
-           "#line 1 \"a.cpp\"\n#define VALUE(x) \\\n  (x   + 2)\n#line 4 \"a.cpp\"\nint y=__LINE__;\n");
+           "#line 1 \"a.cpp\"\n#define VALUE(x) \\\n  (x   + 2)\n#line 4\nint y=__LINE__;\n");
 }
 TEST(render_strip_unsafe_comment_stays) {
   const std::string text = "int x; /*one\ntwo*/ #pragma pack(1)\n";
@@ -174,7 +193,7 @@ TEST(render_repeated_presumed_locations_stay_distinct) {
   auto m = source("int first;\nint second;\nint third;\n");
   m.lineMap[1] = m.lineMap[0]; m.lineMap[2] = m.lineMap[0];
   CHECK_EQ(render(m,{{0,10}}).provenance.text,
-           "#line 1 \"a.cpp\"\nint second;\n#line 1 \"a.cpp\"\nint third;\n");
+           "#line 1 \"a.cpp\"\nint second;\n#line 1\nint third;\n");
 }
 TEST(render_removes_empty_namespace_shell_subtrees) {
   for (const auto& text : {

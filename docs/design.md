@@ -610,7 +610,17 @@ Textual substitution, not preprocessing:
   maintains them to the final bytes. Every line of the output has the logical
   line it had in its original file, so `__LINE__`, `__builtin_LINE` and
   default arguments that capture the call site behave as before. Cost: one
-  `#line` per change point.
+  `#line` per change point. A marker is spelled `#line N` without the file
+  name ([cpp.line] keeps the presumed name) exactly when the previous
+  generated marker in textual order names the same file and no directive
+  other than `#define`, `#undef` or `#pragma` lies between them; otherwise,
+  and always for the first marker, it is `#line N "file"`. Both then lie in
+  the same conditional group, so every preprocessing path has that presumed
+  name; a marker after a kept `#if`/`#elif`/`#else`/`#endif` or a system
+  `#include` always names its file. Each stage re-spells every marker it
+  writes, and every reader of generated markers applies the same rule
+  (`PresumedFile`), rejecting a short marker without a marker in its segment
+  ([reviews/2026-11-18-short-line-markers.md](reviews/2026-11-18-short-line-markers.md)).
 
 `raw.cpp` behaves under any judge's preprocessor like the original files
 would with the user headers present.
@@ -1159,7 +1169,7 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   inside a deleted range.
 - `#line` markers (§4.4) are recomputed from the D2 provenance after deletion
   and inserted only at line starts outside directives, comments and raw
-  strings.
+  strings, in the short form `#line N` where §4.4 allows it.
 - **Rendering invariant** (D3-1-11): the output is lexed again; every
   surviving token must have its intended logical file and line, and the
   retained source directives must keep their token sequence and order.

@@ -48,6 +48,8 @@ struct Engine {
   std::map<std::size_t, std::size_t> records;
   std::vector<SourceLocation> locations;
   std::vector<bool> keep, resync;
+  std::map<std::size_t, SourceLocation> markerAt; // Generated markers by first line.
+  PresumedFile presumed; // Of the output, for short markers.
   std::size_t verbatim = 0; // Depth of enclosing demoted blocks.
   Engine(const InlineResult& r, const CompileCommand& c, ConditionEvaluator& e, const ResolveOptions& o)
       : raw(r), cmd(c), evaluator(e), options(o), requirements(o.requirements) {}
@@ -102,16 +104,23 @@ struct Engine {
     // Recover static source coordinates even for generated once guards (null map).
     SourceLocation at{pathToUtf8(cmd.source), 1};
     std::set<std::size_t> markers;
-    for (const auto& l : scan.lines)
-      if (l.directive && l.directive->name == "line" && l.firstLine <= raw.lineMap.size() && !raw.lineMap[l.firstLine-1])
-        markers.insert(l.firstLine);
+    std::map<std::size_t, std::string_view> directives;
+    for (const auto& l : scan.lines) if (l.directive) {
+      if (generatedMarker(l)) markers.insert(l.firstLine);
+      else directives[l.firstLine] = l.directive->name;
+    }
     std::vector<SourceLocation> physical;
     std::istringstream lines(raw.text); std::string line;
+    PresumedFile input; // Short markers take the file of their segment's marker.
     while (std::getline(lines, line)) {
       physical.push_back(at);
       if (markers.contains(physical.size())) {
-        if (!take(parseLineMarker(line, at))) throw Error{"invalid generated line marker"};
-      } else ++at.line;
+        if (!take(input.parse(line, at))) throw Error{"invalid generated line marker"};
+        markerAt[physical.size()] = at;
+      } else {
+        if (auto d = directives.find(physical.size()); d != directives.end()) input.directive(d->second);
+        ++at.line;
+      }
     }
     for (std::size_t i = 0; i < scan.lines.size(); ++i) {
       const auto& l = scan.lines[i];
@@ -394,11 +403,12 @@ struct Engine {
       if (c == '\n' && at) ++at->line;
     }
   }
+  bool generatedMarker(const LogicalLine& l) const {
+    return l.directive && l.directive->name == "line" && l.firstLine <= raw.lineMap.size() && !raw.lineMap[l.firstLine-1];
+  }
   void marker(const SourceLocation& at) {
-    std::string escaped;
-    for (char c : at.file) { if (c == '"' || c == '\\') escaped += '\\'; escaped += c; }
     if (!result.text.empty() && result.text.back() != '\n') append("\n");
-    append("#line " + std::to_string(at.line) + " \"" + escaped + "\"\n");
+    append(presumed.marker(at));
   }
   void render() {
     for (std::size_t i = 0; i < scan.lines.size(); ++i) if (keep[i]) {
@@ -406,6 +416,9 @@ struct Engine {
       const auto& l = scan.lines[i];
       // Raw markers already reset the following line; an extra one is safe.
       if (resync[i]) marker(locations[i]);
+      // Re-spell kept generated markers: deletions may have changed their segment.
+      if (generatedMarker(l)) { marker(markerAt.at(l.firstLine)); continue; }
+      if (l.directive) presumed.directive(l.directive->name);
       std::size_t physical = l.firstLine;
       for (auto start = l.begin; start < l.end;) {
         auto end = raw.text.find('\n', start); end = end == raw.text.npos ? l.end : std::min(end + 1, l.end);

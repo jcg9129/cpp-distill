@@ -431,7 +431,7 @@ TEST(resolve_generated_lines_use_original_presumed_coordinates) {
   for (auto& line : input.lineMap) line.reset();
   auto resolved = resolveConditions(input,c,e);
   CHECK(resolved.ok());
-  CHECK_EQ(resolved.value().text,"#line 2 \"entry.cpp\"\n#define GENERATED\n#line 4 \"entry.cpp\"\n");
+  CHECK_EQ(resolved.value().text,"#line 2 \"entry.cpp\"\n#define GENERATED\n#line 4\n");
 
   // Only actual generated directives reset coordinates. The marker-looking
   // line inside this literal must not change the later generated define.
@@ -440,7 +440,8 @@ TEST(resolve_generated_lines_use_original_presumed_coordinates) {
   for (auto& line : input.lineMap) line.reset();
   resolved = resolveConditions(input,c,e);
   CHECK(resolved.ok());
-  CHECK(resolved.value().text.find("#line 24 \"lib/ds.h\"\n#define GENERATED") != std::string::npos);
+  CHECK(resolved.value().text.starts_with("#line 20 \"lib/ds.h\"\n"));
+  CHECK(resolved.value().text.find("\n#line 24\n#define GENERATED") != std::string::npos);
 }
 TEST(resolve_fake_spliced_function_and_multiline_macro) {
   Fake e; ResolveOptions o; o.requirements.integers = IntegerModel{};

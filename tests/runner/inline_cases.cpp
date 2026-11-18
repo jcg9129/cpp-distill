@@ -9,6 +9,8 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
+#include <optional>
 #include <sstream>
 #include <set>
 #include <stdexcept>
@@ -129,12 +131,25 @@ void checkMap(const InlineResult& result) {
       (!result.text.empty() && result.text.back() != '\n' ? 1 : 0);
   check(result.lineMap.size() == static_cast<std::size_t>(count), "line map size differs");
   SourceLocation current{"<initial>", 1};
+  // A short marker `#line N` keeps the file of the previous marker, which must
+  // lie in its segment: no directive except #define/#undef/#pragma between.
+  std::map<std::size_t, std::string> directives;
+  for (const auto& l : require(scanDirectives(result.text)).lines) if (l.directive) directives[l.firstLine] = l.directive->name;
+  std::optional<std::string> segment;
   std::istringstream lines(result.text); std::string line; std::size_t i = 0;
   while (std::getline(lines, line)) {
     if (!result.lineMap.at(i) && line.starts_with("#line ")) {
-      check(!result.lineMap.at(i), "generated marker has a source location");
-      check(marker("# " + line.substr(6), current), "cannot parse generated marker");
+      if (line.find('"') != line.npos) check(marker("# " + line.substr(6), current), "cannot parse generated marker");
+      else {
+        check(segment.has_value(), "short marker without a marker in its segment at output line " + std::to_string(i + 1));
+        std::size_t number = 0; auto digits = std::string_view(line).substr(6);
+        auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), number);
+        check(parsed.ec == std::errc{} && parsed.ptr == digits.data() + digits.size(), "cannot parse short marker");
+        current = {*segment, number};
+      }
+      segment = current.file;
     } else {
+      if (const auto d = directives.find(i + 1); d != directives.end() && d->second != "define" && d->second != "undef" && d->second != "pragma") segment.reset();
       if (result.lineMap.at(i)) check(*result.lineMap[i] == current, "line map disagrees with markers at output line " + std::to_string(i + 1));
       ++current.line;
     }
