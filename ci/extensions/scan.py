@@ -63,7 +63,7 @@ def scan(platform, compiler, output_dir, headers_version):
         print(f'{library}: {len(files)} headers, {count} names')
         try:
             count = scan_identities(library, files, output_dir / (library + '-identity.json'), provenance)
-            print(f'{library}: {count} identity names defined (per-library exclusions only)')
+            print(f'{library}: {count} identity names written (per-library exclusions only)')
         except ValueError as error:
             violations.append(str(error))
     if violations:
