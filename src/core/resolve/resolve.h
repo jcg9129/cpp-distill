@@ -54,6 +54,10 @@ struct ResolveOptions {
   NameLists names;
   std::size_t maxConditionTokens = 100000, maxNesting = 200;
   std::size_t maxOutputBytes = 128 * 1024 * 1024;
+  // Raw-text lines of conditional directives kept unknown (cross-host demotion).
+  // A forced #else/#endif forces its block; everything nested in a forced
+  // block stays unknown too, so the block is byte-identical to raw.
+  std::set<std::size_t> forcedUnknown;
 };
 struct ResolveResult {
   std::vector<std::size_t> keepOffsets;
@@ -70,4 +74,14 @@ Result<ResolveResult> resolveConditions(const InlineResult& raw, const CompileCo
 // its directive unreachable. Unknown/dead entries in a impose no requirement.
 // Locations/directive inventory must match.
 bool sameDecisions(const ResolveResult& a, const ResolveResult& b);
+// Indices of a's true/false decisions that b neither reproduces nor proves dead.
+// Empty when the inventories differ or either resolution is disabled.
+std::vector<std::size_t> disagreements(const ResolveResult& a, const ResolveResult& b);
+// Re-resolves with options plus every directive `observed` contradicts forced
+// unknown, repeating until `observed` satisfies the result. Fails if that
+// cannot be reached (disabled, inventory differs, no progress, deadline).
+// `demoted` receives the decision entries that were forced, as they were before.
+Result<ResolveResult> demoteDisagreements(const InlineResult&, const CompileCommand&, ConditionEvaluator&,
+                                          ResolveOptions, ResolveResult resolution, const ResolveResult& observed,
+                                          std::vector<ResolutionDecision>* demoted = nullptr);
 } // namespace distill

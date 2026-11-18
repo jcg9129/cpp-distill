@@ -1,8 +1,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-artifact=raw
+# A Windows judge disagrees with the Linux host on _WIN32. Nothing satisfies
+# the resolution as is; the disagreeing conditional is demoted and kept.
+artifact=flat
 verification=local
 exit=0
 configuration=local
 profile=codeforces
-report=no configuration satisfies
+report=flat: demoted main.cpp:2 (#ifdef): local configuration disagrees
+report.1=main.cpp:2 #ifdef: kept (unknown: demoted: configuration disagrees)
+contains=#ifdef _WIN32
+contains.1=#else
 requires=linux

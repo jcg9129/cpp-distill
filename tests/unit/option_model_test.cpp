@@ -293,11 +293,13 @@ TEST(option_model_pipeline_preserves_judge_behavior_or_falls_back) {
     f.temp.write("main.cpp", conditional(row.expression));
     DistillOptions options; options.profile = &p; options.temporaryRoot = f.temp.path;
     const auto result = take(distillNoPrune(cmd, options, *f.evaluator));
-    CHECK_EQ(result.exitCode, 0); CHECK_EQ(result.artifact, row.flat ? "flat" : "raw");
+    // A disagreeing local configuration no longer forces raw: the conditional
+    // is demoted and kept for the judge's compiler (cross-host demotion).
+    CHECK_EQ(result.exitCode, 0); CHECK_EQ(result.artifact, "flat");
     if (row.flat) CHECK_EQ(result.verification, row.target ? "target" : "local");
     else {
-      CHECK_EQ(result.verification, "local");
-      CHECK(result.diagnostic.find("no configuration satisfies resolution") != std::string::npos);
+      CHECK(result.diagnostic.find("flat: demoted main.cpp:") != std::string::npos);
+      CHECK(result.diagnostic.find("no configuration satisfies resolution") == std::string::npos);
       CHECK(result.bytes.find(row.expression) != std::string::npos);
     }
     // Independently compare the delivered bytes to the original under JUST the
