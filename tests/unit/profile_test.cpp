@@ -146,6 +146,124 @@ TEST(profile_embedded_shipped_codeforces_snapshot) {
   CHECK(!hasInclude.definition);
   CHECK(hasInclude.activeSpecialBuiltin());
 }
+TEST(profile_approximate_identity_absence_and_derived_constants) {
+  for (const auto* selector : {"qoj", "cses", "codeforces", "timus"}) {
+    auto loaded = lookupProfile(selector); CHECK(loaded.ok()); if (!loaded.ok()) continue;
+    const auto& p = loaded.value(); CHECK(!p.reproduced);
+    for (const auto* name : {"_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_M_X64", "_M_AMD64", "_M_IX86",
+         "_M_ARM", "_M_ARM64", "_M_ARM64EC", "__clang__", "__clang_major__", "__clang_minor__",
+         "__clang_patchlevel__", "__INTEL_COMPILER", "__INTEL_LLVM_COMPILER", "__NVCC__", "__CUDACC__", "__EMSCRIPTEN__"}) {
+      CHECK(approximateAllowed(name));
+      CHECK_EQ(p.initialState(name).state, MacroState::undefined);
+      CHECK_EQ(p.initialState(name).provenance, (std::vector{FactOrigin::allowList}));
+    }
+    const bool mingw = p.triple.find("mingw") != p.triple.npos;
+    for (const auto& [name, body] : std::vector<std::pair<std::string, std::string>>{
+         {"__INT8_C", "c"}, {"__INT16_C", "c"}, {"__INT32_C", "c"},
+         {"__INT64_C", mingw ? "c ## LL" : "c ## L"},
+         {"__UINT8_C", "c"}, {"__UINT16_C", "c"}, {"__UINT32_C", "c ## U"},
+         {"__UINT64_C", mingw ? "c ## ULL" : "c ## UL"},
+         {"__INTMAX_C", mingw ? "c ## LL" : "c ## L"}, {"__UINTMAX_C", mingw ? "c ## ULL" : "c ## UL"}}) {
+      CHECK(approximateAllowed(name));
+      const auto fact = p.initialState(name);
+      CHECK_EQ(fact.state, MacroState::known); CHECK(fact.definition.has_value());
+      if (fact.definition) {
+        CHECK(fact.definition->functionLike); CHECK(!fact.definition->variadic);
+        CHECK_EQ(fact.definition->parameters, (std::vector<std::string>{"c"}));
+        CHECK_EQ(fact.definition->replacement, body);
+      }
+      CHECK_EQ(fact.provenance, (std::vector{FactOrigin::compilerBuiltin, FactOrigin::allowList}));
+    }
+  }
+  CHECK(!approximateAllowed("_M_IA64")); CHECK(!approximateAllowed("__UINT128_C"));
+}
+TEST(profile_approximate_forged_constant_snapshot_stays_unknown) {
+  auto files = embeddedProfileFiles();
+  auto& snapshot = files.at("qoj-gcc15-cpp23-predefined.txt");
+  snapshot = replace(snapshot, "#define __UINT64_C(c) c ## UL", "#define __UINT64_C(c) c ## ULL");
+  const auto loaded = lookupProfile("qoj", {}, files); CHECK(loaded.ok()); if (!loaded.ok()) return;
+  const auto& p = loaded.value();
+  CHECK_EQ(p.initialState("__UINT64_TYPE__").state, MacroState::known);
+  CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  CHECK(!p.initialState("__UINT64_C").definition);
+  // Preserve the forged bytes for drift/probe comparisons.
+  CHECK_EQ(p.snapshotFacts.at("__UINT64_C").definition->replacement, "c ## ULL");
+  CHECK_EQ(p.predefined.at("__UINT64_C").replacement, "c ## ULL");
+}
+TEST(profile_approximate_derivation_requires_builtin_prerequisites_and_shape) {
+  auto loaded = lookupProfile("qoj"); CHECK(loaded.ok()); if (!loaded.ok()) return;
+  for (const auto& name : {"__UINT64_TYPE__", "__UINT_LEAST64_TYPE__"}) {
+    auto p = loaded.value(); p.snapshotFacts.erase(name);
+    CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+    p = loaded.value(); p.snapshotFacts.at(name).provenance = {FactOrigin::commandOperation};
+    CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+    p = loaded.value(); p.snapshotFacts.at(name).definition->replacement = "unsigned int";
+    CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  }
+  for (const auto& macro : {Macro{false, {}, false, "c ## UL"}, Macro{true, {"x"}, false, "x ## UL"},
+       Macro{true, {"c", "extra"}, false, "c ## UL"}, Macro{true, {"c"}, true, "c ## UL"},
+       Macro{true, {"c"}, false, "c ## UL + 0"}}) {
+    auto p = loaded.value(); p.snapshotFacts.at("__UINT64_C").definition = macro;
+    CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  }
+  auto p = loaded.value(); p.snapshotFacts.erase("__UINT64_C");
+  CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  p.snapshotFacts["__UINT64_C"] = {MacroState::undefined, {}, {FactOrigin::nativeModel}};
+  CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  for (const auto& type : {"unsigned __int128", "char"}) {
+    p = loaded.value(); p.snapshotFacts.at("__UINTMAX_TYPE__").definition->replacement = type;
+    CHECK_EQ(p.initialState("__UINTMAX_C").state, MacroState::unknown);
+  }
+  for (int major : {12, 17}) {
+    p = loaded.value(); p.compiler.major = major;
+    CHECK_EQ(p.initialState("_MSC_VER").state, MacroState::unknown);
+    CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  }
+  p = loaded.value(); p.compiler.family = CompilerFamily::clang;
+  CHECK_EQ(p.initialState("_MSC_VER").state, MacroState::unknown);
+  CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+  p = loaded.value(); p.snapshotFacts["_MSC_VER"] = {MacroState::known, Macro{false, {}, false, "1930"}, {FactOrigin::compilerBuiltin}};
+  CHECK_EQ(p.initialState("_MSC_VER").state, MacroState::unknown);
+  p = Profile{}; p.compiler = loaded.value().compiler;
+  CHECK_EQ(p.initialState("_MSC_VER").state, MacroState::unknown);
+  CHECK_EQ(p.initialState("__UINT64_C").state, MacroState::unknown);
+}
+TEST(profile_approximate_constant_integer_promotions) {
+  auto loaded = lookupProfile("qoj"); CHECK(loaded.ok()); if (!loaded.ok()) return;
+  for (const auto& [name, widthName] : {std::pair{"__UINT8_C", "__SCHAR_WIDTH__"}, {"__UINT16_C", "__SHRT_WIDTH__"}}) {
+    auto p = loaded.value();
+    p.snapshotFacts.at("__INT_WIDTH__").definition->replacement = p.snapshotFacts.at(widthName).definition->replacement;
+    CHECK_EQ(p.initialState(name).state, MacroState::unknown); // c is wrong at equal precision.
+    p.snapshotFacts.at(name).definition->replacement = "c ## U";
+    CHECK_EQ(p.initialState(name).state, MacroState::known);
+    for (const auto& prerequisite : {"__INT_WIDTH__", widthName}) {
+      auto missing = p; missing.snapshotFacts.erase(prerequisite);
+      CHECK_EQ(missing.initialState(name).state, MacroState::unknown);
+      auto overridden = p; overridden.snapshotFacts.at(prerequisite).provenance = {FactOrigin::commandOperation};
+      CHECK_EQ(overridden.initialState(name).state, MacroState::unknown);
+    }
+    p.snapshotFacts.at("__INT_WIDTH__").definition->replacement = "invalid";
+    CHECK_EQ(p.initialState(name).state, MacroState::unknown);
+  }
+}
+TEST(profile_approximate_identity_and_constant_command_precedence) {
+  auto text = replace(test::read(profileFixture("mingw-gcc14-cpp23.toml")),
+      "flags = [\"-DONLINE_JUDGE\"]", "flags = [\"-DONLINE_JUDGE\", \"-U_MSC_VER\", \"-D_MSC_VER=1930\", \"-D__UINT64_C(c)=c\", \"-U__UINT64_C\"]");
+  auto snapshot = replace(test::read(profileFixture("mingw-predefined.txt")), "# reproduced: yes", "# reproduced: no");
+  snapshot = replace(snapshot, "# flag: -DONLINE_JUDGE", "# flag: -DONLINE_JUDGE\n# flag: -U_MSC_VER\n# flag: -D_MSC_VER=1930\n# flag: -D__UINT64_C(c)=c\n# flag: -U__UINT64_C");
+  snapshot += "# command-operation #define _MSC_VER 1930\n# state __UINT64_C undefined command-operation\n";
+  auto loaded = synthetic(text, snapshot); CHECK(loaded.ok()); if (!loaded.ok()) return;
+  CHECK_EQ(loaded.value().initialState("_MSC_VER").state, MacroState::known);
+  CHECK_EQ(loaded.value().initialState("_MSC_VER").definition->replacement, "1930");
+  CHECK_EQ(loaded.value().initialState("__UINT64_C").state, MacroState::undefined);
+  CHECK_EQ(loaded.value().initialState("__UINT64_C").provenance, (std::vector{FactOrigin::commandOperation}));
+  text = replace(text, "\"-D__UINT64_C(c)=c\", \"-U__UINT64_C\"", "\"-U__UINT64_C\", \"-D__UINT64_C(c)=c\"");
+  snapshot = replace(snapshot, "# flag: -D__UINT64_C(c)=c\n# flag: -U__UINT64_C", "# flag: -U__UINT64_C\n# flag: -D__UINT64_C(c)=c");
+  snapshot = replace(snapshot, "# state __UINT64_C undefined command-operation", "# command-operation #define __UINT64_C(c) c");
+  loaded = synthetic(text, snapshot); CHECK(loaded.ok()); if (!loaded.ok()) return;
+  CHECK_EQ(loaded.value().initialState("__UINT64_C").state, MacroState::known);
+  CHECK_EQ(loaded.value().initialState("__UINT64_C").definition->replacement, "c");
+}
 TEST(profile_embedded_shipped_atcoder_snapshot) {
   const auto loaded = lookupProfile("atcoder");
   if (!loaded.ok()) throw std::runtime_error(loaded.error().message);

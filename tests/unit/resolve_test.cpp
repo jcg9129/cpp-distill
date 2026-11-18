@@ -236,6 +236,20 @@ TEST(resolve_real_external_identity_after_headers) {
   r = resolve("#include <cstdint>\n" + guard, *e, o);
   CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
 }
+TEST(resolve_real_approximate_identity_respects_mingw_headers) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path);
+  if (!e) throw test::Skip{"GCC unavailable"};
+  for (const auto* selector : {"qoj", "cses", "codeforces", "timus"}) {
+    auto loaded = lookupProfile(selector); CHECK(loaded.ok()); if (!loaded.ok()) continue;
+    auto& p = loaded.value(); ResolveOptions o; o.profile = &p;
+    const auto r = resolve("#ifdef _M_X64\nbefore\n#endif\n#include <cstdint>\n"
+                           "#ifdef _MSC_VER\nmsvc\n#endif\n#ifdef _M_X64\nafter\n#endif\n", *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
+    CHECK_EQ(r.decisions.at(2).decision, Decision::falseValue);
+    CHECK_EQ(r.decisions.at(4).decision, p.triple.find("mingw") != p.triple.npos ? Decision::unknown : Decision::falseValue);
+    CHECK_EQ(r.decisions.at(0).external.at(0).fact.provenance, (std::vector{FactOrigin::allowList}));
+  }
+}
 TEST(resolve_fake_identity_source_writes_and_library_restrictions) {
   Fake e; auto p = profile(); ResolveOptions o; o.profile = &p;
   for (const auto* write : {"#define _MSC_VER 1930\n", "#undef _MSC_VER\n"}) {

@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Full-match ECMAScript regexes. Approximate GCC profiles may use ONLY these
-# snapshot facts (positive and negative). Explicit command operations are separate.
+# snapshot facts, subject to the absence/derivation gates in profile/facts.cpp.
+# Explicit command operations are separate. Audit:
+# docs/reviews/2026-11-18-approximate-allowlist.md (user, 2026-11-18).
 # Compiler identity and dialect; no optimization, ISA, library or build defaults.
 __GNUC__
 __GNUC_MINOR__
@@ -9,6 +11,19 @@ __GNUG__
 __VERSION__
 __cplusplus
 __STRICT_ANSI__
+# Non-GCC identity: absence ONLY, audited GCC 13-16. A positive definition is
+# not licensed here. Header invalidation still follows A2's library registry.
+_MSC_VER
+_MSC_FULL_VER
+_MSC_BUILD
+_M_(X64|AMD64|IX86|ARM|ARM64|ARM64EC)
+__clang__
+__clang_(major|minor|patchlevel)__
+__INTEL_COMPILER
+__INTEL_LLVM_COMPILER
+__NVCC__
+__CUDACC__
+__EMSCRIPTEN__
 __cpp_[a-z0-9_]+
 # Header-availability operator: snapshot probe establishes definedness only;
 # its invocation remains unknown (special-builtin provenance).
@@ -45,6 +60,9 @@ _ILP32
 # Type sizes, integer limits/types/widths, floating representation limits.
 __SIZEOF_(SHORT|INT|LONG|LONG_LONG|INT128|POINTER|FLOAT|DOUBLE|LONG_DOUBLE|WCHAR_T|WINT_T|SIZE_T|PTRDIFF_T|FLOAT80|FLOAT128)__
 __(SCHAR|SHRT|INT|LONG|LONG_LONG|WCHAR|WINT|SIZE|PTRDIFF|SIG_ATOMIC|INTMAX|UINTMAX|INTPTR|UINTPTR|U?INT(?:_LEAST|_FAST)?[0-9]+)_(MAX|MIN|WIDTH|TYPE)__
+# Positive definitions ONLY, audited GCC 13-16: must match the derivation from
+# this snapshot's compiler-builtin exact/least types and promotion widths.
+__U?INT(8|16|32|64|MAX)_C
 __(FLT|DBL|LDBL|FLT[0-9]+X?)_(MAX|MIN|DENORM_MIN|DIG|EPSILON|HAS_DENORM|HAS_INFINITY|HAS_QUIET_NAN|MANT_DIG|MAX_10_EXP|MAX_EXP|DECIMAL_DIG|MIN_10_EXP|MIN_EXP|IS_IEC_60559)__
 __CHAR_BIT__
 __DECIMAL_DIG__

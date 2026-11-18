@@ -17,6 +17,7 @@ struct Fixture {
   CompileCommand command;
   DistillOptions options;
   bool strippedKeepObserved = false;
+  bool constantExpansionObserved = false;
   std::map<std::string,std::string> built;
   explicit Fixture(std::string text) {
     const auto compiler = testing::testGcc(); if (!compiler) throw test::Skip{"GCC unavailable"}; gcc = *compiler;
@@ -31,6 +32,18 @@ struct Fixture {
     return take(distillProgram(command,options,*evaluator,[&](const ProcessSpec& spec) -> Result<ProcessResult> {
       if (spec.argv.size() == 3 && spec.argv[1] == "--internal-prune") {
         auto m = take(parsePruningModel(test::read(pathFromUtf8(spec.argv[2]))));
+        if (fault == "uint64") {
+          // Model the real compiler-builtin expansion behind UINT64_C. This
+          // must reach retention's predefined-macro judge-fact comparison.
+          const auto probe = take(probeCompiler(gcc, command, {true, {}, temp.path}));
+          PruneMacroExpansion expansion;
+          expansion.offset = m.text.find("UINT64_C(");
+          CHECK(expansion.offset != m.text.npos);
+          expansion.name = "__UINT64_C"; expansion.predefined = true; expansion.paste = true;
+          expansion.parse = {MacroState::known, probe.macros.at(expansion.name), {FactOrigin::compilerBuiltin}};
+          expansion.judge = m.judgeInitial.at(expansion.name);
+          m.expansions.push_back(expansion); constantExpansionObserved = true;
+        }
         auto add = [&](std::string name,std::string_view prefix,std::string_view end) {
           auto begin = m.text.find(prefix); if (begin == m.text.npos) return;
           auto stop = m.text.find(end,begin); if (stop == m.text.npos) throw std::runtime_error("synthetic range missing end");
@@ -168,6 +181,25 @@ TEST(pipeline_identity_satisfaction_and_header_violation) {
   f.command = take(parseCompileCommand({pathToUtf8(f.gcc),"-std=gnu++20","-isystem","system","main.cpp"},f.temp.path));
   r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"raw");
   CHECK(r.diagnostic.find("preprocess difference") != r.diagnostic.npos);
+}
+TEST(pipeline_approximate_shipped_profile_identity_and_uint64_constant) {
+  Fixture f("#include <cstdint>\n#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))\n"
+            "#include <intrin.h>\n#endif\nint unused(){return 7;}\nint main(){return UINT64_C(0);}\n");
+  const auto local = take(probeCompiler(f.gcc, f.command, {true, {}, f.temp.path}));
+  if (local.triple.find("linux") == local.triple.npos || local.macros.at("__SIZEOF_LONG__").replacement != "8")
+    throw test::Skip{"requires LP64 Linux GCC for the shipped QOJ constant definitions"};
+  auto profile = take(lookupProfile("qoj")); CHECK(!profile.reproduced);
+  f.options.profile = &profile;
+  auto r = f.run("uint64");
+  CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "pruned");
+  CHECK(!r.resolution.unknownInUserCode); CHECK(f.constantExpansionObserved);
+  CHECK(r.bytes.find("intrin.h") == r.bytes.npos); CHECK(r.bytes.find("int unused") == r.bytes.npos);
+  CHECK(r.bytes.find("UINT64_C(0)") != r.bytes.npos);
+  CHECK_EQ(r.runtime, "compared 1 samples");
+  profile.snapshotFacts.at("__UINT64_C").definition->replacement = "c ## ULL";
+  r = f.run("uint64");
+  CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "flat");
+  CHECK(r.diagnostic.find("predefined macro __UINT64_C: unknown judge fact") != r.diagnostic.npos);
 }
 TEST(pipeline_pruned_core_disabled_and_render_fallback) {
   for (const auto& fault : {"disabled","render","stdout"}) {
