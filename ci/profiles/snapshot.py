@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 from flags import operations
@@ -256,6 +257,9 @@ def main():
     args = parser.parse_args()
     try:
         output = capture(args.profile, args.compiler, args.reproduced_build)
+        sys.path.insert(0, str(ROOT / 'ci/library'))
+        from capture import profile_capture
+        profile_capture(args.profile.resolve(), args.compiler)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         parser.exit(1, f'snapshot failed: {error}\n')
     print(output)

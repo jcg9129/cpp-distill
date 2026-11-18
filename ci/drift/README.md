@@ -165,3 +165,30 @@ open for human review. No issue API is invoked by local tests.
 Run `python3 -m unittest discover -s ci/drift` and
 `python3 -m unittest discover -s ci/profiles`. Tests use local fixtures and
 mock HTTP responses only.
+
+## Weekly library feature macro drift (L1c)
+
+The fourth claim is `library`. Weekly planning selects it with evidence and
+availability; monthly planning still selects cold reproduction. Dispatch accepts
+`library` alone or with other claims. `library.yml` regenerates per-header
+snapshots and actual installed-header condition/dependency audits for every
+profile and eligible extension row, then config-independent pairs and cross-build
+agreement. It requires a complete matrix even when issue reporting selects only
+one profile. Profile artifact namespaces differ between L1c and reproduction,
+so a dispatch selecting both claims does not collide.
+
+`ci/drift/library.py` compares `library-generated/library.json` with the committed
+baseline and emits `drift-library/library.json`, using schema 1 and the same
+statuses as reproduction (`identical`, `different`, `missing artifact`, `build
+failure`). Every selected profile has the stable `library.json` source with
+empty host and kind `availability`; this claims data equality, not judge adoption.
+Missing baselines fail explicitly. Full diffs are in the generator log; the issue
+excerpt uses reproduction's bounded byte-preserving diff. A failed producer
+cannot pass merely because its partial output matches. Missing/failed matrix
+results are classified failures; cancelled/skipped outer jobs and malformed
+result artifacts leave issue state unchanged under the existing report guard.
+
+Issues are `drift: <profile>: library`, with the existing state block and
+transition-only comments. Like evidence/reproduction, these alerts do not
+close automatically. A passing observation never changes facts or human review
+dates. See [capture, schema and import instructions](../library/README.md).

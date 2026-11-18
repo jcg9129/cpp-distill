@@ -844,3 +844,45 @@ missing, duplicated and challenge variants, run
 source classification. Keep availability listings separate from judge adoption;
 never adjust expectations solely to make an automated drift result pass.
 Ubuntu acquisition uses [recorded snapshot timestamps](../../ci/profiles/ubuntu-snapshots.md).
+
+## Library feature-test macro data (L1c, part A)
+
+Header-defined `__cpp_lib_*` facts are separate from predefined/source-entry
+snapshots. `profiles.yml` now also uploads `<name>-library.json`, using the same
+snapshot compiler, dialect and flags for one fresh TU per standard-list header
+(including installed PBDS files). Missing headers, preprocessing errors and
+successful headers with no feature macros remain distinct. The existing two
+shipped outputs and DPROBE v1 protocol are unchanged.
+
+The full [L1c workflow](../../.github/workflows/library.yml) combines these with
+all eligible extension scans, audits actual installed conditional definitions
+(GCC 13's distributed definitions and GCC 14+'s generated `bits/version.h`),
+and regenerates `data/library/library.json`. Approximate facts require both
+verified config independence and presence/value agreement across **all** CI
+builds of that GCC major. Disagreements and unavailable/config-dependent facts
+are explicit unknowns. Reproduced facts retain their own build's evidence.
+See [design §4.3.3](../../docs/design.md#433-library-feature-test-macro-facts-l1c)
+for the default-library-configuration gate, header identity, conflict union and
+A9 rules to be implemented in part B. No resolver logic changes in part A.
+
+Run `gh workflow run library.yml --ref <branch>`, download the
+`library-generated` artifact, review the full diff and copy its `library.json`
+byte for byte to `data/library/library.json` in a follow-up commit on the PR.
+The first comparison intentionally fails while that baseline is absent. No
+workflow commits the data. Exact download/import steps and the required review
+coverage are in [ci/library/README.md](../../ci/library/README.md).
+
+A diagnostic companion generates a separate judge-submittable TU for each
+header and compares its `__cpp_lib_*` output with the snapshot:
+`python3 ci/library/probe.py <name>-library.json --header charconv --output probe.cpp`,
+then `--check <judge-stdout.txt>` instead of `--output`. This adds no compiler
+execution locally, uses the separate `DLIB` format, reports mismatches and
+never promotes observations into facts. The known macro universe comes from
+CI; a submitted C++ program cannot enumerate previously unknown names.
+
+Weekly drift now includes a fourth claim, `library`, running the full matrix,
+regenerating snapshots, classifications/dependencies and agreement, and reporting
+changes through `drift: <profile>: library` issues. A selected profile limits
+issue reporting, while agreement always scans the full matrix. Missing/failed
+matrix results cannot pass. As with reproduction, library alerts require human
+closure after investigation; automatic passes do not update `updated`.

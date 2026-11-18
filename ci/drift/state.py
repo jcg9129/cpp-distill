@@ -132,7 +132,7 @@ def upstream_state(host, sources, run_id):
 def body(state):
     lines = ['Automated profile maintenance; `updated` remains the last human review date.', '',
              'Status: **' + state['status'] + '**. Claim: **' + state['claim'] + '**.', '',
-             'Availability measures obtainability; reproduction measures byte equality; evidence may be deployment or listing information.']
+             'Availability measures obtainability; reproduction measures byte equality; library measures L1c snapshot/audit/agreement equality; evidence may be deployment or listing information.']
     if state['manual_review']:
         lines += ['', '**Manual review required:** a source was unavailable for four consecutive weekly windows.']
     for source, value in sorted(state['sources'].items()):

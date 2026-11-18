@@ -17,6 +17,7 @@ from common import ROOT, profiles
 import availability
 import evidence
 import reproduction
+import library
 from plan import claims
 
 
@@ -49,7 +50,7 @@ class PlanningTests(unittest.TestCase):
                             del incomplete[index:index + 2]
                             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                                 parser.parse_args(incomplete)
-        self.assertEqual(scripts, {'plan', 'availability', 'evidence', 'reproduction', 'report'})
+        self.assertEqual(scripts, {'plan', 'availability', 'evidence', 'reproduction', 'library', 'report'})
 
     def test_report_diagnostic_is_uploaded_even_after_failure(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/drift.yml').read_text())
@@ -62,7 +63,7 @@ class PlanningTests(unittest.TestCase):
         shipped = {path.stem for path in (ROOT / 'data/judges').glob('*.toml')}
         selected = profiles()
         self.assertEqual(set(selected), shipped)
-        for claim in (availability, reproduction, evidence):
+        for claim in (availability, reproduction, evidence, library):
             with self.subTest(claim=claim.__name__):
                 self.assertEqual({name for name, source in claim.expected(selected)}, shipped)
 
@@ -76,7 +77,7 @@ class PlanningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             output = Path(directory) / 'output'
             for event, cron, selected, expected, selection in [
-                ('schedule', '17 6 * * 1', '', 'evidence,availability', ''),
+                ('schedule', '17 6 * * 1', '', 'evidence,availability,library', ''),
                 ('schedule', '23 6 1 * *', '', 'reproduction', 'all'),
                 ('workflow_dispatch', '', 'availability', 'availability', 'timus-gcc13-cpp23')]:
                 env = dict(os.environ, EVENT_NAME=event, SCHEDULE=cron, CLAIMS=selected,
@@ -86,7 +87,7 @@ class PlanningTests(unittest.TestCase):
                 rows = dict(line.split('=', 1) for line in output.read_text().splitlines())
                 self.assertEqual(rows['claims'], expected)
                 self.assertEqual(rows['profiles'].split(','), profiles(selection or 'all'))
-                self.assertEqual(len(rows), 5)
+                self.assertEqual(len(rows), 6)
 
     def test_existing_profile_plan_writes_real_output_lines(self):
         # Execute only the local Python planner embedded in the workflow.

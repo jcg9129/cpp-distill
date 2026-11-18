@@ -15,6 +15,10 @@
 /data/judges/*-predefined.txt -text
 /data/judges/*-probe-expected.txt -text
 
+# L1c CI data is compared byte for byte, including on Windows.
+/data/judges/*-library.json -text
+/data/library/*.json -text
+
 # Probe fixtures must retain their exact captured bytes on every platform.
 tests/unit/fixtures/** -text
 

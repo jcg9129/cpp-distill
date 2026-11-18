@@ -82,6 +82,7 @@ jobs:
           timeout 120 python3 -m unittest discover -s ci/extensions -p 'test_*.py'
           timeout 120 python3 -m unittest discover -s ci/profiles -p 'test_*.py'
           python3 -m pip install --disable-pip-version-check -r ci/drift/requirements-test.txt
+          timeout 300 python3 -m pytest -q ci/library
           timeout 120 python3 -m unittest discover -s ci/drift -p 'test_*.py'
           timeout 120 python3 ci/llvm/test-ci.py
           timeout 120 python3 -m unittest discover -s ci/release -p 'test_*.py'

@@ -3,6 +3,11 @@ name: Judge macro snapshots
 on:
   workflow_call:
     inputs:
+      artifact_prefix:
+        description: Artifact namespace for callers that also run monthly reproduction
+        type: string
+        default: snapshot
+        required: false
       profiles:
         description: all, or comma-separated full profile names
         type: string
@@ -200,12 +205,14 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           & $python ci/profiles/probe.py "data/judges/$env:PROFILE.toml" --compiler "$compiler" --distill out/profile-probe/distill.exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - if: always() && !cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: snapshot-${{ matrix.profile }}
+          name: ${{ inputs.artifact_prefix || 'snapshot' }}-${{ matrix.profile }}
           path: |
             data/judges/${{ matrix.profile }}-predefined.txt
             data/judges/${{ matrix.profile }}-probe-expected.txt
+            data/judges/${{ matrix.profile }}-library.json
           if-no-files-found: error
   # A separate job keeps container: absent for all existing runner rows.
   # Job-level if is evaluated before matrix expansion, so an empty partition
@@ -301,10 +308,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 ci/profiles/probe.py "data/judges/$PROFILE.toml" --compiler "$SNAPSHOT_CXX" --distill out/profile-probe/distill
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - if: always() && !cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: snapshot-${{ matrix.profile }}
+          name: ${{ inputs.artifact_prefix || 'snapshot' }}-${{ matrix.profile }}
           path: |
             data/judges/${{ matrix.profile }}-predefined.txt
             data/judges/${{ matrix.profile }}-probe-expected.txt
+            data/judges/${{ matrix.profile }}-library.json
           if-no-files-found: error

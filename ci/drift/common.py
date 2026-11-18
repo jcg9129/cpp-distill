@@ -13,11 +13,12 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'ci/profiles'))
-CLAIMS = ('evidence', 'availability', 'reproduction')
+CLAIMS = ('evidence', 'availability', 'reproduction', 'library')
 STATUSES = {
     'evidence': {'same facts', 'different facts', 'extractor failure', 'fetch failure', 'evidence unavailable'},
     'availability': {'verified', 'unavailable', 'integrity alert'},
     'reproduction': {'identical', 'different', 'missing artifact', 'build failure'},
+    'library': {'identical', 'different', 'missing artifact', 'build failure'},
 }
 PASSES = {'same facts', 'verified', 'identical'}
 
