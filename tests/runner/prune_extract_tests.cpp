@@ -394,6 +394,34 @@ int main(int argc, char** argv) {
         return x.name == "__GNUC__" && !x.predefined && x.parse.definition && x.parse.definition->replacement == "7";
       }),"source __GNUC__ rescan fact missing; recorded:" + macroFacts());
     });
+    // D3d-4: GCC spells __SCHAR_MAX__ as 0x7f; Clang as 127.
+    auto gccSchar = [&] {
+      auto fact = [](std::string v) { return MacroFact{MacroState::known,Macro{false,{},false,std::move(v)},{FactOrigin::compilerBuiltin}}; };
+      for (auto [name,value] : {std::pair{"__CHAR_BIT__","8"},{"__SIZEOF_INT__","4"},{"__SIZEOF_LONG__","8"},{"__SIZEOF_LONG_LONG__","8"}})
+        m.judgeInitial[name] = fact(value);
+      bool found = false;
+      for (auto& x : m.expansions) if (x.name == "__SCHAR_MAX__") { x.judge = fact("0x7f"); found = true; }
+      check(found,"__SCHAR_MAX__ expansion missing; recorded:" + macroFacts());
+      r = take(computeRetention(m));
+    };
+    run("equal integer literal predefined", [&] {
+      m = extract("int x=__SCHAR_MAX__; int main(){}\n",o);
+      check(m.parseWidths == LiteralWidths{32,64,64},"parse widths missing");
+      check(std::none_of(m.expansions.begin(),m.expansions.end(),[](const auto& x) { return x.hashOperator; }),"spurious hash operator");
+      gccSchar(); check(r.disabledReasons.empty(),"equal hex/decimal literal rejected");
+    });
+    run("stringized equal literal predefined", [&] {
+      m = extract("#define STR(x) #x\n#define XSTR(x) STR(x)\nconst char* s=XSTR(__SCHAR_MAX__); int main(){}\n",o);
+      check(std::any_of(m.expansions.begin(),m.expansions.end(),[](const auto& x) { return x.name == "__SCHAR_MAX__" && x.hashOperator; }),
+            "stringized __SCHAR_MAX__ not flagged; recorded:" + macroFacts());
+      gccSchar(); check(!r.disabledReasons.empty(),"stringized spelling accepted");
+    });
+    run("pasted equal literal predefined", [&] {
+      m = extract("#define CAT(a,b) a##b\n#define XCAT(a,b) CAT(a,b)\nint x=XCAT(__SCHAR_MAX__,0); int main(){}\n",o);
+      check(std::any_of(m.expansions.begin(),m.expansions.end(),[](const auto& x) { return x.name == "__SCHAR_MAX__" && x.hashOperator; }),
+            "pasted __SCHAR_MAX__ not flagged; recorded:" + macroFacts());
+      gccSchar(); check(!r.disabledReasons.empty(),"pasted spelling accepted");
+    });
     run("dependent qualified lookup", [&] {
       m = extract("template<class T> void run(){T::opaque();} int main(){}\n",o);
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"dependent qualified lookup disabled");

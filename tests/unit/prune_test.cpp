@@ -56,7 +56,7 @@ TEST(prune_a7_applies_even_without_family_deletion) {
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
   CHECK(r.assumptions.contains("A7"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3d-3");
+  CHECK(b.run().policy == "D3d-4");
 }
 TEST(prune_never_removed_rules_and_nonroots) {
   for (int rule = 0; rule < 10; ++rule) {
@@ -171,6 +171,47 @@ TEST(prune_predefined_macros_source_overrides_and_pasting) {
     if (scenario == 12) CHECK_EQ(b.run().disabledReasons.front(),"predefined macro __GNUC__ differs: judge <empty>, parse 4");
   }
   Model b; PruneMacroExpansion e; e.name = "X"; e.predefined = true; e.parse = known("a + b"); e.judge = known("a+b"); b.m.expansions.push_back(e); CHECK(b.run().disabledReasons.empty());
+}
+TEST(prune_equal_integer_literal_predefined_macros) {
+  // D3d-4: GCC and Clang spell limit macros differently (0x7f vs 127).
+  auto run = [](std::string parse, std::string judge, auto&& tweak) {
+    Model b; b.add("x","int x;"); PruneMacroExpansion e; e.name = "__SCHAR_MAX__"; e.predefined = true; e.offset = 0;
+    e.parse = known(parse); e.judge = known(judge);
+    b.m.parseWidths = LiteralWidths{32,64,64};
+    for (auto [name,value] : {std::pair{"__CHAR_BIT__","8"},{"__SIZEOF_INT__","4"},{"__SIZEOF_LONG__","8"},{"__SIZEOF_LONG_LONG__","8"}})
+      b.m.judgeInitial[name] = known(value);
+    tweak(b.m,e); b.m.expansions.push_back(e);
+    return b.run().disabledReasons;
+  };
+  auto none = [](PruningModel&, PruneMacroExpansion&) {};
+  for (auto [parse,judge] : {std::pair{"127","0x7f"},{"2147483647","0x7fffffff"},{"9223372036854775807L","0x7fffffffffffffffL"},
+                             {"9223372036854775807LL","0x7fffffffffffffffLL"},{"4294967295U","0xffffffffU"},{"18446744073709551615UL","0xffffffffffffffffUL"},
+                             {"18446744073709551615ul","0xFFFFFFFFFFFFFFFFLU"},{"8","010"},{"0","0x0"}})
+    CHECK(run(parse,judge,none).empty());
+  // Different type: hex picks unsigned int, decimal picks long (32-bit int).
+  for (auto [parse,judge] : {std::pair{"4294967295","0xffffffff"},{"202002","202002L"},{"16","16UL"},{"1","1u"},{"1L","1LL"}})
+    CHECK_EQ(run(parse,judge,none).size(),1u);
+  // Different value, unclassifiable literal, or no standard type.
+  for (auto [parse,judge] : {std::pair{"127","0x7e"},{"127","(127)"},{"127","+127"},{"127","0b1111111"},{"127","127lL"},
+                             {"127","1'27"},{"127","127z"},{"18446744073709551615","0xffffffffffffffff"},{"0x7f","0x"}})
+    CHECK_EQ(run(parse,judge,none).size(),1u);
+  // Spelling-sensitive uses and unknown integer models.
+  CHECK_EQ(run("127","0x7f",[](auto&, auto& e) { e.hashOperator = true; }).front(),"predefined macro __SCHAR_MAX__ differs: judge 0x7f, parse 127");
+  CHECK_EQ(run("127","0x7f",[](auto&, auto& e) { e.paste = true; }).front(),"predefined macro __SCHAR_MAX__ differs: judge 0x7f, parse 127");
+  CHECK_EQ(run("127","0x7f",[](auto& m, auto&) { m.sourceDirectives = {{0,3}}; }).size(),1u);
+  CHECK_EQ(run("127","0x7f",[](auto& m, auto&) { m.parseWidths.reset(); }).size(),1u);
+  CHECK_EQ(run("127","0x7f",[](auto& m, auto&) { m.judgeInitial.erase("__SIZEOF_INT__"); }).size(),1u);
+  CHECK_EQ(run("127","0x7f",[](auto& m, auto&) { m.judgeInitial["__SIZEOF_INT__"].provenance = {FactOrigin::commandOperation}; }).size(),1u);
+  CHECK_EQ(run("127","0x7f",[](auto&, auto& e) { e.judge.definition->functionLike = true; }).size(),1u);
+  // Type agreement is required under the judge widths too: 16-bit int there.
+  CHECK_EQ(run("40000","0x9c40",[](auto& m, auto&) { m.judgeInitial["__SIZEOF_INT__"] = known("2"); }).size(),1u);
+  CHECK(run("40000","0x9c40",none).empty());
+  // The protocol round-trips the new fields.
+  Model b; b.add("x","int x;"); b.m.parseWidths = LiteralWidths{32,32,64};
+  PruneMacroExpansion e; e.hashOperator = true; b.m.expansions.push_back(e);
+  auto round = parsePruningModel(serializePruningModel(b.m).value());
+  CHECK(round.ok()); CHECK(round.value().parseWidths == b.m.parseWidths); CHECK(round.value().expansions[0].hashOperator);
+  b.m.parseWidths = LiteralWidths{0,32,64}; CHECK(!serializePruningModel(b.m).ok());
 }
 TEST(prune_profile_inert_exempts_only_exact_profile_occurrences) {
   const auto p = lookupProfile("atcoder-gcc15-gnupp23").value();

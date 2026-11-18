@@ -61,6 +61,7 @@ struct Extraction {
   std::map<const Decl*,FamilyId> owners;
   std::vector<std::pair<const Decl*,FamilyId>> declarations;
   std::map<std::size_t,std::pair<bool,bool>> pasteGroups;
+  std::set<std::size_t> hashOffsets; // Expansion offsets of macros defined with #, #@ or ##.
   std::vector<EditRange> macroInvocations, conditionRanges;
   std::vector<distill::Token> tokens;
   std::map<std::size_t,std::set<std::string>> systemMacros;
@@ -431,6 +432,8 @@ public:
     parse.provenance = {source ? FactOrigin::source : system ? FactOrigin::systemHeader : command ? FactOrigin::commandOperation : FactOrigin::compilerBuiltin};
     e.model.expansions.push_back({offset,name,true,false,builtin || judgePredefined,parse,judge,paste,false,true});
     auto& group = e.pasteGroups[offset]; group.first |= paste; group.second |= system || builtin || judgePredefined;
+    if (std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); }))
+      e.hashOffsets.insert(offset);
     if (system) e.systemMacros[offset].insert(name);
     if (auto r = e.range(range)) e.macroInvocations.push_back(*r);
   }
@@ -839,6 +842,7 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   compiler.createFileManager(); compiler.createSourceManager();
   if (!compiler.createTarget()) { model.disabledReasons.push_back("unsupported Clang target"); return model; }
   compiler.createPreprocessor(TU_Complete); compiler.createASTContext();
+  model.parseWidths = LiteralWidths{compiler.getTarget().getIntWidth(),compiler.getTarget().getLongWidth(),compiler.getTarget().getLongLongWidth()};
   // createPreprocessor initializes the target's builtin table, but registering
   // its names normally happens in FrontendAction::BeginSourceFile. We bypass
   // that action and call ParseAST directly, so perform that step before parsing.
@@ -865,6 +869,20 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
     for (auto invocation : extraction.macroInvocations) if (invocation.begin <= fact.offset && fact.offset < invocation.end)
       for (const auto& other : extraction.model.expansions) if (invocation.begin <= other.offset && other.offset < invocation.end)
         if (other.predefined || std::find(other.parse.provenance.begin(),other.parse.provenance.end(),FactOrigin::systemHeader) != other.parse.provenance.end()) fact.externalPasteOperand = true;
+  }
+  // D3d-4: a literal's spelling may reach a # or ## operand only through a
+  // macro expanded within the same physical invocation span (see the review).
+  std::vector<EditRange> hashSpans;
+  for (auto invocation : extraction.macroInvocations) {
+    auto i = extraction.hashOffsets.lower_bound(invocation.begin);
+    if (i != extraction.hashOffsets.end() && *i < invocation.end) hashSpans.push_back(invocation);
+  }
+  std::sort(hashSpans.begin(),hashSpans.end(),[](auto a, auto b) { return a.begin < b.begin; });
+  std::vector<EditRange> merged;
+  for (auto r : hashSpans) if (!merged.empty() && r.begin <= merged.back().end) merged.back().end = std::max(merged.back().end,r.end); else merged.push_back(r);
+  for (auto& fact : extraction.model.expansions) {
+    auto i = std::upper_bound(merged.begin(),merged.end(),fact.offset,[](std::size_t o, auto r) { return o < r.begin; });
+    fact.hashOperator = extraction.hashOffsets.contains(fact.offset) || (i != merged.begin() && fact.offset < std::prev(i)->end);
   }
   auto valid = validatePruningModel(extraction.model); if (!valid.ok()) return valid.error();
   return std::move(extraction.model);
