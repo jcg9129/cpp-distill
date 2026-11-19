@@ -62,15 +62,11 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
         raise ValueError('not a GCC version: ' + version)
     if search is None:
         search = search_paths(command(compiler, [*argv, '-E', '-v', '-']).stderr)
-    reached = reachable(search) if reached is None else reached
-    files = {}
-    for file in sorted(reached):
-        # Audit the SAME reachable-header closure as A1, including libc. Library
-        # request macros and header include conditions can originate there too.
-        owner = next((i for i, p in enumerate(search) if file.is_relative_to(p)), None)
-        if owner is None:
-            raise ValueError('reachable header outside compiler search paths: ' + str(file))
-        files[f'{owner}/' + file.relative_to(search[owner]).as_posix()] = file.read_bytes().decode('utf-8', errors='replace')
+    reached = reachable(search, with_spellings=True) if reached is None else reached
+    # Include libc and retain every search-relative spelling, even when its
+    # symlink target lies outside the search paths. Include edges use these keys.
+    files = {name: file.read_bytes().decode('utf-8', errors='replace')
+             for name, file in sorted(reached.items())}
     # -dD provenance distinguishes real compiler predefines from stdc-predef.h
     # and command definitions. Special builtin tests remain unrecognised.
     trace = command(compiler, [*argv, '-dD', '-E', '-']).stdout

@@ -35,7 +35,12 @@ The merged `library.json` (schema/generator 1) has:
 
 The audit retains actual lexical conditions, including inactive definitions,
 previous elif conditions, internal feature-request/value definitions and include
-edge dependencies. It verifies the embedded IEEE candidate macros against each
+edge dependencies. Files are keyed by search-directory index and unresolved
+include spelling (for example, `2/asm/bitsperlong.h`), while contents are read
+from the resolved file. Directory symlinks may lead outside the search paths;
+every reached spelling is retained so global and local include edges still
+resolve. A1 keeps its existing set of resolved files.
+The audit verifies the embedded IEEE candidate macros against each
 installed build; unknown predicates or replacements fail closed. Header writes
 and command/startup overrides revoke compiler-predefine trust. Audits retain
 the trusted compiler definitions so changes to dependency replacements are visible. Native-model names are not trusted inputs under

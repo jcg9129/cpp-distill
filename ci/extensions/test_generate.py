@@ -57,6 +57,60 @@ class GeneratorTests(unittest.TestCase):
             self.assertEqual(read_list(output)[0], {'NEXT', 'PBDS', 'REACH'})
             self.assertIn('computed include operands are not followed', output.read_text())
 
+    def test_reachability_retains_symlink_spellings_and_search_indices(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            root = Path(temp).resolve()
+            first, second, outside = (root / name for name in ('first', 'second', 'uapi'))
+            for directory in (first, second, outside):
+                directory.mkdir()
+            try:
+                (first / 'asm').symlink_to(outside, target_is_directory=True)
+                (first / 'alias').symlink_to(outside, target_is_directory=True)
+                (second / 'asm').symlink_to(outside, target_is_directory=True)
+                (first / 'ext/pb_ds').mkdir(parents=True)
+                (first / 'ext/pb_ds/detail').symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f'directory symlinks unavailable: {error}')
+            seeds = root / 'headers.txt'
+            seeds.write_text('vector\n')
+            (first / 'vector').write_text('#include <asm/bitsperlong.h>\n#include <alias/bitsperlong.h>\n')
+            (outside / 'bitsperlong.h').write_text('#include "local.h"\n#include_next <asm/bitsperlong.h>\n')
+            (outside / 'local.h').write_text('#define REACHED 1\n')
+            (outside / 'pbds.h').write_text('#define PBDS 1\n')
+            # rglob does not recurse through directory symlinks, so seed a
+            # regular PBDS header that includes a file through the symlink.
+            (first / 'ext/pb_ds/tree.hpp').write_text('#include "detail/pbds.h"\n')
+            legacy = reachable([first, second], seeds)
+            spelled = reachable([first, second], seeds, with_spellings=True)
+            expected = {'0/vector': first / 'vector',
+                        '0/ext/pb_ds/tree.hpp': first / 'ext/pb_ds/tree.hpp',
+                        '0/ext/pb_ds/detail/pbds.h': outside / 'pbds.h'}
+            for prefix in ('0/asm', '0/alias', '1/asm'):
+                for name in ('bitsperlong.h', 'local.h'):
+                    expected[prefix + '/' + name] = outside / name
+            self.assertEqual(spelled, expected)
+            self.assertEqual(legacy, set(expected.values()))
+            legacy_output, spelled_output = root / 'legacy.txt', root / 'spelled.txt'
+            generate('glibc', legacy, legacy_output, ['fixture'])
+            generate('glibc', set(spelled.values()), spelled_output, ['fixture'])
+            self.assertEqual(legacy_output.read_bytes(), spelled_output.read_bytes())
+
+    def test_spelled_reachability_rejects_only_headers_outside_all_search_dirs(self):
+        with tempfile.TemporaryDirectory(dir='.') as temp:
+            root = Path(temp).resolve()
+            first, second = root / 'first', root / 'second'
+            first.mkdir(); second.mkdir()
+            seeds = root / 'headers.txt'; seeds.write_text('vector\n')
+            header = second / 'local.h'; header.write_text('#define REACHED 1\n')
+            (first / 'vector').write_text(f'#include "{header.as_posix()}"\n')
+            self.assertEqual(reachable([first, second], seeds, with_spellings=True),
+                             {'0/vector': first / 'vector', '1/local.h': header})
+            outside = root / 'outside.h'; outside.write_text('#define OUTSIDE 1\n')
+            (first / 'vector').write_text(f'#include "{outside.as_posix()}"\n')
+            self.assertEqual(reachable([first, second], seeds), {first / 'vector', outside})
+            with self.assertRaisesRegex(ValueError, 'reachable header outside compiler search paths:'):
+                reachable([first, second], seeds, with_spellings=True)
+
     def test_attribution_and_search_order(self):
         self.assertEqual(attribute(Path('/usr/include/c++/15/vector'), 'linux', []), 'libstdc++')
         self.assertEqual(attribute(Path('/usr/include/stdio.h'), 'linux', [Path('/usr/include')]), 'glibc')

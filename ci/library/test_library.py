@@ -319,7 +319,8 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
     with patch('capture.command', side_effect=compiler), patch('capture.header_names',
             return_value=['charconv', 'empty', 'missing', 'broken', 'ext/pb_ds/tree.hpp']):
         path = capture('/fixture/g++', 'c++23', flags, 'fixture', tmp_path / 'capture.json',
-                       search=[search], reached={search / 'charconv', search / 'ext/pb_ds/tree.hpp'})
+                       search=[search], reached={'0/charconv': search / 'charconv',
+                           '0/ext/pb_ds/tree.hpp': search / 'ext/pb_ds/tree.hpp'})
     data = json.loads(path.read_text())
     assert data['headers']['charconv']['macros'] == {'__cpp_lib_test': '1L'}
     assert data['headers']['empty'] == dict(status='ok', macros={})
@@ -343,13 +344,48 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
         dump('#define __cpp_lib_a(x) x')
 
 
+@pytest.mark.parametrize('handoff', [False, True], ids=['profile', 'extensions'])
+def test_capture_symlinked_headers_preserves_include_dependencies(tmp_path, handoff):
+    from generate import reachable
+    search, outside = tmp_path / 'include', tmp_path / 'uapi'
+    search.mkdir()
+    outside.mkdir()
+    try:
+        (search / 'asm').symlink_to(outside, target_is_directory=True)
+        (search / 'alias').symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f'directory symlinks unavailable: {error}')
+    (search / 'charconv').write_text('#if _GLIBCXX_HOSTED\n#include <asm/bitsperlong.h>\n#endif\n'
+                                   '#if _GLIBCXX_HAS_GTHREADS\n#include <alias/bitsperlong.h>\n#endif\n')
+    (outside / 'bitsperlong.h').write_text('#include "local.h"\n')
+    (outside / 'local.h').write_text('#define __cpp_lib_test 1L\n')
+
+    def compiler(executable, args, source='', check=True):
+        out = '15.2.0' if args[0] == '-dumpfullversion' else 'fixture'
+        return subprocess.CompletedProcess(args, 0, out, '')
+
+    kwargs = {'reached': reachable([search], with_spellings=True)} if handoff else {}
+    with patch('capture.command', side_effect=compiler), patch('capture.header_names', return_value=['charconv']):
+        path = capture('/fixture/g++', 'c++23', [], 'fixture', tmp_path / 'symlink.json',
+                       search=[search], **kwargs)
+    data = json.loads(path.read_text())['audit']
+    entry = data['macros']['__cpp_lib_test']
+    assert not entry['independent']
+    assert entry['unrecognised'] == ['_GLIBCXX_HAS_GTHREADS', '_GLIBCXX_HOSTED']
+    assert {definition['file'] for definition in entry['definitions']} == {
+        '0/asm/local.h', '0/alias/local.h'}
+    assert {include['file'] for include in data['includes']} == {
+        '0/charconv', '0/asm/bitsperlong.h', '0/alias/bitsperlong.h'}
+    assert not data['unparsed']
+
+
 def test_profile_forced_includes_have_no_header_facts(tmp_path):
     def compiler(executable, args, source='', check=True):
         text = '15.2.0' if args[0] == '-dumpfullversion' else 'fixture'
         return subprocess.CompletedProcess(args, 0, text, '')
     with patch('capture.command', side_effect=compiler), patch('capture.header_names', return_value=['charconv']):
         path = capture('/fixture/g++', 'c++23', ['-include', 'forced.h'], 'fixture',
-                       tmp_path / 'disabled.json', search=[], reached=set())
+                       tmp_path / 'disabled.json', search=[], reached={})
     assert json.loads(path.read_text())['headers']['charconv'] == dict(status='disabled', macros={})
 
 

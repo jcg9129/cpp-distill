@@ -62,7 +62,7 @@ def scan(platform, compiler, output_dir, headers_version, label=None):
         dialect = 'c++23' if major >= 13 else 'c++20' if major >= 11 else 'c++17'
         capture(compiler, dialect, [], 'extensions-' + (label or platform),
                 output_dir / ((label or platform) + '-library.json'), search=search,
-                reached=reached, provenance=headers_version)
+                reached=reachable(search, with_spellings=True), provenance=headers_version)
     violations = []
     for library in libraries:
         files = {p for p in reached if attribute(p, platform, search) == library}
