@@ -322,7 +322,7 @@ struct Engine {
       if (include != n.includes.end() && !user) {
         const auto& e = include->second;
         const bool standard = isStandardHeader(e.name);
-        result.systemIncludes.push_back({{n.info.fileName, l.tokens.front().line}, e.name, e.angle, rewrite, e.lookup.found, standard, e.lookup.systemDirectory});
+        result.systemIncludes.push_back({{n.info.fileName, l.tokens.front().line}, e.name, e.angle, rewrite, e.lookup.found, standard, e.lookup.systemDirectory, e.lookup.compilerSystem});
         if (!standard) {
           ++unsafeIncludes;
           // An unavailable angle header can only occur on skipped paths in a

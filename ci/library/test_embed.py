@@ -1,0 +1,157 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Resolver table tests: synthetic data plus round trips of the reviewed baseline."""
+import hashlib
+import json
+import subprocess
+import sys
+
+import pytest
+
+from audit import classify, VERSION
+from embed import generate, transitions, ROOT
+from merge import merge, baseline_text, get_agreement, get_snapshot
+
+NAME = '__cpp_lib_test'
+
+
+def report(build='profile-test', value='1L', condition='', volatile=(), reproduced=True, status='ok'):
+    text = '#define ' + NAME + ' 1L'
+    if condition:
+        text = '#if ' + condition + '\n' + text + '\n#endif'
+    return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
+                std='c++23', triple='x86_64-pc-linux-gnu', flags=[], compiler='synthetic',
+                reproduced=reproduced, provenance=dict(build='recipe=https://example.test'),
+                volatile=list(volatile), observations={},
+                headers={'charconv': dict(status=status, macros={} if value is None or status != 'ok' else {NAME: value})},
+                audit=classify({'0/charconv': text}, (), roots=['charconv']))
+
+
+def combined(*reports):
+    return merge(list(reports), [r['build'] for r in reports])
+
+
+def test_embed_agreement_disagreement_and_own_build_snapshot():
+    a, b = report(), report('other', '2L', reproduced=False)
+    data = combined(a, b)
+    names, rows, builds = transitions(data, {'charconv'})
+    assert names == [NAME]
+    assert rows['gcc-14', 'charconv'] == (1,)
+    assert rows['profile-test', 'charconv'] == ('1L',)
+    assert len(builds) == 2
+    assert [b[0] for b in builds] == ['', 'profile-test']
+    with pytest.raises(ValueError, match='no library transitions'):
+        transitions(data, {'different'})
+    text = generate(baseline_text(data).encode(), {'charconv'})
+    assert 'LibraryHeader headers' in text and '"profile-test"' in text
+    assert 'LibraryBuild builds' in text and 'schema=2' in text
+    assert 'evidence_sha256' not in text and 'observations' not in text
+
+
+def test_embed_reproduced_build_dependence_but_not_native_uncertainty():
+    for condition, volatile, expected in [('_GLIBCXX_HAS_GTHREADS', (), '1L'),
+                                          ('__AVX2__', ('__AVX2__',), 1)]:
+        data = combined(report(condition=condition, volatile=volatile))
+        _, rows, _ = transitions(data, {'charconv'})
+        assert rows['gcc-14', 'charconv'] == (1,)
+        assert rows['profile-test', 'charconv'] == (expected,)
+
+
+@pytest.mark.parametrize('status', ['missing', 'error', 'disabled'])
+def test_embed_failed_snapshot_does_not_prove_absence(status):
+    data = combined(report(status=status))
+    _, rows, _ = transitions(data, {'charconv'})
+    assert rows['profile-test', 'charconv'] == (1,)
+    assert rows['gcc-14', 'charconv'] == (1,)
+
+
+def test_embed_absent_preserves_and_nonliteral_becomes_unknown():
+    data = combined(report(value=None))
+    _, rows, _ = transitions(data, {'charconv'})
+    assert rows['profile-test', 'charconv'] == (0,)
+    assert rows['gcc-14', 'charconv'] == (0,)
+    data = combined(report(value='unknown_alias'))
+    _, rows, _ = transitions(data, {'charconv'})
+    assert rows['profile-test', 'charconv'] == (1,)
+
+
+def test_embed_approximate_build_never_emits_own_snapshot():
+    data = combined(report(reproduced=False))
+    _, rows, builds = transitions(data, {'charconv'})
+    assert len(builds) == 1 and builds[0][0] == ''
+    assert builds[0][1:4] == ('14', '14.2.0', 'c++23')
+    assert list(rows) == [('gcc-14', 'charconv')]
+    text = generate(baseline_text(data).encode(), {'charconv'})
+    assert 'LibraryBuild builds[]' in text
+    assert '{"","14","14.2.0","c++23"' in text
+    assert ',{}}' in text  # Empty flags use a portable empty span.
+
+
+def test_embed_baseline_round_trip_is_small_and_deterministic():
+    raw = (ROOT / 'data/library/library.json').read_bytes()
+    data = json.loads(raw)
+    standard = {s for s in (ROOT / 'data/names/standard-headers.txt').read_text().splitlines()
+                if s and not s.startswith('#')}
+    names, rows, builds = transitions(data, standard)
+    for (key, header), row in rows.items():
+        if key.startswith('gcc-'):
+            agreement = get_agreement(data, key[4:], header)
+            assert row == tuple(agreement['defined'].get(n, 0 if n in agreement['absent'] else 1) for n in names)
+        else:
+            snapshot = get_snapshot(data, key, header)
+            assert all(value == 1 or value == snapshot['macros'].get(n, 0) for n, value in zip(names, row))
+    assert {b[0] for b in builds if b[0]} == {k for k, b in data['builds'].items() if k.startswith('profile-') and b['reproduced']}
+    assert len(builds) == len(data['builds'])
+    for embedded, (_, build) in zip(builds, sorted(data['builds'].items())):
+        assert embedded[1:5] == (build['major'], build['gcc'], build['std'], build['triple'])
+        assert embedded[-1] == build['flags']
+    text = generate(raw, standard)
+    assert text == generate(raw, standard)
+    assert len(text) < 400_000 and len(text) < len(raw) // 10
+    assert hashlib.sha256(raw).hexdigest() in text
+    # Dictionary order is irrelevant to table layout; exact bytes still identify
+    # distinct baselines in provenance.
+    reordered = json.dumps(data, sort_keys=True).encode()
+    other = generate(reordered, standard)
+    assert text.replace(hashlib.sha256(raw).hexdigest(), '') == other.replace(hashlib.sha256(reordered).hexdigest(), '')
+
+
+@pytest.mark.parametrize('mutation', ['schema', 'generator', 'missing', 'address', 'reference', 'cycle'])
+def test_embed_rejects_malformed_baseline(mutation):
+    data = combined(report())
+    if mutation in ('schema', 'generator'):
+        data[mutation] = 999
+    elif mutation == 'missing':
+        del data['agreements']
+    elif mutation == 'address':
+        next(iter(data['snapshots'].values()))['macros'][NAME] = '999L'
+    elif mutation == 'reference':
+        data['agreement']['14'] = 'missing'
+    else:
+        key = next(iter(data['macro_sets']))
+        data['macro_sets'][key]['base'] = key
+    with pytest.raises((KeyError, ValueError)):
+        generate(json.dumps(data).encode(), {'charconv'})
+    with pytest.raises(ValueError, match='duplicate JSON key'):
+        generate(b'{"schema":2,"schema":2}', {'charconv'})
+
+
+def test_embed_cli_missing_or_malformed_data_fails_without_output(tmp_path):
+    for contents in (None, '{}', '{broken'):
+        input_file, output_file = tmp_path / 'library.json', tmp_path / 'generated.cpp'
+        if contents is not None:
+            input_file.write_text(contents)
+        result = subprocess.run([sys.executable, str(ROOT / 'ci/library/embed.py'),
+                                 str(input_file), str(output_file)], capture_output=True, text=True)
+        assert result.returncode and 'invalid library baseline:' in result.stderr
+        assert not output_file.exists()
+
+
+def test_embed_includes_dynamic_standard_pbds_prefix():
+    r = report()
+    r['headers']['ext/pb_ds/assoc_container.hpp'] = dict(status='ok', macros={NAME: '1L'})
+    r['audit'] = classify({'0/charconv': '#define ' + NAME + ' 1L',
+                           '0/ext/pb_ds/assoc_container.hpp': '#define ' + NAME + ' 1L'},
+                          (), roots=r['headers'])
+    _, rows, _ = transitions(combined(r), {'charconv'})
+    assert rows['gcc-14', 'ext/pb_ds/assoc_container.hpp'] == ('1L',)
+    assert rows['profile-test', 'ext/pb_ds/assoc_container.hpp'] == ('1L',)

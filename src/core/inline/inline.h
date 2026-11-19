@@ -7,7 +7,7 @@
 #include <cstdint>
 
 namespace distill {
-struct IncludeDirectory { std::filesystem::path path; bool system = false, framework = false; };
+struct IncludeDirectory { std::filesystem::path path; bool system = false, framework = false, compilerSystem = false; };
 struct IncludeSearch {
   std::filesystem::path cwd;
   std::vector<IncludeDirectory> quote, angle;
@@ -18,6 +18,7 @@ struct HeaderLookup {
   std::string fileName; // GCC's __FILE__ spelling, relative to command cwd if relative.
   bool found = false, system = false;
   std::optional<std::filesystem::path> systemDirectory;
+  bool compilerSystem = false; // Resolved file is beneath a compiler-owned directory.
 };
 // Absolute includes are user files unless their resolved path lies under a system
 // directory. A missing absolute angle name is kept; a missing quoted name errors.
@@ -47,6 +48,7 @@ struct SystemInclude {
   std::string spelling; // Operand without delimiters.
   bool angle = false, rewritten = false, found = false, standard = false;
   std::optional<std::filesystem::path> directory;
+  bool compilerSystem = false;
 };
 struct InlineFlags { bool counter = false, pushMacro = false, popMacro = false, pragmaOperator = false; };
 struct InlineResult {

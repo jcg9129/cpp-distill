@@ -29,9 +29,12 @@ if(NOT WIN32)
 endif()
 include(cmake/EmbedNames.cmake)
 include(cmake/EmbedProfiles.cmake)
+include(cmake/EmbedLibrary.cmake)
 add_library(distill_core STATIC
   "${CMAKE_CURRENT_BINARY_DIR}/embedded_names.cpp"
   "${CMAKE_CURRENT_BINARY_DIR}/embedded_profiles.cpp"
+  "${CMAKE_CURRENT_BINARY_DIR}/embedded_library.cpp"
+  src/core/library/library.cpp
   src/core/profile/toml.cpp
   src/core/profile/profile.cpp
   src/core/profile/probe.cpp

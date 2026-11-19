@@ -413,3 +413,15 @@ TEST(pipeline_preprocess_cap_is_separate_and_overflow_fails_closed) {
   CHECK(result.diagnostic.find("raw failed: raw checks: process output cap exceeded") != result.diagnostic.npos);
   if (result.keptWork) std::filesystem::remove_all(*result.keptWork);
 }
+TEST(pipeline_library_fact_reports_a9_and_survives_local_satisfaction) {
+  Fixture f("#include <charconv>\n#if defined(__cpp_lib_to_chars)\nint main(){return 0;}\n#else\n#error missing charconv\n#endif\n");
+  auto p = lookupProfile("codeforces").value(); f.options.profile = &p; f.options.noPrune = true;
+  auto r = f.run();
+  CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "flat");
+  CHECK(!r.resolution.unknownInUserCode);
+  CHECK(r.assumptions.contains("A9"));
+  CHECK(r.report.find("library facts: ci/library generator=3 schema=2 embed=1 sha256:") != r.report.npos);
+  CHECK(r.report.find("selector=gcc-14") != r.report.npos);
+  CHECK(r.report.find("__cpp_lib_to_chars: A9 library") != r.report.npos);
+  CHECK_EQ(r.resolution.decisions[0].decision, Decision::trueValue);
+}

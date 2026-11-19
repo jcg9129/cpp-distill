@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 main.cpp:2 false
 main.cpp:6 unknown
-main.cpp:9 unknown
+main.cpp:9 true
 main.cpp:12 unknown
-main.cpp:15 unknown
+main.cpp:15 true
 main.cpp:18 unknown
 main.cpp:21 true
 main.cpp:25 unknown

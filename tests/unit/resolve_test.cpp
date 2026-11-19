@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
 #include "core/resolve/resolve.h"
+#include "core/lex/scan.h"
+#include "core/report/report.h"
 #include "evaluate.h"
 #include <algorithm>
 #include <functional>
@@ -464,4 +466,277 @@ TEST(resolve_real_isolation_and_rebound_builtins) {
   CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
   r = resolve("#undef __LINE__\n#if __LINE__\nx\n#endif\n", *e, o);
   CHECK_EQ(r.decisions[0].decision, Decision::falseValue);
+}
+
+namespace {
+InlineResult libraryRaw(std::string source, bool own = true, bool found = true) {
+  auto r = raw(std::move(source));
+  const auto scan = scanDirectives(r.text).value();
+  for (const auto& line : scan.lines) if (line.directive && line.directive->name == "include") {
+    const auto& operand = line.directive->tokens.front().text;
+    r.systemIncludes.push_back({{"main.cpp", line.tokens.front().line}, operand.substr(1, operand.size() - 2),
+                               operand.front() == '<', false, found, true, {}, own});
+  }
+  return r;
+}
+ResolveResult libraryResolve(std::string source, ConditionEvaluator& e, const ResolveOptions& o,
+                             std::vector<std::string> flags = {}, bool own = true, bool found = true) {
+  std::vector<std::string> args{"g++", "main.cpp", "-std=gnu++23"};
+  args.insert(args.end(), flags.begin(), flags.end());
+  auto command = parseCompileCommand(args, std::filesystem::current_path()).value();
+  return resolveConditions(libraryRaw(std::move(source), own, found), command, e, o).value();
+}
+const std::string toCharsCheck = "#if defined(__cpp_lib_to_chars)\nyes\n#else\nno\n#endif\n";
+}
+TEST(resolve_library_shipped_acceptance_and_provenance) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  const auto integers = localIntegerModel(temp.path);
+  for (const auto* judge : {"cses", "codeforces"}) {
+    auto p = lookupProfile(judge).value(); ResolveOptions o; o.profile = &p;
+    const auto& data = embeddedLibraryData();
+    CHECK_EQ(data.selector(p), judge == std::string_view("cses") ? "gcc-13" : "gcc-14");
+    auto r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::trueValue); CHECK(!r.unknownInUserCode);
+    CHECK_EQ(r.decisions[0].external[0].fact.provenance, (std::vector{FactOrigin::library}));
+    CHECK_EQ(r.decisions[0].external[0].fact.definition->replacement, "201611L");
+    CHECK_EQ(r.libraryProvenance.size(), 1u);
+    CHECK(r.libraryProvenance.begin()->find("generator=3 schema=2 embed=1 sha256:") != std::string::npos);
+    CHECK(r.libraryProvenance.begin()->find("selector=" + data.selector(p)) != std::string::npos);
+    // Check actual replacement arithmetic with a model the local oracle can
+    // represent (the Codeforces profile itself has MinGW's LLP64 layout).
+    o.requirements.integers = integers;
+    r = libraryResolve("#include <charconv>\n#if __cpp_lib_to_chars >= 201611L\nx\n#endif\n", *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
+    CHECK(r.decisions[0].external[0].definitionUsed);
+    // Facts are transitions, never initial definitions or identity exemptions.
+    r = libraryResolve(toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::falseValue); CHECK(r.libraryProvenance.empty());
+    r = libraryResolve("#include <charconv>\n#include <vendor.h>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+    for (const bool own : {false, true}) {
+      r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o, {}, own, false);
+      CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+    }
+    r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o, {}, false);
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  }
+  for (const unsigned major : {14, 15, 16}) {
+    auto p = featureProfile(); p.compiler.major = major;
+    ResolveOptions o; o.profile = &p;
+    auto r = libraryResolve("#include <thread>\n#ifdef __cpp_lib_jthread\nx\n#endif\n", *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown); CHECK(r.libraryProvenance.empty());
+  }
+}
+TEST(resolve_library_default_configuration_monotone_and_entry) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = lookupProfile("codeforces").value(); ResolveOptions o; o.profile = &p;
+  for (const auto* change : {"#define _GLIBCXX_USE_CXX11_ABI 0\n", "#undef _GLIBCXX_USE_CXX11_ABI\n",
+       "#define __cpp_lib_to_chars 201611L\n", "#undef __cpp_lib_to_chars\n", "#include <vendor.h>\n",
+       "#pragma GCC target(\"avx2\")\n", "#pragma GCC optimize(\"O3\")\n",
+       "#pragma GCC push_options\n", "#pragma GCC pop_options\n"}) {
+    for (const auto& prefix : {std::string{}, std::string("#include <charconv>\n")}) {
+      auto r = libraryResolve(prefix + change + "#include <charconv>\n" + toCharsCheck, *e, o);
+      CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+    }
+  }
+  // Repeating an equal source definition or undefinition cannot restore default configuration.
+  auto r = libraryResolve("#define __X 1\n#undef __X\n#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  for (const auto* flag : {"-D__X=1", "-U__X", "-D_GLIBCXX_USE_CXX11_ABI=1"}) {
+    r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o, {flag});
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  }
+  r = libraryResolve("#define local 1\n#undef local\n#include <charconv>\n" + toCharsCheck, *e, o, {"-DOTHER=1"});
+  CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
+  for (const auto* flag : {"-include", "-imacros", "-includeforced.h", "-imacrosforced.h"}) {
+    // The command/profile parsers still reject these. Defend the transition even
+    // for an internal caller with an already constructed command/profile.
+    p.flags.push_back(flag);
+    r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+    p.flags.pop_back();
+    auto command = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
+    command.args.push_back({{flag}, Class::modelled, flag, "forced.h"});
+    r = resolveConditions(libraryRaw("#include <charconv>\n" + toCharsCheck), command, *e, o).value();
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+    CHECK(!parseCompileCommand({"g++", "main.cpp", flag}, temp.path).ok());
+  }
+  for (const auto* pragma : {"push_macro", "pop_macro"}) {
+    r = libraryResolve(std::string("#pragma ") + pragma + "(\"ordinary\")\n#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK(!r.disabledReasons.empty()); CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  }
+  o.libraryData = nullptr;
+  r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+}
+TEST(resolve_library_agreement_requires_scanned_dialect_and_flags) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  const auto& data = embeddedLibraryData();
+  auto p = featureProfile(); p.provenance.origin = "user";
+  p.dialect = {"c++23", false, 202302};
+  ResolveOptions o; o.profile = &p;
+  CHECK_EQ(data.selector(p), "gcc-15");
+  auto r = libraryResolve("#include <version>\n#ifdef __cpp_lib_ranges\nx\n#endif\n", *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
+  p.dialect = {"c++17", false, 201703};
+  r = libraryResolve("#include <version>\n#ifdef __cpp_lib_ranges\nx\n#endif\n", *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  CHECK(data.selector(p).empty()); CHECK(r.libraryProvenance.empty());
+  CHECK_EQ(r.libraryDisabledReason, "profile dialect not covered by scanned builds: c++17");
+  p.dialect = {"c++23", false, 202302};
+  for (const auto* flag : {"-ffreestanding", "-fno-exceptions", "-fno-rtti", "-D_GLIBCXX_DEBUG",
+                          "-U__EXCEPTIONS", "-Wp,-D_GLIBCXX_DEBUG", "-O0", "-O3", "-Os", "-Og"}) {
+    p.flags = {flag};
+    r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+    CHECK(data.selector(p).empty()); CHECK(r.libraryProvenance.empty());
+    CHECK_EQ(r.libraryDisabledReason, "profile flags not covered by scanned builds: " + std::string(flag));
+    PipelineResult report; report.resolution = r;
+    const auto command = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
+    CHECK(renderReport(report, command, &p).find("library facts: none (" + r.libraryDisabledReason + ")\n") != std::string::npos);
+  }
+  // Match flags within the same dialect, never borrowing from another dialect.
+  p.flags = {"-fmodules"}; CHECK(data.selector(p).empty());
+  p.dialect = {"gnu++23", true, 202302}; CHECK_EQ(data.selector(p), "gcc-15");
+  // Debug and diagnostic flags are harmless; optimization still needs coverage.
+  p = lookupProfile("codeforces").value(); p.provenance.origin = "user";
+  p.flags.push_back("-Wshadow");
+  CHECK_EQ(data.selector(p), "gcc-14");
+  r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::trueValue); CHECK(!r.libraryProvenance.empty());
+  for (const auto* flag : {"-g3", "-pipe", "-fconstexpr-depth=4096", "-fconstexpr-loop-limit=1048576",
+                          "-fconstexpr-ops-limit=2097152", "-fdiagnostics-color=always"}) {
+    p.flags.push_back(flag); CHECK_EQ(data.selector(p), "gcc-14"); p.flags.pop_back();
+  }
+  // The reproduced path still requires its exact identity, even for warnings.
+  p = lookupProfile("atcoder").value(); p.flags.push_back("-Wshadow");
+  CHECK(data.selector(p).empty()); CHECK_EQ(data.selector(p, true), "gcc-15");
+}
+TEST(resolve_library_satisfaction_uses_configuration_coverage) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = featureProfile(); p.dialect = {"c++23", false, 202302};
+  ResolveOptions o; o.profile = &p;
+  const auto source = libraryRaw("#include <charconv>\n" + toCharsCheck);
+  const auto command = parseCompileCommand({"g++", "main.cpp", "-std=c++23"}, temp.path).value();
+  const auto resolution = resolveConditions(source, command, *e, o).value();
+  CHECK_EQ(resolution.decisions[0].decision, Decision::trueValue);
+  Configuration c; c.facts = p; c.facts.reproduced = true;
+  CHECK(satisfies(c, source, command, resolution, *e).value());
+  ResolveResult observed;
+  c.facts.dialect = {"c++17", false, 201703};
+  CHECK(!satisfies(c, source, command, resolution, *e, {}, &observed).value());
+  CHECK_EQ(observed.decisions[0].decision, Decision::unknown);
+  c.facts.dialect = p.dialect; c.facts.flags = {"-ffreestanding"};
+  CHECK(!satisfies(c, source, command, resolution, *e, {}, &observed).value());
+  CHECK_EQ(observed.libraryDisabledReason, "profile flags not covered by scanned builds: -ffreestanding");
+  c.facts.flags = {"-Wshadow"};
+  CHECK(satisfies(c, source, command, resolution, *e).value());
+}
+TEST(resolve_library_joins_and_dead_paths) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = lookupProfile("codeforces").value(); ResolveOptions o; o.profile = &p;
+  // Both macro states join to the same definition, but one path lost the Boolean.
+  auto r = libraryResolve("#if __unknown\n#define __GNUC__ 14\n#endif\n#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[2].decision, Decision::unknown);
+  r = libraryResolve("#if __unknown\n#define __X 1\n#endif\n#undef __X\n#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[2].decision, Decision::unknown);
+  for (const auto* dead : {"#define __X 1\n", "#undef __X\n", "#include <vendor.h>\n", "#pragma GCC pop_options\n"}) {
+    r = libraryResolve(std::string("#if 0\n") + dead + "#endif\n#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[2].decision, Decision::trueValue);
+  }
+  // Losing the flag on an unknown branch is enough, even when another branch
+  // includes the same header and a later include repeats the same value.
+  r = libraryResolve("#if __unknown\n#include <charconv>\n#else\n#define __X 1\n#endif\n#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[3].decision, Decision::unknown);
+}
+TEST(resolve_library_union_conflicts_absence_and_unknown_names) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  constexpr std::string_view names[]{"__cpp_lib_to_chars"}, values[]{"", "", "201611L", "202306L"};
+  constexpr std::uint16_t positive[]{2}, conflict[]{3}, absent[]{0}, disagree[]{1};
+  const LibraryHeader headers[]{{"gcc-15", "charconv", positive}, {"gcc-15", "cstddef", absent},
+                                {"gcc-15", "ext/pb_ds/assoc_container.hpp", positive},
+                                {"gcc-15", "thread", disagree}, {"gcc-15", "version", conflict}};
+  const LibraryBuild builds[]{{"", "15", "15.2.0", "gnu++20", "", "", {}}};
+  LibraryData data{names, values, headers, builds, "synthetic"};
+  auto p = featureProfile(); ResolveOptions o; o.profile = &p; o.libraryData = &data;
+  for (const auto* sequence : {"#include <charconv>\n#include <charconv>\n", "#include <charconv>\n#include <cstddef>\n",
+       "#include <ext/pb_ds/assoc_container.hpp>\n"}) {
+    auto r = libraryResolve(sequence + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
+  }
+  for (const auto* sequence : {"#include <charconv>\n#include <version>\n#include <charconv>\n",
+       "#include <charconv>\n#include <thread>\n#include <charconv>\n",
+       "#if __unknown\n#include <charconv>\n#else\n#include <version>\n#endif\n#include <charconv>\n"}) {
+    const auto r = libraryResolve(sequence + toCharsCheck, *e, o);
+    const auto& d = r.decisions[r.decisions.size() - 3];
+    CHECK_EQ(d.decision, Decision::unknown);
+  }
+  auto r = libraryResolve("#include <cstddef>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::falseValue); // absence keeps the initial state
+  CHECK_EQ(r.libraryProvenance.size(), 1u); // keeping it still relies on A9
+  r = libraryResolve("#include <charconv>\n#ifdef __cpp_lib_unlisted_future\nx\n#endif\n", *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  p.reproduced = true; // No own build: never fall back to major facts.
+  r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+}
+TEST(resolve_library_user_shadowing_and_compiler_directory_identity) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  std::filesystem::create_directory(temp.path / "user");
+  std::filesystem::create_directory(temp.path / "compiler");
+  temp.write("user/charconv", "// user shadow\n"); temp.write("compiler/charconv", "// library\n");
+  temp.write("main.cpp", "#include <charconv>\n" + toCharsCheck);
+  auto p = lookupProfile("codeforces").value(); ResolveOptions o; o.profile = &p;
+  SearchLists probe{{{"compiler", IncludeKind::system, false, true}}};
+  for (const auto* option : {"-I", "-isystem"}) {
+    auto c = parseCompileCommand({"g++", "main.cpp", option, "user"}, temp.path).value();
+    auto search = buildIncludeSearch(c, probe).value();
+    auto hit = lookupHeader(search, "charconv", true, "main.cpp").value();
+    CHECK(hit.found); CHECK(!hit.compilerSystem);
+    const auto inlined = inlineSources(c, search).value();
+    auto r = resolveConditions(inlined, c, *e, o).value();
+    CHECK_EQ(r.decisions[0].decision, std::string_view(option) == "-I" ? Decision::falseValue : Decision::unknown);
+    CHECK(r.libraryProvenance.empty());
+  }
+  // An equivalent -isystem spelling of an actual compiler directory qualifies.
+  auto c = parseCompileCommand({"g++", "main.cpp", "-isystem", "./compiler"}, temp.path).value();
+  auto search = buildIncludeSearch(c, probe).value();
+  CHECK(lookupHeader(search, "charconv", true, "main.cpp").value().compilerSystem);
+  auto inlined = inlineSources(c, search).value();
+  CHECK(inlined.systemIncludes[0].compilerSystem);
+  auto r = resolveConditions(inlined, c, *e, o).value();
+  CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
+  // Metadata coordinates must survive quoted rewriting and multiline comments.
+  temp.write("main.cpp", "/* prefix\n*/ #include \"charconv\"\n" + toCharsCheck);
+  inlined = inlineSources(c, search).value();
+  r = resolveConditions(inlined, c, *e, o).value();
+  CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
+#ifndef _WIN32
+  // A symlink escaping a compiler directory is not an installed library file.
+  std::filesystem::remove(temp.path / "compiler/charconv");
+  std::filesystem::create_symlink(temp.path / "user/charconv", temp.path / "compiler/charconv");
+  CHECK(!lookupHeader(search, "charconv", true, "main.cpp").value().compilerSystem);
+#endif
+}
+TEST(resolve_library_reproduced_profile_identity_and_own_snapshot) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = lookupProfile("atcoder").value(); ResolveOptions o; o.profile = &p;
+  CHECK(p.reproduced);
+  for (const auto* field : {"flags", "gcc", "build", "dialect", "triple", "name"}) {
+    auto changed = p;
+    if (std::string_view(field) == "flags") changed.flags.push_back("-D__X=1");
+    if (std::string_view(field) == "gcc") changed.snapshotMetadata.gccVersion = "13.0.0";
+    if (std::string_view(field) == "build") changed.snapshotMetadata.build = "different";
+    if (std::string_view(field) == "dialect") changed.dialect.name = "c++20";
+    if (std::string_view(field) == "triple") changed.triple = "x86_64-w64-mingw32";
+    if (std::string_view(field) == "name") changed.name = "different";
+    o.profile = &changed;
+    const auto r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions[0].decision, Decision::unknown);
+  }
+  // Own snapshots may use build-dependent features; major agreement may not.
+  p = lookupProfile("atcoder").value(); o.profile = &p;
+  CHECK(p.reproduced);
+  const auto r = libraryResolve("#include <thread>\n#ifdef __cpp_lib_jthread\nx\n#endif\n", *e, o);
+  CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
 }

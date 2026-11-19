@@ -58,8 +58,13 @@ Result<IncludeSearch> buildIncludeSearch(const CompileCommand& cmd, const Search
         list.push_back(std::move(dir));
     };
     for (const auto& dir : cmd.systemIncludePaths()) append(systems, {dir.path, true, false});
-    for (const auto& dir : probe.directories)
-      if (dir.kind != IncludeKind::quote) append(systems, {dir.path, true, dir.framework});
+    for (const auto& dir : probe.directories) if (dir.kind != IncludeKind::quote) {
+      // A command -isystem alias may precede the compiler's directory. Preserve
+      // compiler ownership through deduplication without changing search order.
+      auto old = std::find_if(systems.begin(), systems.end(), [&](const auto& s) { return same(cmd.cwd, dir.path, s.path); });
+      if (old != systems.end()) old->compilerSystem = true;
+      else append(systems, {dir.path, true, dir.framework, true});
+    }
     for (const auto& dir : cmd.userIncludePaths()) {
       if (dir.kind == IncludeKind::quote) { append(result.quote, {dir.path, false, false}); continue; }
       if (std::none_of(systems.begin(), systems.end(), [&](const auto& sys) { return same(cmd.cwd, dir.path, sys.path); }))
@@ -73,12 +78,17 @@ Result<HeaderLookup> lookupHeader(const IncludeSearch& search, std::string_view 
   try {
     auto candidate = [&](std::string spelling, bool system, std::optional<std::filesystem::path> directory) {
       HeaderLookup hit{search.cwd / pathFromUtf8(spelling), spelling, false, system, std::move(directory)};
-      hit.found = regularFile(hit.path); return hit;
+      hit.found = regularFile(hit.path);
+      if (hit.found && hit.system) for (const auto& dir : search.angle)
+        if (dir.compilerSystem && beneath(search.cwd, hit.path, dir.path)) { hit.compilerSystem = true; break; }
+      return hit;
     };
     if (pathFromUtf8(name).is_absolute()) {
       auto hit = candidate(std::string(name), false, {});
       for (const auto& dir : search.angle) if (dir.system && beneath(search.cwd, hit.path, dir.path)) {
-        hit.system = true; hit.systemDirectory = dir.path; break;
+        hit.system = true; hit.systemDirectory = dir.path;
+        for (const auto& own : search.angle) if (own.compilerSystem && beneath(search.cwd, hit.path, own.path)) hit.compilerSystem = true;
+        break;
       }
       return hit;
     }
