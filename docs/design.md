@@ -619,16 +619,22 @@ matrix row automatically adds a required input to the merger.
 **Configuration audit.** Analyse actual installed headers, not `version.def`
 alone: lexical `#if`/`#ifdef`/`#ifndef` stacks, including nested inactive
 branches and previous `#elif` tests controlling `#else`. This handles GCC 13's
-distributed definitions and GCC 14+'s generated `bits/version.h`. A literal
-(name, value) pair is config-independent only when every controlling dependency
-is compiler-predefined (including `__cplusplus`/`__STRICT_ANSI__`), verified
-include-guard/own-`#ifndef` plumbing, verified internal feature requests, or an
-explicit reviewed library-macro allowlist. Request and internal value macros
-are followed through all writes and their conditions; a prefix alone grants
-no exemption. Include-edge conditions propagate transitively. Compiler-looking
-names written by headers or overridden by command/startup definitions lose
-compiler-predefine status. Trusted compiler definitions are retained in the
-audit so changes to their replacements are detectable too.
+distributed definitions and GCC 14+'s generated `bits/version.h`. For root H
+(a fresh TU containing only `#include <H>`), each literal
+(H, name, value) pair is config-independent only when every controlling
+dependency is compiler-predefined (including `__cplusplus`/`__STRICT_ANSI__`),
+verified include-guard/own-`#ifndef` plumbing, verified internal feature
+requests, or an explicit reviewed library-macro candidate. Request and internal
+value macros are followed through all writes reachable from H and their
+conditions; a prefix alone grants no exemption. Undefined request alternatives
+are known false only when installed writes establish their internal request
+role. Include-edge conditions on **all** paths from H to the definition's file
+propagate transitively, including conditional alternatives and cycles. Paths
+from other roots cannot contribute. Classification is per root and literal
+value; it is never a library-wide property of a name. Compiler-looking names
+written in H's closure or overridden by command/startup definitions lose
+compiler-input status. Trusted compiler definitions are retained so changes to
+their replacements are detectable too.
 
 The embedded candidate allowlist in `ci/library/audit.py` is exactly
 `_GLIBCXX_FLOAT_IS_IEEE_BINARY32` and `_GLIBCXX_DOUBLE_IS_IEEE_BINARY64`.
@@ -640,43 +646,68 @@ review artifact. Build switches (`_GLIBCXX_USE_CXX11_ABI`, `_GLIBCXX_HAS_GTHREAD
 locale, etc.) and unrecognised dependencies fail closed. Native-model names
 are excluded from trusted compiler inputs under native flags. Unsupported
 replacement forms and unresolved computed includes also fail closed; they
-may reduce coverage and are visible in reports. Whole-file guards, internal
-request/value definitions and the two candidate macros carry textual evidence.
-There is no unconditional promotion of library configuration macros.
-Unparseable files remain in the audit with their failure reasons instead of
-aborting capture. If another audited file includes one (using the audit's edge
-resolution), or its text contains `__cpp_lib_` or `__glibcxx_`, all feature results
-become config-dependent with `<unparsed-file:PATH>`; isolated files without those
-tokens are listed without taint. Per-header preprocessing status is independent.
+may reduce coverage and are visible in reports. Whole-file guards and nested
+`#ifndef X` / `#define X` wrappers carry textual evidence. All installed writes must have the matching guard role and
+identical file contents (aliases are allowed); conflicting writes,
+undefinitions and command/startup overrides revoke guard trust. Only the
+wrapper's actual negative test is exempted, never arbitrary positive/value
+tests of the same name. This also handles C wrappers such as
+`_GLIBCXX_STDLIB_H`, whose guard is inside an outer conditional, and whole-file
+`_GLIBCXX_CMATH` guards surrounding `#include_next`. For a negative guard test
+before entering another file, the audit proves that no guard writer is
+reachable from H without that include edge. The guard is then unset on first
+traversal in the fresh TU. Possible earlier/sibling inclusion defeats that
+proof and remains untrusted. There is no unconditional promotion of library
+configuration macros.
 
-Capture retains every search-index/include-spelling key, including symlink
-aliases, and the audit conservatively retains edges to all matching keys.
-Reading and include parsing are shared by resolved file; include lookup caches
-retain search position and quoted-include directory. Condition identifiers are
-cached as immutable sets. Inbound conditions and integer alias values propagate
-with a changed-node queue. Request/value dependencies are expanded once per
-strongly connected component; terminal evidence is shared, and every member of
-a cyclic component (including a self-loop) is unrecognised for every member
-and its dependents. Schema/generator versions remain unchanged. Against a frozen
-reference implementation, tests compare JSON bytes for acyclic inputs and
-independent classifications for all inputs. Each capture logs discovery, audit,
-preprocessing, writing and total times plus the number of header keys and
-`-dM` probes. Preprocessing still runs once per available requested header,
-independently of audit variants and aliases.
+Unparseable files remain in the full audit with their reasons. A malformed file,
+computed include or unsupported absolute include reachable from H taints every
+feature/absence result for H; unreachable failures do not affect it. Recoverable
+literal includes in a malformed file still contribute reachability. Literal
+include operands and `__has_include`/`__has_include_next` arguments are never
+macro-name tokens. The availability predicates themselves remain untrusted:
+the audit does not record verified header-presence tests as compiler inputs.
+Per-header preprocessing status remains independent.
+
+Capture retains search-index/include-spelling keys, including symlink aliases.
+Literal edges follow compiler search order, quoted-include directory and
+`include_next` search position. Reading and include parsing are shared by
+resolved file; condition identifiers are cached. Per-root inbound conditions
+and integer alias values propagate with a changed-node queue. Request/value
+dependencies are expanded once per strongly connected component; every member
+of a cyclic component, including self-loops, remains unrecognised for its
+dependents. Tests check per-root propagation against a small-graph oracle,
+request cycles exhaustively, compiler-call/header-snapshot behavior, and compact
+round trips. Each capture logs discovery, audit, preprocessing, writing and
+total times plus header-key and `-dM` probe counts. Each available requested
+header is preprocessed once.
 
 `ci/library/merge.py` requires reports from the complete profiles and extensions
-matrices. `data/library/library.json` (generator/schema version 1) retains
-per-build snapshots and audit evidence, per-GCC-major config-independent
-(name, value) pairs, dependent names with dependency macros, and per-header
-cross-build agreement. It never unions old facts into fresh results.
-An approximate profile can use a positive (H, name, value) only if the pair is
-config-independent for its major and **every** matrix build of that major
-agrees on presence and value for H. All dialects/flags participate; differing
-configurations can conservatively prevent agreement. Absence additionally
-requires all possible audited definitions to be independent. Unknown,
-config-dependent, unavailable or disagreeing entries are explicit, never
-silently omitted. A reproduced profile uses its own snapshot, including
-build-dependent facts, subject to the existing native model's uncertainty.
+matrices and never unions old facts into fresh results. Schema/generator 2
+separates the compact baseline `data/library/library.json` from the uploaded
+`library-evidence.json`. The latter retains complete original build reports,
+including all definitions, conditions, include paths, compiler inputs and
+per-root/per-value classifications. The baseline retains build metadata,
+per-header snapshots/status, per-major/root classification (`independent`,
+permitted `values`, sorted dependency names) and per-header agreement
+(`defined`, `absent`, `unknown` with short reasons). Each compact build also
+retains a full `evidence_sha256`: SHA-256 of its entire report encoded as ASCII
+JSON with sorted keys, separators `(',', ':')` and no trailing newline. Any
+evidence change therefore fails comparison even when facts do not change.
+
+Sorted content-address tables share repeated snapshots, classification maps,
+common dependency sets and agreement records. References use 16 hexadecimal
+digest digits with collision detection; name maps may use deterministic,
+acyclic base-plus-delta records. One table entry occupies one JSON line. The
+format and expansion helpers are documented in `ci/library/README.md`; compact
+records are reviewable without duplicating library-wide evidence for every
+header/build. An approximate profile may use a positive (H, name, value) only
+if that literal pair is independent for H in every build of its major and all
+snapshots agree. All dialects/flags participate. Absence requires all possible
+definitions reachable from H to be independent; a complete untainted closure
+with no definition also proves absence. Unknown, dependent, unavailable or
+disagreeing entries remain explicit. A reproduced profile uses its own snapshot,
+including build-dependent facts, subject to the native model's uncertainty.
 
 **Default library configuration.** Track a separate, monotone Boolean at every
 point. It holds iff on every path to that point there has been no user
@@ -712,8 +743,9 @@ relied on, alongside the provenance of the snapshots and classification.
 calls both producer workflows, regenerates the combined data and compares it
 byte for byte with the committed baseline. Missing baseline/input, new/removed
 name, changed value, condition, dependency, classification or agreement fails
-with a unified diff. It uploads `library-generated/library.json` even on a
-comparison failure. The initial PR must import that reviewed CI artifact in a
+with a unified diff. It uploads both `library-generated/library.json` and
+`library-generated/library-evidence.json` even on a comparison failure. Review
+both files, then import only the compact `library.json` byte for byte in a
 follow-up commit; no baseline is fabricated locally. The weekly drift workflow
 runs the full check as the separate `library` claim, with the existing complete
 result protocol and per-profile stateful issues. Evidence/availability remain

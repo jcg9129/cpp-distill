@@ -98,11 +98,13 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
             raise ValueError('missing native model for library capture')
         volatile = {s.split()[0] for s in model.read_text().splitlines() if s and not s.startswith('#')}
     discovered = perf_counter()
-    audit = classify(files, {n: v for n, v in predefines.items() if n not in volatile}, overridden | volatile)
+    names = header_names(search)
+    audit = classify(files, {n: v for n, v in predefines.items() if n not in volatile},
+                     overridden | volatile, roots=names)
     audited = perf_counter()
     headers, probes = {}, 0
     disabled = any(f.startswith(('-include', '-imacros')) for f in flags)
-    for header in header_names(search):
+    for header in names:
         if disabled:
             headers[header] = dict(status='disabled', macros={})
         elif not any((p / header).is_file() for p in search):
@@ -113,7 +115,7 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
             headers[header] = dict(status='ok' if process.returncode == 0 else 'error',
                                    macros=dump(process.stdout) if process.returncode == 0 else {})
     preprocessed = perf_counter()
-    data = dict(schema=1, generator=VERSION, build=build, gcc=version,
+    data = dict(schema=2, generator=VERSION, build=build, gcc=version,
                 major=version.split('.')[0], std=std, flags=flags,
                 triple=command(compiler, ['-dumpmachine']).stdout.strip(),
                 compiler=command(compiler, ['--version']).stdout.splitlines()[0],

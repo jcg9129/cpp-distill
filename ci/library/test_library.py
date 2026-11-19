@@ -1,301 +1,303 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Synthetic headers and compiler mocks only; never build or execute C++."""
 import copy
-from graphlib import CycleError, TopologicalSorter
 import json
-import random
 from pathlib import Path
+import random
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 import yaml
 
-import capture as capture_module
-from audit import ROOT, classify, parse
+from audit import ROOT, VERSION, classify, identifiers, parse
 from fixtures import l1c_reference as reference
-from capture import capture, dump, header_names
-from merge import merge, check, expected_builds
+from capture import capture, dump, header_names, write
+from merge import (merge, check, expected_builds, baseline_text, digest,
+                   get_snapshot, get_agreement, get_classification)
 from probe import compare, source
 
 
 def audit(text, extra=None, predefines=()):
-    return classify({'0/version': text, **(extra or {})}, predefines)
+    return classify({'0/version': text, **(extra or {})}, predefines, roots=['version'])
 
 
-def macro(text, name='__cpp_lib_test', **kwargs):
-    return audit(text, **kwargs)['macros'][name]
+def macro(text, **kwargs):
+    return audit(text, **kwargs)['roots']['version']['macros']['__cpp_lib_test']
 
 
-def test_actual_stacks_gcc13_and_generated_gcc14():
-    direct = macro('#if __cplusplus >= 201703L\n#define __cpp_lib_test 201611L\n#endif')
-    assert direct['independent']
-    assert direct['values'] == ['201611L']
-    assert direct['dependencies'] == ['__cplusplus']
-    generated = '''#ifndef _VERSION_H
-#define _VERSION_H
-#if __cplusplus >= 202002L
-#define __glibcxx_test 202100L
-#endif
-#if defined(__glibcxx_want_all) || defined(__glibcxx_want_test)
-#ifndef __cpp_lib_test
-#if __glibcxx_test >= 202100L
-#define __cpp_lib_test 202100L
-#endif
-#endif
-#endif
-#undef __glibcxx_want_test
-#endif
-'''
-    # A request with no reachable write is unrecognised, rather than blindly
-    # trusting a prefix. Normal header/version request writes supply evidence.
-    requests = {'0/public': '#define __glibcxx_want_test\n#define __glibcxx_want_all\n#include <version>\n'}
-    assert macro(generated, extra=requests)['independent']
-    assert not macro(generated)['independent']
-    aliased = generated.replace('#define __cpp_lib_test 202100L', '#define __cpp_lib_test __glibcxx_test')
-    entry = macro(aliased, extra=requests)
-    assert entry['independent'] and entry['values'] == ['202100L']
-    assert macro('#if !defined(__cpp_lib_test) && __cplusplus > 0\n#define __cpp_lib_test 1L\n#endif')['independent']
+def test_per_root_paths_do_not_inherit_other_roots_conditions():
+    files = {
+        '0/charconv': '#include <bits/version.h>',
+        '0/pb_ds': '#if DEBUG && PB_DS_TRACE\n#include <middle>\n#endif',
+        '0/middle': '#include <bits/version.h>',
+        '0/bits/version.h': '#if __cplusplus >= 201703L\n#define __cpp_lib_test 1L\n#endif',
+    }
+    data = classify(files, (), roots=['charconv', 'pb_ds'])
+    clean = data['roots']['charconv']['macros']['__cpp_lib_test']
+    bad = data['roots']['pb_ds']['macros']['__cpp_lib_test']
+    assert clean['independent'] and clean['dependencies'] == ['__cplusplus']
+    assert bad['unrecognised'] == ['DEBUG', 'PB_DS_TRACE']
+    # An unconditional alternative never erases a conditional path.
+    files['0/charconv'] += '\n#include <pb_ds>'
+    assert not classify(files, (), roots=['charconv'])['roots']['charconv']['macros']['__cpp_lib_test']['independent']
+
+
+def test_own_conditions_elif_else_and_each_literal_pair():
+    text = ('#if __cplusplus > 202002L\n#define __cpp_lib_test 2L\n'
+            '#elif SWITCH\n#define __cpp_lib_test 1L\n#else\n#define __cpp_lib_test 3L\n#endif')
+    entry = macro(text)
+    assert entry['values'] == ['1L', '2L', '3L']
+    assert not entry['independent']
+    assert entry['pairs']['2L']['independent']
+    assert entry['pairs']['1L']['unrecognised'] == ['SWITCH']
+    assert entry['pairs']['3L']['unrecognised'] == ['SWITCH']
+    assert macro('#ifndef __cpp_lib_test\n#define __cpp_lib_test 1L\n#endif')['independent']
+    assert not macro('#if __cpp_lib_test > 2\n#define __cpp_lib_test 3L\n#endif')['independent']
 
 
 @pytest.mark.parametrize('dependency', ['_GLIBCXX_USE_CXX11_ABI', '_GLIBCXX_HAS_GTHREADS',
-    '_GLIBCXX_HOSTED', '_GLIBCXX_USE_TBB_PAR_BACKEND', '_GLIBCXX_HAVE_LOCALE_H',
-    'UNKNOWN', '__has_include'])
+    '_GLIBCXX_HOSTED', '_GLIBCXX_USE_TBB_PAR_BACKEND', '_GLIBCXX_HAVE_LOCALE_H', 'UNKNOWN'])
 def test_build_and_unknown_configuration_fail_closed(dependency):
     entry = macro(f'#if {dependency}\n#define __cpp_lib_test 1L\n#endif')
-    assert not entry['independent']
-    assert dependency in entry['unrecognised']
+    assert not entry['independent'] and dependency in entry['unrecognised']
 
 
-def test_elif_else_previous_tests_and_nested_inactive_conditions():
-    text = '''#if _GLIBCXX_HOSTED
-#define __cpp_lib_other 1L
-#elif __cplusplus > 202002L
-#if 0
-#define __cpp_lib_test 2L
-#endif
-#else
-#define __cpp_lib_test 1L
-#endif
-'''
+@pytest.mark.parametrize('predicate', ['__has_include', '__has_include_next'])
+@pytest.mark.parametrize('operand', ['<ext/numeric_traits.h>', '"stacktrace"', 'HEADER(operand)'])
+def test_header_test_arguments_are_not_macro_names(predicate, operand):
+    expression = f'{predicate}({operand})'
+    assert identifiers(expression) == {predicate}
+    entry = macro(f'#if {expression}\n#define __cpp_lib_test 1L\n#endif', predefines={predicate})
+    assert entry['unrecognised'] == [predicate]
+
+
+def test_literal_include_operands_are_not_macro_names():
+    data = classify({'0/root': '#include <ext/numeric_traits.h>',
+                     '0/ext/numeric_traits.h': '#define __cpp_lib_test 1L'}, (), roots=['root'])
+    assert data['roots']['root']['macros']['__cpp_lib_test']['dependencies'] == []
+
+
+@pytest.mark.parametrize('broken', ['#else', '#ifdef X', '#undef BAD extra'])
+def test_unparsed_and_computed_taint_only_reachable_roots(broken):
+    files = {'0/clean': '#define __cpp_lib_test 1L',
+             '0/bad': '#include <broken>\n#define __cpp_lib_test 1L',
+             '0/broken': broken + '\n#include <leaf>',
+             '0/leaf': '#define __cpp_lib_leaf 2L',
+             '0/computed': '#include HEADER\n#define __cpp_lib_test 1L'}
+    data = classify(files, (), roots=['clean', 'bad', 'computed'])
+    assert data['roots']['clean']['macros']['__cpp_lib_test']['independent']
+    bad = '<unparsed-file:0/broken>'
+    assert data['roots']['bad']['taint'] == [bad]
+    for entry in data['roots']['bad']['macros'].values():
+        assert bad in entry['unrecognised']
+    assert data['roots']['computed']['taint'] == ['<computed-include>']
+    assert not data['roots']['computed']['macros']['__cpp_lib_test']['independent']
+    assert data['unparsed']['0/broken'].startswith('0/broken: ')
+
+
+def test_unparsed_feature_tokens_do_not_taint_another_root():
+    data = audit('#define __cpp_lib_test 1L', {'0/broken': '#if 1\n#define __cpp_lib_hidden 1L'})
+    assert data['roots']['version']['macros']['__cpp_lib_test']['independent']
+    assert data['macros']['__cpp_lib_hidden'] == []
+
+
+@pytest.mark.parametrize('wrapper_guard', ['_GLIBCXX_MATH_H', '_GLIBCXX_STDLIB_H'])
+def test_search_order_quotes_and_include_next_wrapper_guards(wrapper_guard):
+    files = {
+        '0/root': '#include <cmath>',
+        '0/cmath': '#ifndef _GLIBCXX_CMATH\n#define _GLIBCXX_CMATH 1\n#include_next <math.h>\n#endif',
+        # A common C wrapper guard is nested in an outer else, not whole-file.
+        '1/math.h': '#if __cplusplus < 1\n#include_next <math.h>\n#else\n'
+                    '#ifndef _GLIBCXX_MATH_H\n#define _GLIBCXX_MATH_H 1\n#include "feature"\n#endif\n#endif',
+        '1/feature': '#define __cpp_lib_test 1L',
+        '0/feature': '#if WRONG_SEARCH_HIT\n#define __cpp_lib_test 2L\n#endif',
+        '0/math.h': '#if WRONG_INCLUDE_NEXT_HIT\n#define __cpp_lib_test 3L\n#endif',
+    }
+    files['1/math.h'] = files['1/math.h'].replace('_GLIBCXX_MATH_H', wrapper_guard)
+    data = classify(files, (), roots=['root'])
+    entry = data['roots']['root']['macros']['__cpp_lib_test']
+    assert entry['independent'] and entry['values'] == ['1L']
+    assert entry['dependencies'] == ['__cplusplus']
+    assert data['guards'] == sorted(['_GLIBCXX_CMATH', wrapper_guard])
+    assert next(i for i in data['includes'] if i['file'] == '0/cmath')['target'] == '1/math.h'
+
+
+@pytest.mark.parametrize('outside', ['#define GUARD 2', '#undef GUARD', '#define GUARD 1'])
+def test_guard_written_elsewhere_is_not_trusted(outside):
+    data = audit('#ifndef GUARD\n#define GUARD 1\n#define __cpp_lib_test 1L\n#endif', {'0/other': outside})
+    assert data['roots']['version']['macros']['__cpp_lib_test']['unrecognised'] == ['GUARD']
+
+
+def test_guards_not_globally_trusted_and_overrides_revoke_guard_trust():
+    text = '#ifndef GUARD\n#define GUARD 1\n#endif\n#if GUARD\n#define __cpp_lib_test 1L\n#endif'
+    assert macro(text)['unrecognised'] == ['GUARD']
+    text = '#ifndef GUARD\n#define GUARD 1\n#define __cpp_lib_test 1L\n#endif'
+    assert not macro(text, predefines={'GUARD'})['independent']
+    assert not classify({'0/version': text}, (), {'GUARD'}, roots=['version'])['roots']['version']['macros']['__cpp_lib_test']['independent']
+    # A later negative test is not the wrapper test, and may reflect SWITCH.
+    text = '#if SWITCH\n#ifndef GUARD\n#define GUARD 1\n#endif\n#endif\n#ifndef GUARD\n#define __cpp_lib_test 1L\n#endif'
+    assert macro(text)['unrecognised'] == ['GUARD']
+    _, _, guards = parse('#ifndef GUARD\n#define GUARD 1\n#else\n#define X 1\n#endif', 'fixture')
+    assert not guards
+
+
+def test_compiler_inputs_and_candidate_writes_are_verified_per_root():
+    feature = '#include <config>\n#if _GLIBCXX_FLOAT_IS_IEEE_BINARY32 && __SIZE_WIDTH__\n#define __cpp_lib_test 1L\n#endif'
+    config = '#if __FLT_MANT_DIG__ == 24\n#define _GLIBCXX_FLOAT_IS_IEEE_BINARY32 1\n#endif'
+    extra = {'0/config': config, '0/other': '#define __SIZE_WIDTH__ 2'}
+    entry = macro(feature, extra=extra, predefines={'__FLT_MANT_DIG__', '__SIZE_WIDTH__'})
+    assert entry['independent']
+    assert not macro(feature, extra={'0/config': config.replace('__FLT_MANT_DIG__', '_GLIBCXX_HOSTED')},
+                     predefines={'__SIZE_WIDTH__'})['independent']
+    assert not macro(feature, extra={'0/config': config + '\n#undef _GLIBCXX_FLOAT_IS_IEEE_BINARY32'},
+                     predefines={'__FLT_MANT_DIG__', '__SIZE_WIDTH__'})['independent']
+    assert not macro('#define __SIZE_WIDTH__ 64\n#if __SIZE_WIDTH__\n#define __cpp_lib_test 1L\n#endif',
+                     predefines={'__SIZE_WIDTH__'})['independent']
+
+
+def test_verified_requests_alias_values_and_unwritten_alternatives():
+    generated = ('#ifndef __cpp_lib_test\n#if __cplusplus > 0\n#define __glibcxx_test 202100L\n'
+                 '#if defined(__glibcxx_want_all) || defined(__glibcxx_want_test)\n'
+                 '#define __cpp_lib_test __glibcxx_test\n#endif\n#endif\n#endif\n#undef __glibcxx_want_test')
+    extra = {'0/generated': generated, '0/other': '#define __glibcxx_want_all'}
+    entry = macro('#define __glibcxx_want_test\n#include <generated>', extra=extra)
+    assert entry['independent'] and entry['values'] == ['202100L']
+    assert not macro(generated)['independent']  # prefix alone is insufficient
+    extra['0/request'] = '#if THREADS\n#define __glibcxx_want_test\n#endif'
+    assert 'THREADS' in macro('#include <request>\n#include <generated>', extra=extra)['unrecognised']
+
+
+@pytest.mark.parametrize('text', ['#define __cpp_lib_test OTHER', '#define __cpp_lib_test(x) x',
+                                 '#define __cpp_lib_test 1L\n#undef __cpp_lib_test'])
+def test_nonliteral_writes_and_undef_fail_closed(text):
     entry = macro(text)
     assert not entry['independent']
-    assert entry['values'] == ['1L', '2L']
-    assert '_GLIBCXX_HOSTED' in entry['unrecognised']
+    assert all(not p['independent'] for p in entry['pairs'].values())
 
 
-def test_comments_continuations_guards_and_own_ifndef():
-    text = '''/* #define __cpp_lib_fake 1 */
-#ifndef _GUARD
-#define _GUARD
-#ifndef __cpp_lib_test
-#de\\
-fine __cpp_lib_test 201703L
-#endif
-#endif
-'''
-    data = audit(text)
-    assert set(data['macros']) == {'__cpp_lib_test'}
-    assert '__cpp_lib_fake' not in audit('auto x = R"(\n#define __cpp_lib_fake 1L\n)";')['macros']
-    assert data['macros']['__cpp_lib_test']['independent']
-    assert not macro('#if __cpp_lib_test > 2\n#define __cpp_lib_test 3L\n#endif')['independent']
-    for text in ['#else', '#endif', '#if 1\n#define X 1']:
+def test_comments_raw_strings_continuations_and_malformed_directives():
+    text = '/* #define __cpp_lib_fake 1 */\n#ifndef G\n#define G\n#de' + chr(92) + '\nfine __cpp_lib_test 201703L\n#endif'
+    assert macro(text)['independent']
+    assert not audit('auto x = R"(\n#define __cpp_lib_fake 1L\n)";')['macros']
+    for text in ['#else', '#endif', '#if 1', '#define 123', '#undef X extra', '#if 1\n#else\n#elif 1']:
         with pytest.raises(ValueError):
             parse(text, 'fixture')
 
 
-def test_builtin_whitelist_is_observed_and_header_writes_revoke_it():
-    text = '#if __SIZEOF_INT128__\n#define __cpp_lib_test 1L\n#endif'
-    assert macro(text, predefines={'__SIZEOF_INT128__'})['independent']
-    assert not macro(text)['independent']
-    assert not classify({'0/version': text}, {'__SIZEOF_INT128__'},
-                        {'__SIZEOF_INT128__'})['macros']['__cpp_lib_test']['independent']
-    assert not macro('#define __SIZEOF_INT128__ 16\n' + text,
-                     predefines={'__SIZEOF_INT128__'})['independent']
-
-
-def test_pure_candidates_verified_not_assumed_and_evidence_changes():
-    feature = '#if _GLIBCXX_FLOAT_IS_IEEE_BINARY32\n#define __cpp_lib_test 201611L\n#endif'
-    config = '#if __FLT_MANT_DIG__ == 24\n#define _GLIBCXX_FLOAT_IS_IEEE_BINARY32 1\n#endif'
-    good = audit(feature, {'0/bits/c++config.h': config}, {'__FLT_MANT_DIG__'})
-    assert good['macros']['__cpp_lib_test']['independent']
-    assert '_GLIBCXX_FLOAT_IS_IEEE_BINARY32' in good['support']
-    for changed in [config.replace('__FLT_MANT_DIG__', '_GLIBCXX_HOSTED'),
-                    config.replace(' 1\n', ' OTHER\n')]:
-        assert not macro(feature, extra={'0/bits/c++config.h': changed},
-                         predefines={'__FLT_MANT_DIG__'})['independent']
-    assert not macro(feature)['independent']
-
-
-def test_guard_shape_does_not_whitelist_a_build_switch():
-    data = audit('#if _GLIBCXX_HOSTED\n#define __cpp_lib_test 1L\n#endif', {
-        '0/config': '#define _GLIBCXX_HOSTED 1',
-        '0/guardlike': '#ifndef _GLIBCXX_HOSTED\n#define _GLIBCXX_HOSTED 1\n#endif'})
-    assert '_GLIBCXX_HOSTED' in data['macros']['__cpp_lib_test']['unrecognised']
-    _, _, guard = parse('#ifndef _GUARD\n#define _GUARD 1\n#else\n#define X 1\n#endif', 'fixture')
-    assert guard is None
-
-
-def test_request_and_include_configuration_propagates_transitively():
-    feature = '#if __glibcxx_want_test\n#define __cpp_lib_test 1L\n#endif'
-    request = '#if _GLIBCXX_HAS_GTHREADS\n#define __glibcxx_want_test\n#endif'
-    assert '_GLIBCXX_HAS_GTHREADS' in macro(feature, extra={'0/request': request})['unrecognised']
-    parent = '#if _GLIBCXX_HOSTED\n#include <middle>\n#endif'
-    assert '_GLIBCXX_HOSTED' in macro('#define __cpp_lib_test 1L', extra={
-        '0/public': parent, '0/middle': '#include <version>'})['unrecognised']
-    assert '<computed-include>' in macro('#define __cpp_lib_test 1L', extra={
-        '0/public': '#include COMPUTED'})['unrecognised']
-
-
-@pytest.mark.parametrize('text,reason', [
-    ('#ifdef PB_DS_CLASS_C_DEC', 'unterminated conditional'),
-    ('#else', 'unmatched else'),
-    ('#elif 1', 'unmatched elif'),
-    ('#endif', 'unmatched endif'),
-    ('#if 1\n#else\n#else\n#endif', 'unmatched else'),
-    ('#if 1\n#else\n#elif 1\n#endif', 'unmatched elif'),
-    ('#define 123', 'malformed macro write'),
-    ('#undef X extra', 'malformed macro write'),
-])
-def test_isolated_unparsed_file_is_listed_without_taint(text, reason):
-    file = '0/ext/pb_ds/detail/broken.hpp'
-    data = audit('#define __cpp_lib_test 1L', {file: text})
-    assert data['unparsed'] == {file: file + ': ' + reason}
-    assert data['macros']['__cpp_lib_test']['independent']
-
-
-@pytest.mark.parametrize('operand', ['<broken>', '"broken"', '<ext/broken>'])
-@pytest.mark.parametrize('kind', ['include', 'include_next'])
-def test_included_unparsed_file_taints_all_results(operand, kind):
-    file = '0/ext/broken'
-    data = audit('#define __cpp_lib_test 1L\n#define __cpp_lib_other 2L', {
-        '0/ext/parent': f'#if 0\n#{kind} {operand}\n#endif',
-        file: '#if 1'})
-    # Bare names resolve locally; ext/broken resolves through the search index.
-    dependency = '<unparsed-file:' + file + '>'
-    assert file in data['unparsed']
-    for entry in data['macros'].values():
-        assert not entry['independent']
-        assert dependency in entry['dependencies']
-        assert dependency in entry['unrecognised']
-
-
-def test_include_from_unparsed_file_still_detects_unparsed_target():
-    data = audit('#define __cpp_lib_test 1L', {
-        '0/parent': '#else\n#include <broken>', '0/broken': '#if 1'})
-    assert set(data['unparsed']) == {'0/parent', '0/broken'}
-    assert data['macros']['__cpp_lib_test']['unrecognised'] == ['<unparsed-file:0/broken>']
-
-
-@pytest.mark.parametrize('kind', ['include', 'include_next'])
-@pytest.mark.parametrize('indirect', [False, True])
-def test_unparsed_include_source_taints_reachable_parsed_features(kind, indirect):
-    target = 'middle' if indirect else 'feature'
-    files = {
-        '0/broken': '#undef UNUSED extra\n#if _GLIBCXX_HOSTED\n'
-                    f'#{kind} <{target}>\n#endif',
-        '0/feature': '#if __cplusplus >= 201703L\n#define __cpp_lib_foo 201703L\n#endif',
-        '0/unrelated': '#define __cpp_lib_other 201703L',
-    }
-    if indirect:
-        files['0/middle'] = '#include <feature>'
-    data = classify(files, ())
-    dependency = '<unparsed-file:0/broken>'
-    assert data['unparsed'] == {'0/broken': '0/broken: malformed macro write'}
-    entry = data['macros']['__cpp_lib_foo']
-    assert entry['values'] == ['201703L']
-    assert not entry['independent']
-    assert entry['dependencies'] == [dependency, '__cplusplus']
-    assert entry['unrecognised'] == [dependency]
-    assert data['macros']['__cpp_lib_other']['independent']
-
-
-@pytest.mark.parametrize('mention', ['__cpp_lib_hidden', '__glibcxx_hidden',
-                                    '/* __cpp_lib_ */', '/* __glibcxx_ */'])
-def test_unparsed_file_mentioning_feature_tokens_taints_all_results(mention):
-    file = '0/broken'
-    data = audit('#define __cpp_lib_test 1L', {
-        file: '#if 1\n#define ' + mention + ' 2L'})
-    assert file in data['unparsed']
-    for entry in data['macros'].values():
-        assert not entry['independent']
-        assert entry['dependencies'] == ['<unparsed-file:0/broken>']
-        assert entry['unrecognised'] == ['<unparsed-file:0/broken>']
-    if mention == '__cpp_lib_hidden':
-        # Partial writes supply no values or definitions that could be trusted.
-        assert data['macros'][mention]['definitions'] == []
-        assert data['macros'][mention]['values'] == []
-
-
-def test_conflicting_or_nonliteral_definitions_and_undef_fail_closed():
-    for text in ['#define __cpp_lib_test OTHER', '#define __cpp_lib_test(x) x',
-                 '#define __cpp_lib_test 1L\n#undef __cpp_lib_test']:
-        assert not macro(text)['independent']
-    assert not classify({'0/version': text}, {'__SIZEOF_INT128__'},
-                        {'__SIZEOF_INT128__'})['macros']['__cpp_lib_test']['independent']
-    assert macro('#define __cpp_lib_test 1L\n#define __cpp_lib_test 2L')['values'] == ['1L', '2L']
-
-
 def report(build='a', value='1L', status='ok', independent=True):
-    return dict(schema=1, generator=1, build=build, gcc='14.2.0', major='14',
+    text = '#define __cpp_lib_test 1L'
+    if not independent:
+        text = '#if _GLIBCXX_HAS_GTHREADS\n' + text + '\n#endif'
+    return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
                 headers={'charconv': dict(status=status, macros={} if value is None else {'__cpp_lib_test': value})},
-                audit=dict(generator=1, macros={'__cpp_lib_test': dict(
-                    independent=independent, values=['1L'], unrecognised=[] if independent else ['_GLIBCXX_HAS_GTHREADS'])}))
+                audit=classify({'0/charconv': text}, (), roots=['charconv']))
 
 
 def test_agreement_presence_value_absence_and_explicit_unknown():
-    good = merge([report('a'), report('b')], ['a', 'b'])
-    assert good['agreement']['14']['charconv']['defined'] == {'__cpp_lib_test': '1L'}
+    data = merge([report('a'), report('b')], ['a', 'b'])
+    assert get_agreement(data, '14', 'charconv')['defined'] == {'__cpp_lib_test': '1L'}
     for value in ['2L', None]:
         data = merge([report('a'), report('b', value)], ['a', 'b'])
-        assert data['agreement']['14']['charconv']['unknown']['__cpp_lib_test'] == 'cross-build-disagreement'
+        assert get_agreement(data, '14', 'charconv')['unknown']['__cpp_lib_test'] == 'cross-build-disagreement'
     data = merge([report('a', None), report('b', None)], ['a', 'b'])
-    assert data['agreement']['14']['charconv']['absent'] == ['__cpp_lib_test']
+    assert get_agreement(data, '14', 'charconv')['absent'] == ['__cpp_lib_test']
     for status in ['missing', 'error', 'disabled']:
         data = merge([report('a'), report('b', status=status)], ['a', 'b'])
-        assert data['agreement']['14']['charconv']['unknown']['__cpp_lib_test'] == 'unavailable-header'
+        assert get_agreement(data, '14', 'charconv')['unknown']['__cpp_lib_test'] == 'unavailable-header'
     data = merge([report('a'), report('b', independent=False)], ['a', 'b'])
-    assert data['versions']['14']['dependent']['__cpp_lib_test'] == ['_GLIBCXX_HAS_GTHREADS']
-    assert data['agreement']['14']['charconv']['unknown']['__cpp_lib_test'] == 'config-dependent'
-    # Individual snapshots retain config-dependent values for reproduced users.
-    assert data['builds']['b']['headers']['charconv']['macros']['__cpp_lib_test'] == '1L'
+    assert get_classification(data, '14', 'charconv')['macros']['__cpp_lib_test']['dependencies'] == ['_GLIBCXX_HAS_GTHREADS']
+    assert get_agreement(data, '14', 'charconv')['unknown']['__cpp_lib_test'] == 'config-dependent'
+    assert get_snapshot(data, 'b', 'charconv')['macros']['__cpp_lib_test'] == '1L'
 
 
-def test_full_matrix_required_new_builds_versions_and_headers_participate():
+def test_merger_classifies_per_header_and_absence_needs_complete_root():
+    data = report()
+    data['headers']['other'] = dict(status='ok', macros={})
+    data['audit'] = classify({'0/charconv': '#define __cpp_lib_test 1L',
+                              '0/other': '#include COMPUTED'}, (), roots=data['headers'])
+    merged = merge([data], ['a'])
+    assert get_agreement(merged, '14', 'charconv')['defined']
+    assert get_agreement(merged, '14', 'other')['unknown'] == {'__cpp_lib_test': 'config-dependent'}
+    data['audit'] = classify({'0/charconv': '#if CONFIG\n#define __cpp_lib_test 1L\n#endif',
+                              '0/other': ''}, (), roots=data['headers'])
+    merged = merge([data], ['a'])
+    assert get_agreement(merged, '14', 'other')['absent'] == ['__cpp_lib_test']
+
+
+def test_merger_retains_independent_literal_pairs_and_rejects_unaudited_values():
+    data = report(value='2L')
+    data['audit'] = classify({'0/charconv': '#if __cplusplus > 0\n#define __cpp_lib_test 2L\n'
+                             '#elif CONFIG\n#define __cpp_lib_test 1L\n#endif'}, (), roots=['charconv'])
+    merged = merge([data], ['a'])
+    entry = get_classification(merged, '14', 'charconv')['macros']['__cpp_lib_test']
+    assert not entry['independent'] and entry['values'] == ['2L']
+    assert get_agreement(merged, '14', 'charconv')['defined'] == {'__cpp_lib_test': '2L'}
+    data['headers']['charconv']['macros']['__cpp_lib_test'] = '999L'
+    assert not get_agreement(merge([data], ['a']), '14', 'charconv')['defined']
+
+
+def test_full_matrix_versions_headers_and_schema_required():
     for reports, expected in [([report('a')], ['a', 'b']), ([report('a'), report('a')], ['a']),
-                               ([report('a'), report('b')], ['a'])]:
+                              ([report('a'), report('b')], ['a'])]:
         with pytest.raises(ValueError):
             merge(reports, expected)
-    other = report('b')
-    other.update(major='17', gcc='17.1.0')
+    for field in ['schema', 'generator']:
+        bad = report(); bad[field] = 1
+        with pytest.raises(ValueError):
+            merge([bad], ['a'])
+    other = report('b'); other.update(major='17', gcc='17.1.0')
     other['headers']['new'] = dict(status='missing', macros={})
     result = merge([report(), other], ['a', 'b'])
     assert set(result['versions']) == {'14', '17'}
-    assert result['agreement']['17']['new']['unknown']
+    assert get_agreement(result, '17', 'new')['unknown']
     assert any(b.startswith('profile-timus-') for b in expected_builds())
-    assert 'extensions-mingw' in expected_builds()
-    assert 'extensions-macos-arm64' not in expected_builds()
+    assert 'extensions-mingw' in expected_builds() and 'extensions-macos-arm64' not in expected_builds()
 
 
-def test_diff_all_data_changes_including_new_dependency(tmp_path, capsys):
-    file = tmp_path / 'library.json'
-    original = merge([report()], ['a'])
-    file.write_text(json.dumps(original, indent=2) + '\n')
-    assert check(file.read_text(), file)
-    changed = copy.deepcopy(original)
-    changed['versions']['14']['dependent']['__cpp_lib_new'] = ['_GLIBCXX_NEW']
-    assert not check(json.dumps(changed, indent=2) + '\n', file)
-    assert '_GLIBCXX_NEW' in capsys.readouterr().out
-    original['builds']['a']['audit'] = audit('#define __cpp_lib_test 1L')
-    file.write_text(json.dumps(original, indent=2) + '\n')
-    changed = copy.deepcopy(original)
-    changed['builds']['a']['audit'] = audit('#define __cpp_lib_test 1L', {'0/broken': '#if 1'})
-    assert not check(json.dumps(changed, indent=2) + '\n', file)
-    assert '0/broken: unterminated conditional' in capsys.readouterr().out
+def test_compact_digest_determinism_and_evidence_only_check(tmp_path, capsys):
+    a, b = report('a'), report('b')
+    original = merge([a, b], ['a', 'b'])
+    text = baseline_text(original)
+    assert text == baseline_text(merge([b, a], ['b', 'a']))
+    assert json.loads(text) == original
+    assert 'audit' not in original['builds']['a']
+    assert original['builds']['a']['evidence_sha256'] == digest(a)
+    assert len(original['builds']['a']['evidence_sha256']) == 64
+    path = tmp_path / 'library.json'; path.write_text(text)
+    assert check(text, path)
+    changed = copy.deepcopy(a)
+    changed['audit']['includes'].append(dict(file='0/unrelated', operand='<new>', conditions=['CONFIG']))
+    candidate = merge([changed, b], ['a', 'b'])
+    assert candidate['agreement'] == original['agreement']
+    assert candidate['versions'] == original['versions']
+    assert not check(baseline_text(candidate), path)
+    assert 'evidence_sha256' in capsys.readouterr().out
     assert not check('{}\n', tmp_path / 'absent')
-    file.write_bytes(b'{}\r\n')
-    assert not check(b'{}\n', file)
+    path.write_bytes(b'{}\r\n')
+    assert not check(b'{}\n', path)
     assert 'line endings' in capsys.readouterr().out
+
+
+def test_merger_cli_uploads_full_evidence_even_when_check_fails(tmp_path):
+    artifacts = tmp_path / 'input'; artifacts.mkdir()
+    reports = []
+    for build in expected_builds():
+        data = report(build); reports.append(data)
+        write(artifacts / (build + '-library.json'), data)
+    output = tmp_path / 'out/library.json'
+    command = [sys.executable, str(ROOT / 'ci/library/merge.py'), str(artifacts),
+               '--output', str(output), '--check', str(tmp_path / 'absent')]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1 and 'L1c data changed' in result.stderr
+    full = json.loads(output.with_name('library-evidence.json').read_text())
+    assert full['builds'] == {r['build']: r for r in reports}
+    compact = json.loads(output.read_text())
+    for report_ in reports:
+        assert digest(full['builds'][report_['build']]) == compact['builds'][report_['build']]['evidence_sha256']
+    result = subprocess.run(command[:-1] + [str(output)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_path):
@@ -333,11 +335,13 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
     assert data['headers']['ext/pb_ds/tree.hpp'] == dict(status='error', macros={})
     assert data['audit']['unparsed'] == {
         '0/ext/pb_ds/tree.hpp': '0/ext/pb_ds/tree.hpp: unterminated conditional'}
-    assert data['audit']['macros']['__cpp_lib_test']['independent']
+    assert data['audit']['roots']['charconv']['macros']['__cpp_lib_test']['independent']
     for args, source_text, _ in calls:
         if '-dM' in args:
             assert args == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']
             assert source_text.count('#include') == 1
+    assert [source_ for args, source_, _ in calls if '-dM' in args] == [
+        f'#include <{h}>\n' for h in ['charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp']]
     assert '__AVX2__' in data['volatile']
     assert '__AVX2__' not in data['audit']['compiler_inputs']
     assert data['audit']['compiler_inputs']['__cplusplus'] == '#define __cplusplus 202302L'
@@ -373,10 +377,10 @@ def test_capture_symlinked_headers_preserves_include_dependencies(tmp_path, hand
         path = capture('/fixture/g++', 'c++23', [], 'fixture', tmp_path / 'symlink.json',
                        search=[search], **kwargs)
     data = json.loads(path.read_text())['audit']
-    entry = data['macros']['__cpp_lib_test']
+    entry = data['roots']['charconv']['macros']['__cpp_lib_test']
     assert not entry['independent']
     assert entry['unrecognised'] == ['_GLIBCXX_HAS_GTHREADS', '_GLIBCXX_HOSTED']
-    assert {definition['file'] for definition in entry['definitions']} == {
+    assert {definition['file'] for definition in data['macros']['__cpp_lib_test']} == {
         '0/asm/local.h', '0/alias/local.h'}
     assert {include['file'] for include in data['includes']} == {
         '0/charconv', '0/asm/bitsperlong.h', '0/alias/bitsperlong.h'}
@@ -395,7 +399,7 @@ def test_profile_forced_includes_have_no_header_facts(tmp_path):
 
 def test_diagnostic_probe_separate_tu_no_added_headers_and_mismatch():
     data = report()
-    data['audit']['macros']['__cpp_lib_absent'] = {}
+    data['audit']['macros']['__cpp_lib_absent'] = []
     generated = source(data, 'charconv')
     assert generated.count('#include') == 1
     assert '#include <charconv>' in generated
@@ -419,6 +423,8 @@ def test_workflow_wiring_and_actions_pinned():
     assert pipeline['profiles']['with']['artifact_prefix'] == 'library-snapshot'
     assert set(pipeline['data']['needs']) == {'profiles', 'extensions'}
     assert any('--check data/library/library.json' in s.get('run', '') for s in pipeline['data']['steps'])
+    upload = next(s for s in pipeline['data']['steps'] if s.get('with', {}).get('name') == 'library-generated')
+    assert set(upload['with']['path'].splitlines()) == {'out/library/library.json', 'out/library/library-evidence.json'}
     assert 'library' in workflows['drift']['jobs']
     assert 'library-comparison' in workflows['drift']['jobs']['report']['needs']
     for name, workflow in workflows.items():
@@ -432,52 +438,61 @@ def test_workflow_wiring_and_actions_pinned():
         assert '-library.json' in upload['with']['path']
 
 
-@pytest.mark.parametrize('cyclic', [False, True])
-def test_audit_matches_frozen_reference_on_branching_and_cyclic_graphs(cyclic):
-    # Compare classifications for every graph, and full output for DAGs.
-    # Include shared request/value chains, multiple writes and malformed headers.
-    for seed in range(60):
+
+
+def test_per_root_all_path_evidence_against_small_graph_oracle():
+    for seed in range(40):
         rng = random.Random(seed)
-        names = ['__glibcxx_' + str(i) for i in range(5)]
-        requests = ['__glibcxx_want_' + str(i) for i in range(3)]
-        terminals = ['__cplusplus', 'BUILTIN', 'SWITCH', '_GLIBCXX_FLOAT_IS_IEEE_BINARY32']
-        conditions = names + requests + terminals
-        files = {}
+        nodes = list(range(6))
+        edges = [(a, b, f'SWITCH_{a}_{b}') for a in nodes for b in nodes if rng.random() < .2]
+        files = {f'0/h{a}': f'#define __cpp_lib_f{a} 1L\n' + ''.join(
+            f'#if {dep}\n#include <h{b}>\n#endif\n' for source, b, dep in edges if source == a) for a in nodes}
+        closure = {a: {a} for a in nodes}
+        for _ in nodes:
+            for a, b, _ in edges:
+                closure[a].update(closure[b])
+        result = classify(files, (), roots=[f'h{a}' for a in nodes])
+        for root in nodes:
+            macros = result['roots'][f'h{root}']['macros']
+            assert set(macros) == {f'__cpp_lib_f{a}' for a in closure[root]}
+            for target in closure[root]:
+                expected = sorted(dep for a, b, dep in edges if a in closure[root] and target in closure[b])
+                entry = macros[f'__cpp_lib_f{target}']
+                assert entry['dependencies'] == expected, (seed, root, target)
+                assert entry['independent'] == (not expected)
+
+
+def test_request_sccs_match_frozen_reference_for_all_three_node_graphs():
+    # The old global include semantics are deliberately not the oracle. Its
+    # request/value expansion still supplies an independent single-file oracle.
+    names = ['__glibcxx_want_' + str(i) for i in range(3)]
+    for mask in range(1 << 9):
+        text = ''
         for i, name in enumerate(names):
-            text = '#define __cpp_lib_' + str(i) + ' ' + name + '\n'
-            choices = conditions if cyclic else names[:i] + terminals
-            values = names if cyclic else names[:i]
-            for _ in range(2):
-                condition = ' && '.join(rng.sample(choices, 2))
-                value = rng.choice(values + ['1L', '2L', 'BAD', ''])
-                text += f'#if {condition}\n#define {name} {value}\n#endif\n'
-            files[f'{i % 2}/part{i}'] = text
-        files['0/requests'] = ''.join(
-            f'#if {rng.choice(conditions if cyclic else names + requests[:i] + terminals)}\n'
-            f'#define {name}\n#else\n#undef {name}\n#endif\n'
-            for i, name in enumerate(requests))
-        files['1/config'] = '#if BUILTIN\n#define _GLIBCXX_FLOAT_IS_IEEE_BINARY32 1\n#endif\n'
-        files['0/root'] = '#if SWITCH\n#include <part0>\n#endif\n#include <part1>\n'
-        files['1/part0'] = '#include <part4>\n'
-        if seed % 3 == 0:
-            files['0/part0'] += '#if __has_include("unknown")\n#include COMPUTED\n#endif\n'
-        if seed % 5 == 0:
-            files['1/broken'] = '#else\n#include <part2>\n'
-        if seed % 7 == 0:
-            files['0/root'] += '#include <broken>\n'
-        predefines = {'BUILTIN': '#define BUILTIN 1'}
-        blocked = {'BUILTIN'} if seed % 2 else set()
-        expected = reference.classify(files, predefines, blocked)
-        actual = classify(files, predefines, blocked)
-        assert {n: m['independent'] for n, m in actual['macros'].items()} == {
-            n: m['independent'] for n, m in expected['macros'].items()}, seed
-        if not cyclic:
-            assert json.dumps(actual, sort_keys=True, indent=2) == json.dumps(expected, sort_keys=True, indent=2), seed
+            deps = [other for j, other in enumerate(names) if mask & (1 << (3*i+j))]
+            if deps:
+                text += '#if ' + ' && '.join(deps) + '\n'
+            text += f'#define {name}\n'
+            if deps:
+                text += '#endif\n'
+            text += f'#if {name}\n#define __cpp_lib_{i} 1L\n#endif\n'
+        files = {'0/version': text}
+        actual = classify(files, (), roots=['version'])['roots']['version']['macros']
+        expected = reference.classify(files, ())['macros']
+        for name in actual:
+            for field in ('values', 'independent', 'dependencies'):
+                assert actual[name][field] == expected[name][field], (mask, name, field)
+        reach = {i: {j for j in range(3) if mask & (1 << (3*i+j))} for i in range(3)}
+        for _ in range(3):
+            for i in range(3):
+                reach[i].update(set().union(*(reach[j] for j in list(reach[i]))))
+        cyclic = {i for i in range(3) if i in reach[i]}
+        for i in range(3):
+            bad = sorted(names[j] for j in (reach[i] | {i}) & cyclic)
+            assert actual[f'__cpp_lib_{i}']['unrecognised'] == bad
 
 
 def test_shared_request_and_value_chains_scale_without_losing_evidence():
-    # Each level has two routes to the same preceding levels. Re-expanding
-    # complete paths instead of sharing results grows exponentially.
     text = '#define __glibcxx_want_0\n#define __glibcxx_want_1\n'
     text += '#define __glibcxx_0 202600L\n#define __glibcxx_1 202600L\n'
     for i in range(2, 60):
@@ -485,132 +500,138 @@ def test_shared_request_and_value_chains_scale_without_losing_evidence():
                  f'#define __glibcxx_want_{i}\n#endif\n'
                  f'#define __glibcxx_{i} __glibcxx_{i-1}\n'
                  f'#define __glibcxx_{i} __glibcxx_{i-2}\n')
-    # Internal value names qualify as plumbing only with a corresponding feature.
     for i in range(60):
         text += f'#if __glibcxx_want_{i}\n#define __cpp_lib_{i} __glibcxx_{i}\n#endif\n'
-    data = classify({'0/version': text}, ())
-    assert len(data['macros']) == 60
-    for entry in data['macros'].values():
-        assert entry['values'] == ['202600L']
-        assert entry['independent']
+    macros = classify({'0/version': text}, (), roots=['version'])['roots']['version']['macros']
+    assert len(macros) == 60
+    assert all(e['values'] == ['202600L'] and e['independent'] for e in macros.values())
 
 
-@pytest.mark.parametrize('handoff', [False, True])
-def test_capture_bytes_and_compiler_calls_match_reference(tmp_path, handoff, capsys):
-    from generate import reachable, includes
-    first, second, outside = (tmp_path / name for name in ('first', 'second', 'uapi'))
-    for directory in (first, second, outside):
-        directory.mkdir()
-    try:
-        for name in ('asm', 'alias'):
-            (first / name).symlink_to(outside, target_is_directory=True)
-        (second / 'asm').symlink_to(outside, target_is_directory=True)
-    except (OSError, NotImplementedError) as error:
-        pytest.skip(f'directory symlinks unavailable: {error}')
-    (first / 'ext/pb_ds').mkdir(parents=True)
-    (first / 'ext/pb_ds/tree.hpp').write_text('#else\n#include <same>\n')
-    (first / 'version').write_text(
-        '#ifndef _VERSION_H\n#define _VERSION_H\n'
-        '#if _GLIBCXX_HOSTED\n#include <asm/bits.h>\n#endif\n'
-        '#if THREADS\n#include <alias/bits.h>\n#endif\n'
-        '#include <same>\n#include <broken>\n#include COMPUTED\n'
-        '#define __glibcxx_want_a\n#define __glibcxx_a 202600L\n'
-        '#if __glibcxx_want_a && !defined(__cpp_lib_a)\n'
-        '#define __cpp_lib_a __glibcxx_a\n#endif\n#endif\n')
-    (outside / 'bits.h').write_text('#include "local.h"\n#include_next <asm/bits.h>\n')
-    (outside / 'local.h').write_text('#define __cpp_lib_local 1L\n')
-    (first / 'same').write_text('#include_next <same>\n')
-    (second / 'same').write_text('#if __cplusplus > 0\n#define __cpp_lib_same 2L\n#endif\n')
-    (first / 'broken').write_text('#if 1\n')
-    seeds = tmp_path / 'headers.txt'
-    seeds.write_text('version\nsame\nmissing\n')
-    search = [first, second]
-    expected_reached = reference.reachable(search, seeds, with_spellings=True)
-    # Aliases retain separate keys, but each physical file is parsed once.
-    with patch('generate.includes', wraps=includes) as parsed:
-        reached = reachable(search, seeds, with_spellings=True)
-    assert reached == expected_reached
-    assert parsed.call_count == len(set(reached.values()))
-
-    calls = []
-    def compiler(executable, args, source='', check=True):
-        calls.append((str(executable), args, source, check))
-        if args[0] == '-dumpfullversion':
-            out = '15.2.0'
-        elif args[0] == '-dumpmachine':
-            out = 'aarch64-linux-gnu'
-        elif args[0] == '--version':
-            out = 'fixture GCC'
-        elif '-dD' in args:
-            out = '# 0 "<built-in>"\n#define __cplusplus 202302L\n#define BUILTIN 1\n'
-            out += '# 1 "stdc-predef.h"\n#define STARTUP 1\n'
-        else:
-            out = '#define __glibcxx_a 202600L\n#define __cpp_lib_a __glibcxx_a\n'
-        return subprocess.CompletedProcess(args, int('tree.hpp' in source), out, '')
-
-    headers = ['version', 'same', 'missing', 'ext/pb_ds/tree.hpp']
-    for module, original, output in [(reference, reference.reachable, 'old.json'),
-                                     (capture_module, reachable, 'new.json')]:
-        kwargs = {'reached': reached} if handoff else {}
-        with patch.object(module, 'command', side_effect=compiler), \
-             patch.object(module, 'header_names', return_value=headers), \
-             patch.object(module, 'reachable', side_effect=lambda paths, **kw: original(paths, seeds, **kw)):
-            module.capture('/fixture/g++', 'c++23', ['-O2', '-DX=1', '-UX'], 'fixture',
-                           tmp_path / output, search=search, **kwargs)
-    assert (tmp_path / 'new.json').read_bytes() == (tmp_path / 'old.json').read_bytes()
-    assert calls[:len(calls)//2] == calls[len(calls)//2:]
-    probes = [source for _, args, source, _ in calls[len(calls)//2:] if '-dM' in args]
-    assert probes == ['#include <' + header + '>\n' for header in headers if header != 'missing']
-    log = capsys.readouterr().err
-    assert 'library capture: discovery=' in log and 'audit=' in log and 'preprocessing=' in log
-    assert '3 -dM probes' in log
+def test_delta_maps_restore_all_classifications_and_default_taint():
+    reports = []
+    for i in range(3):
+        headers = {f'h{h}': dict(status='ok', macros={}) for h in range(9)}
+        files = {f'0/h{h}': '#include <version>\n' + (f'#if SWITCH_{h}\n#include <version>\n#endif' if h else '')
+                 for h in range(8)}
+        files['0/version'] = ''.join(f'#if BUILTIN_{n}\n#define __cpp_lib_f{n} {n}L\n#endif\n' for n in range(12))
+        files['0/h7'] += '\n#include COMPUTED'
+        files['0/h8'] = '#include <partial>'
+        files['0/partial'] = ''.join(f'#if BUILTIN_{n}\n#define __cpp_lib_f{n} {n}L\n#endif\n' for n in range(11))
+        data = report(str(i)); data['headers'] = headers
+        data['audit'] = classify(files, {f'BUILTIN_{n}' for n in range(12)}, roots=headers)
+        reports.append(data)
+    merged = merge(reports, ['0', '1', '2'])
+    assert any('base' in s for s in merged['macro_sets'].values())
+    for header in reports[0]['headers']:
+        decoded = get_classification(merged, '14', header)
+        original = reports[0]['audit']['roots'][header]
+        assert decoded['default']['dependencies'] == original['taint']
+        for name, entry in original['macros'].items():
+            restored = decoded['macros'][name]
+            assert restored['independent'] == entry['independent']
+            assert restored['values'] == sorted(v for v, p in entry['pairs'].items() if p['independent'])
+            assert restored['dependencies'] == sorted(set(entry['dependencies']) | set(entry['unrecognised']))
 
 
-def test_cycles_and_their_dependents_are_unrecognised():
-    graph = {'a': ['b'], 'b': ['a'], 'self': ['self'],
-             'cycle_tail': ['a'], 'self_tail': ['self'], 'clean': []}
-    text = ''
-    for name, deps in graph.items():
-        if deps:
-            text += '#if ' + ' && '.join('__glibcxx_want_' + dep for dep in deps) + '\n'
-        text += f'#define __glibcxx_want_{name}\n'
-        if deps:
-            text += '#endif\n'
-        text += f'#if __glibcxx_want_{name}\n#define __cpp_lib_{name} 1L\n#endif\n'
-    files = {'0/version': text}
-    actual = classify(files, ())['macros']
-    expected = reference.classify(files, ())['macros']
-    for name in graph:
-        entry = actual['__cpp_lib_' + name]
-        assert entry['independent'] == expected['__cpp_lib_' + name]['independent']
-        assert entry['independent'] == (name == 'clean')
-        evidence = ([] if name == 'clean' else ['self'] if name in ('self', 'self_tail')
-                    else ['a', 'b'])
-        assert entry['unrecognised'] == ['__glibcxx_want_' + dep for dep in evidence]
+def test_negative_guard_before_entering_another_file_needs_path_proof():
+    files = {'0/root': '#ifndef G\n#include <feature>\n#endif',
+             '0/feature': '#ifndef G\n#define G 1\n#define __cpp_lib_test 1L\n#endif'}
+    result = classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']
+    assert result['independent'] and result['dependencies'] == []
+    # A sibling may already have entered the guarded file. Retain the guard
+    # uncertainty and the sibling's configuration, rather than assuming fresh.
+    files['0/root'] = '#if SWITCH\n#include <feature>\n#endif\n#ifndef G\n#include <middle>\n#endif'
+    files['0/middle'] = '#include <feature>'
+    result = classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']
+    assert result['unrecognised'] == ['G', 'SWITCH']
 
 
-def test_reference_equivalence_for_all_three_node_graphs():
-    # Exhaust every directed edge combination, including self loops and
-    # multiple cycle entries. Only acyclic graphs must retain identical bytes.
-    names = ['__glibcxx_want_' + str(i) for i in range(3)]
-    for mask in range(1 << 9):
-        text = ''
-        graph = {}
-        for i, name in enumerate(names):
-            deps = [other for j, other in enumerate(names) if mask & (1 << (3*i+j))]
-            graph[name] = deps
-            if deps:
-                text += '#if ' + ' && '.join(deps) + '\n'
-            text += '#define ' + name + '\n'
-            if deps:
-                text += '#endif\n'
-            text += f'#if {name}\n#define __cpp_lib_{i} 1L\n#endif\n'
-        files = {'0/version': text}
-        actual, expected = classify(files, ()), reference.classify(files, ())
-        assert {n: m['independent'] for n, m in actual['macros'].items()} == {
-            n: m['independent'] for n, m in expected['macros'].items()}, mask
-        try:
-            TopologicalSorter(graph).prepare()
-        except CycleError:
-            continue
-        assert json.dumps(actual, sort_keys=True, indent=2) == json.dumps(expected, sort_keys=True, indent=2), mask
+def test_else_and_negated_own_tests_are_not_treated_as_own_ifndef():
+    for text in ('#ifndef __cpp_lib_test\n#else\n#define __cpp_lib_test 1L\n#endif',
+                 '#if !(!defined(__cpp_lib_test))\n#define __cpp_lib_test 1L\n#endif',
+                 '#if !defined(__cpp_lib_test) == 0\n#define __cpp_lib_test 1L\n#endif'):
+        assert macro(text)['unrecognised'] == ['__cpp_lib_test']
+
+
+def test_same_guard_in_distinct_files_and_include_parent_spelling_fail_closed():
+    data = classify({'0/root': '#include "sub/../feature"',
+                     '0/sub/../feature': '#ifndef G\n#define G 1\n#define __cpp_lib_test 1L\n#endif',
+                     '0/another': '#ifndef G\n#define G 1\n#define SOMETHING_ELSE 1\n#endif'}, (), roots=['root'])
+    assert data['roots']['root']['macros']['__cpp_lib_test']['unrecognised'] == ['G']
+
+
+def test_absolute_includes_are_explicit_unknown_not_proven_absence():
+    result = classify({'0/root': '#include "/not-a-search-relative-name"\n#define __cpp_lib_test 1L'}, (), roots=['root'])
+    assert result['roots']['root']['taint'] == ['<absolute-include>']
+
+
+def test_fourteen_build_compact_size_and_classifications_survive_sharing():
+    reports = []
+    names = [f'__cpp_lib_feature_{i}' for i in range(242)]
+    headers = [f'ext/pb_ds/detail/header_{h}.hpp' for h in range(397)]
+    for i in range(14):
+        major = str(10 + i//2)
+        values = {n: f'{202000 + 100*int(major) + j}L' for j, n in enumerate(names)}
+        roots = {}
+        for h, header in enumerate(headers):
+            deps = [f'CONFIG_{h % 20}'] if h else ['__cplusplus']
+            macros = {n: dict(independent=not h, values=[v], dependencies=deps,
+                              unrecognised=deps if h else [],
+                              pairs={v: dict(independent=not h)}) for n, v in values.items()}
+            roots[header] = dict(macros=macros, taint=[])
+        reports.append(dict(schema=2, generator=VERSION, build=f'build-{i}', major=major,
+                            headers={h: dict(status='ok', macros=values) for h in headers},
+                            audit=dict(generator=VERSION, macros=dict.fromkeys(names, []), roots=roots)))
+    data = merge(reports, [r['build'] for r in reports])
+    assert len(baseline_text(data).encode()) < 2_000_000
+    for report_ in reports:
+        for header in (headers[0], headers[-1]):
+            assert get_snapshot(data, report_['build'], header) == report_['headers'][header]
+            restored = get_classification(data, report_['major'], header)['macros']
+            for name, entry in report_['audit']['roots'][header]['macros'].items():
+                assert restored[name]['independent'] == entry['independent']
+                assert restored[name]['dependencies'] == entry['dependencies']
+
+
+@pytest.mark.parametrize('generated', [False, True], ids=['gcc13-distributed', 'gcc14-generated'])
+def test_charconv_compiler_only_conditions_survive_unrelated_pbds_paths(generated):
+    condition = ('__cplusplus >= 201703L && _GLIBCXX_FLOAT_IS_IEEE_BINARY32 && '
+                 '_GLIBCXX_DOUBLE_IS_IEEE_BINARY64 && __SIZE_WIDTH__ >= 32')
+    feature = f'#if {condition}\n#define __cpp_lib_to_chars 201611L\n#endif'
+    files = {
+        '0/charconv': '#include <bits/c++config.h>\n',
+        '0/bits/c++config.h': '#ifndef CONFIG_GUARD\n#define CONFIG_GUARD 1\n'
+                             '#if __FLT_MANT_DIG__ == 24\n#define _GLIBCXX_FLOAT_IS_IEEE_BINARY32 1\n#endif\n'
+                             '#if __DBL_MANT_DIG__ == 53\n#define _GLIBCXX_DOUBLE_IS_IEEE_BINARY64 1\n#endif\n#endif',
+        '0/pb_ds': '#if PB_DS_TREE_TRACE && _GLIBCXX_DEBUG\n#include <charconv>\n#endif',
+    }
+    if generated:
+        files['0/charconv'] += '#define __glibcxx_want_to_chars\n#include <bits/version.h>'
+        files['0/bits/version.h'] = ('#ifndef __cpp_lib_to_chars\n'
+            f'#if {condition}\n#define __glibcxx_to_chars 201611L\n'
+            '#if defined(__glibcxx_want_all) || defined(__glibcxx_want_to_chars)\n'
+            '#define __cpp_lib_to_chars __glibcxx_to_chars\n#endif\n#endif\n#endif\n#undef __glibcxx_want_to_chars')
+        files['0/version'] = '#define __glibcxx_want_all\n#include <bits/version.h>'
+    else:
+        files['0/charconv'] += feature
+    data = classify(files, {'__FLT_MANT_DIG__', '__DBL_MANT_DIG__', '__SIZE_WIDTH__'}, roots=['charconv', 'pb_ds'])
+    clean = data['roots']['charconv']['macros']['__cpp_lib_to_chars']
+    assert clean['independent'] and clean['values'] == ['201611L']
+    assert not data['roots']['pb_ds']['macros']['__cpp_lib_to_chars']['independent']
+    assert 'PB_DS_TREE_TRACE' not in clean['dependencies']
+
+
+def test_request_replacements_in_another_root_do_not_override_local_evidence():
+    files = {'0/root': '#define __glibcxx_want_test\n#if __glibcxx_want_test\n#define __cpp_lib_test 1L\n#endif',
+             '0/other': '#define __glibcxx_want_test BAD'}
+    assert classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']['independent']
+    files['0/root'] = '#include <other>\n' + files['0/root']
+    assert not classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']['independent']
+
+
+def test_internal_own_ifndef_never_erases_inbound_feature_conditions():
+    files = {'0/root': '#if __cpp_lib_test\n#include <internal>\n#endif\n#include <feature>',
+             '0/internal': '#define __glibcxx_test 1L',
+             '0/feature': '#define __cpp_lib_test __glibcxx_test'}
+    entry = classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']
+    assert not entry['independent'] and entry['unrecognised'] == ['__cpp_lib_test']

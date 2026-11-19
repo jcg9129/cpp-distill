@@ -22,36 +22,72 @@ report per eligible row. It fails for missing, duplicate, extra or unsupported
 reports; additions cannot silently be excluded. It regenerates the entire data
 set without merging committed facts and compares it byte for byte.
 
-The merged `library.json` (schema/generator 1) has:
+The generated artifact contains two files (schema/generator 2):
 
-- `builds`: original metadata, per-header `status` (`ok`, `missing`, `error`,
-  `disabled`) and `macros`, plus the actual textual audit evidence. A successful
-  empty map means no feature macros. Error/missing/disabled maps prove nothing.
-- `versions`: per GCC major, independent names with permitted integer values,
-  dependent names with unrecognised/configuration dependencies, and build IDs.
-- `agreement`: per GCC major/header, `defined` values, proven `absent` names,
-  and explicit `unknown` reasons. Different profile dialects and flags remain
-  part of the all-build agreement; this can conservatively reduce coverage.
+- `library.json`: the compact, deterministic baseline to import into
+  `data/library/`. It retains build metadata, per-header snapshot facts/status,
+  per-major/root classifications and cross-build agreement. Sorted JSON has one
+  record per line. A successful empty snapshot proves no feature macros;
+  `missing`, `error` and `disabled` snapshots prove nothing.
+- `library-evidence.json`: complete build reports, including installed-header
+  definitions, lexical conditions, include edges/targets, request/value support,
+  compiler definitions, per-root/per-value audit results and parse failures.
+  Review this uploaded file; do not commit it. Each compact build contains
+  `evidence_sha256`, the full SHA-256 of its complete report serialized as ASCII
+  JSON with sorted keys and separators `(',', ':')`, without a trailing newline.
+  Thus evidence-only changes still fail the byte comparison.
 
-The audit retains actual lexical conditions, including inactive definitions,
-previous elif conditions, internal feature-request/value definitions and include
-edge dependencies. Files are keyed by search-directory index and unresolved
-include spelling (for example, `2/asm/bitsperlong.h`), while contents are read
-from the resolved file. Directory symlinks may lead outside the search paths;
-every reached spelling is retained so global and local include edges still
-resolve. A1 keeps its existing set of resolved files.
-The audit verifies the embedded IEEE candidate macros against each
-installed build; unknown predicates or replacements fail closed. Header writes
-and command/startup overrides revoke compiler-predefine trust. Audits retain
-the trusted compiler definitions so changes to dependency replacements are visible. Native-model names are not trusted inputs under
-native flags. Unresolved computed includes taint the audit; the existing A1
-reachability limitation is not silently taken as proof of absence. The merger
-requires all audited definitions for an absence fact to be independent.
-Files with unparseable conditional structure or macro writes are retained in
-`audit.unparsed` with their reasons. An unparsed file taints all feature results
-with `<unparsed-file:PATH>` if another audited file includes it or its text
-contains `__cpp_lib_` or `__glibcxx_`; otherwise it is listed without taint.
-Per-header preprocessing snapshots retain their independent `ok`/`error` status.
+The compact file shares repeated records using content-address tables (the first
+16 hexadecimal SHA-256 digits, with collision detection). Build `headers` refer
+through `build_headers` to `snapshots`; version `roots` refer through
+`root_classifications` to `classifications`; `agreement` refers through
+`root_agreements` to `agreements`. Each classification contains a `default` for
+names with no reachable definition, common sorted `dependencies` for its explicit
+macros, and a `macro_sets` reference. A macro set has `entries`, an optional
+`base` set, and optional `removed` names; apply the base, removals, then entries.
+Entries reference `macro_classifications` records with `independent`, `values`
+(the literal pairs independent in every build), and sorted additional dependency
+names. Union these with the root's common dependencies. The default applies only
+to omitted names and has its own dependencies. The `get_snapshot`,
+`get_classification` and `get_agreement` helpers in `merge.py` expand these tables
+for inspection. Macro-set IDs hash their expanded entry map. Bases are
+deterministic and acyclic; unrelated additions do not renumber records.
+
+The audit's unit is a fresh TU containing only `#include <H>`. For each root H,
+a definition inherits its own conditions and the conditions on **all** include
+paths from H to its file. A conditional alternative still counts when another
+path is unconditional. Paths from other roots do not contribute, including
+writes to request/value/candidate macros. Literal includes follow search order,
+quoted local lookup and `include_next` search position. Files retain
+search-directory index/include spelling, including directory symlink aliases;
+contents are read from the resolved file.
+
+Whole-file guards and nested `#ifndef X` / `#define X` wrappers are verified
+against all installed writes and command/startup overrides. Only the actual
+negative wrapper test is exempted, not arbitrary positive/value tests of X.
+Conflicting writes or different file contents sharing X revoke the exemption.
+A negative guard test before entering another guarded file is exempted only
+when no guard writer can be reached without that include edge; otherwise the
+possible earlier inclusion remains untrusted. This covers `#include_next` C
+wrappers without treating `_GLIBCXX_CMATH` or `_GLIBCXX_STDLIB_H` as general
+compiler inputs.
+
+The two IEEE candidates are verified from their actual reachable definitions;
+configuration switches never receive blanket trust. Header writes and
+command/startup overrides revoke compiler-input trust for that root. Native-model
+names remain untrusted under native flags. Literal include operands and
+`__has_include`/`__has_include_next` arguments are not macro identifiers; the
+availability predicates themselves remain untrusted because their presence tests
+are not recorded as verified build inputs. A reachable computed include,
+unsupported absolute include or unparsed file taints the entire root, including
+absence claims; unreachable failures are listed without affecting it.
+
+Each literal (root, name, value) is audited separately, retaining all matching
+definitions and paths. Undefinitions/unsupported replacements invalidate its
+pairs. Absence requires every reachable definition to be independent, or a
+complete untainted closure containing no definition. Agreement still requires
+all builds of the major, with their actual dialects/flags, to report the same
+presence/value and an available header.
 
 Failed acquisition or audit leaves incomplete inputs and fails the check. A
 baseline difference still uploads the generated output and prints a unified
@@ -70,20 +106,23 @@ gh run watch <run-id>
 gh run download <run-id> --name library-generated --dir out/library-review
 ```
 
-Review the failed check's full diff and the JSON's per-build status, independent
-pairs, dependent names/dependencies and unknown reasons. Review both GCC 13
-builds, MinGW gthreads/ABI cases, GCC 14–16 and every newly added matrix row.
+Review the failed check's compact diff and both files: per-build status,
+per-root independent pairs, dependencies, full evidence and unknown reasons.
+Review the GCC 13 CSES/Timus and GCC 14 Codeforces profiles, MinGW gthreads/ABI
+cases, GCC 14–16 and every newly added matrix row.
 After review, copy `out/library-review/library.json` **byte for byte** to
 `data/library/library.json` and commit it in a follow-up change to the same PR,
-recording the run URL. This is the repository's existing human import step;
-there is no automatic commit step. Rerun the PR and require a clean comparison.
+recording the run URL. Keep `library-evidence.json` in the CI artifact for
+review; never copy it into the baseline directory. This is the repository's
+existing human import step; there is no automatic commit step. Rerun the PR and
+require a clean comparison.
 Do not manually alter generated fields to make a diff disappear.
 
-Raw profile reports need not also be committed beside TOMLs: the combined
-baseline retains them. For a diagnostic against a particular judge, extract its
-`builds["profile-<full-name>"]` object from the reviewed baseline into a JSON
-file, or download its raw `*-library.json` artifact. Generating source and
-checking submitted stdout do not invoke a local compiler:
+Raw profile reports need not also be committed beside TOMLs. For a diagnostic
+against a particular judge, extract its `builds["profile-<full-name>"]` object
+from the reviewed **library-evidence.json** into a JSON file, or download its
+raw `*-library.json` artifact. The compact baseline is not a raw probe report.
+Generating source and checking submitted stdout do not invoke a local compiler:
 
 ```sh
 python3 ci/library/probe.py <profile>-library.json --header charconv --output out/charconv-probe.cpp

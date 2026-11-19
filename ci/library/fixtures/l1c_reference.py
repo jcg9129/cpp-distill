@@ -399,4 +399,3 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
                 provenance=provenance, volatile=sorted(volatile), headers=headers, audit=audit)
     write(output, data)
     return output
-
