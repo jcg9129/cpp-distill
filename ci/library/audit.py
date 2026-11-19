@@ -126,9 +126,10 @@ def classify(files, predefines, blocked=frozenset()):
             unparsed[file] = str(error)
             unparsed_names.update(re.findall(r'\b__cpp_lib_[A-Za-z_0-9]+\b', text))
             # Discard partial writes and guard claims. Recover only include
-            # operands so an unparsed source can still expose an incoming edge
-            # to another unparsed file; its conditions are unknown.
-            parsed[file] = ([], [(op, body, set(), None) for op, body in directives(text)
+            # operands, marking their unknown conditions so every reachable
+            # header inherits the unparsed source dependency.
+            parsed[file] = ([], [(op, body, {'<unparsed-file:' + file + '>'}, None)
+                                for op, body in directives(text)
                                 if op in ('include', 'include_next')], None)
     all_writes = [w for ws, _, _ in parsed.values() for w in ws]
     writes = {}

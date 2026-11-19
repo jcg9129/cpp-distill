@@ -183,6 +183,29 @@ def test_include_from_unparsed_file_still_detects_unparsed_target():
     assert data['macros']['__cpp_lib_test']['unrecognised'] == ['<unparsed-file:0/broken>']
 
 
+@pytest.mark.parametrize('kind', ['include', 'include_next'])
+@pytest.mark.parametrize('indirect', [False, True])
+def test_unparsed_include_source_taints_reachable_parsed_features(kind, indirect):
+    target = 'middle' if indirect else 'feature'
+    files = {
+        '0/broken': '#undef UNUSED extra\n#if _GLIBCXX_HOSTED\n'
+                    f'#{kind} <{target}>\n#endif',
+        '0/feature': '#if __cplusplus >= 201703L\n#define __cpp_lib_foo 201703L\n#endif',
+        '0/unrelated': '#define __cpp_lib_other 201703L',
+    }
+    if indirect:
+        files['0/middle'] = '#include <feature>'
+    data = classify(files, ())
+    dependency = '<unparsed-file:0/broken>'
+    assert data['unparsed'] == {'0/broken': '0/broken: malformed macro write'}
+    entry = data['macros']['__cpp_lib_foo']
+    assert entry['values'] == ['201703L']
+    assert not entry['independent']
+    assert entry['dependencies'] == [dependency, '__cplusplus']
+    assert entry['unrecognised'] == [dependency]
+    assert data['macros']['__cpp_lib_other']['independent']
+
+
 @pytest.mark.parametrize('mention', ['__cpp_lib_hidden', '__glibcxx_hidden',
                                     '/* __cpp_lib_ */', '/* __glibcxx_ */'])
 def test_unparsed_file_mentioning_feature_tokens_taints_all_results(mention):
