@@ -793,8 +793,17 @@ Textual substitution, not preprocessing:
   textually precedes the recursive include, no `#undef G` appears in user
   text, user code contains no `push_macro`/`pop_macro`/`_Pragma`, `G` is a
   non-reserved name that A2 protects, and between them there is no system
-  include outside the standard-header list. Otherwise rejected (R4-F). Repeated non-recursive inclusions are inlined again; the resolver
-  removes the dead ones.
+  include outside the standard-header list. Otherwise rejected (R4-F).
+  Repeated non-recursive inclusions are inlined again, except that a
+  `#pragma once` file can be elided when its generated guard is guaranteed
+  defined under A1–A3 and the same name and macro-stack protections. These
+  facts use file identity, intersect at conditional joins (including the
+  implicit untaken alternative without `#else`), and are invalidated by
+  existing system headers outside the standard-header list. Missing angle
+  headers cannot change macros in a compiling translation unit. A possibly
+  skipped generated guard cannot export new nested include facts. This
+  avoids expanding once include DAGs into exponential output trees before
+  the resolver can remove dead copies.
 - **Line numbers are always preserved** (R4-G): `#line` markers are emitted
   wherever a step changes line numbering (start and end of every splice,
   every resolved directive, every deletion), and the renderer (§4.8)

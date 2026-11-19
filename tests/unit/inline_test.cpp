@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
 #include "core/inline/inline.h"
+#include "core/render/render.h"
 #include <algorithm>
 using namespace distill;
 namespace {
@@ -56,6 +57,40 @@ TEST(inline_repeated_headers_and_metadata) {
   for (const auto& l : r.value().lineMap) if (l && l->file == "a.h" && l->line == 2) mapped = true;
   CHECK(mapped);
 }
+TEST(inline_once_repeated_header_before_comment_stripping) {
+  Fixture f;
+  f.temp.write("main.cpp", "#include \"a.h\"\n#include \"a.h\"\n");
+  f.temp.write("a.h", "#pragma once\nint value; // comment\n");
+  auto r = f.run(); CHECK(r.ok());
+  if (!r.ok()) return;
+  CHECK_EQ(r.value().userFiles[1].times, 1u);
+  PruningModel m; m.text = r.value().text; m.lineMap = r.value().lineMap;
+  auto stripped = renderSource(m, nullptr, true); CHECK(stripped.ok());
+  if (!stripped.ok()) return;
+  const auto& text = stripped.value().provenance.text;
+  CHECK(text.find("comment") == std::string::npos);
+  auto pos = text.find("int value;"); CHECK(pos != std::string::npos);
+  CHECK(text.find("int value;", pos + 1) == std::string::npos);
+  CHECK(renderingInvariant(m, nullptr, text).ok());
+}
+TEST(inline_once_dag_output_is_bounded) {
+  Fixture f;
+  f.temp.write("main.cpp", "#include \"h13.h\"\n");
+  for (unsigned i = 0; i <= 13; ++i) {
+    std::string header = "#pragma once\n";
+    // Fibonacci DAG: caching only immediate duplicate edges is insufficient.
+    if (i) header += "#include \"h" + std::to_string(i - 1) + ".h\"\n";
+    if (i > 1) header += "#include \"h" + std::to_string(i - 2) + ".h\"\n";
+    header += "int value" + std::to_string(i) + ";\n";
+    f.temp.write("h" + std::to_string(i) + ".h", header);
+  }
+  InlineOptions options; options.maxOutputBytes = 8192;
+  options.names.extensions = {{"fixture", {"FIXTURE_EXTENSION"}}};
+  const auto r = f.run(options); CHECK(r.ok());
+  if (!r.ok()) return;
+  CHECK_EQ(r.value().userFiles.size(), 15u);
+  for (const auto& file : r.value().userFiles) CHECK_EQ(file.times, 1u);
+}
 TEST(inline_system_metadata_and_missing_angle) {
   Fixture f({"-isystem", "sys"}); std::filesystem::create_directory(f.temp.path / "sys"); f.temp.write("sys/vector", "// fixture\n");
   f.temp.write("main.cpp", "/* prefix \\\n*/ #include \"vector\"\n#if 0\n#include <not_here>\n#endif\n");
@@ -105,10 +140,76 @@ TEST(inline_once_identity_aliases) {
   CHECK_EQ(r.value().userFiles[1].identity, r.value().userFiles[2].identity);
   auto guard = onceGuardName(r.value().userFiles[1].identity);
   auto pos = r.value().text.find("#ifndef " + guard); CHECK(pos != std::string::npos);
-  CHECK(r.value().text.find("#ifndef " + guard, pos + 1) != std::string::npos);
+  CHECK(r.value().text.find("#ifndef " + guard, pos + 1) == std::string::npos);
+  CHECK_EQ(r.value().userFiles[1].times, 1u);
+  CHECK_EQ(r.value().userFiles[2].times, 0u);
 #else
   throw test::Skip{"symlink creation requires Windows privileges"};
 #endif
+}
+TEST(inline_once_conditional_paths_join_only_guaranteed_includes) {
+  for (bool complete : {false, true}) {
+    Fixture f;
+    std::string source = "#if FIRST\n#include \"a.h\"\n#elif SECOND\n#include \"a.h\"\n";
+    if (complete) source += "#else\n#include \"a.h\"\n";
+    source += "#endif\n#include \"a.h\"\n#include \"a.h\"\n";
+    f.temp.write("main.cpp", source);
+    f.temp.write("a.h", "#pragma once\nint value;\n");
+    const auto r = f.run(); CHECK(r.ok());
+    if (r.ok()) CHECK_EQ(r.value().userFiles[1].times, 3u);
+  }
+}
+TEST(inline_once_same_basename_is_not_same_identity) {
+  Fixture f;
+  std::filesystem::create_directory(f.temp.path / "detail");
+  f.temp.write("main.cpp", "#include \"a.h\"\n#include \"detail/a.h\"\n#include \"a.h\"\n");
+  f.temp.write("a.h", "#pragma once\n#include \"detail/a.h\"\nint outer;\n");
+  f.temp.write("detail/a.h", "#pragma once\nint inner;\n");
+  const auto r = f.run(); CHECK(r.ok());
+  if (!r.ok()) return;
+  CHECK_EQ(r.value().userFiles.size(), 3u);
+  CHECK(r.value().userFiles[1].identity != r.value().userFiles[2].identity);
+  for (const auto& file : r.value().userFiles) CHECK_EQ(file.times, 1u);
+  CHECK(r.value().text.find("int outer;") != std::string::npos);
+  CHECK(r.value().text.find("int inner;") != std::string::npos);
+}
+TEST(inline_once_unknown_system_include_invalidates_facts) {
+  Fixture f({"-isystem", "sys"});
+  std::filesystem::create_directory(f.temp.path / "sys");
+  f.temp.write("sys/vendor.h", "// unknown macro effects\n");
+  f.temp.write("main.cpp", "#include \"a.h\"\n#include <vendor.h>\n#include \"a.h\"\n#include \"b.h\"\n");
+  f.temp.write("a.h", "#pragma once\n#include \"b.h\"\nint outer;\n");
+  f.temp.write("b.h", "#pragma once\nint inner;\n");
+  // vendor.h could undef b.h's generated guard while leaving a.h's guard
+  // defined. The second a.h body may then be skipped, so its nested b.h
+  // cannot establish a fact that suppresses the final include.
+  const auto r = f.run(); CHECK(r.ok());
+  if (!r.ok()) return;
+  CHECK_EQ(r.value().userFiles[1].times, 2u);
+  CHECK_EQ(r.value().userFiles[2].times, 3u);
+}
+TEST(inline_once_missing_system_include_does_not_poison_dag) {
+  Fixture f;
+  f.temp.write("main.cpp", "#include \"a.h\"\n#include \"a.h\"\n");
+  f.temp.write("a.h", "#pragma once\n#include \"b.h\"\n#include \"b.h\"\n");
+  f.temp.write("b.h", "#pragma once\n#if defined(_MSC_VER)\n#include <intrin.h>\n#endif\nint value;\n");
+  const auto r = f.run(); CHECK(r.ok());
+  if (!r.ok()) return;
+  for (const auto& file : r.value().userFiles) CHECK_EQ(file.times, 1u);
+  CHECK_EQ(r.value().systemIncludes.size(), 1u);
+  CHECK(!r.value().systemIncludes[0].found);
+}
+TEST(inline_once_macro_protection_is_required_for_elision) {
+  for (const auto* operation : {"", "#pragma push_macro(\"X\")\n", "_Pragma(\"message hi\")\n"}) {
+    Fixture f;
+    f.temp.write("main.cpp", "#include \"a.h\"\n" + std::string(operation) + "#include \"a.h\"\n");
+    f.temp.write("a.h", "#pragma once\nint value;\n");
+    auto r = f.run(); CHECK(r.ok());
+    if (r.ok()) CHECK_EQ(r.value().userFiles[1].times, std::string_view(operation).empty() ? 1u : 2u);
+    InlineOptions options; options.names.extensions.clear();
+    r = f.run(options); CHECK(r.ok());
+    if (r.ok()) CHECK_EQ(r.value().userFiles[1].times, 2u);
+  }
 }
 TEST(inline_recursion_guard_forms_and_pragma_once) {
   for (const auto* opening : {"#ifndef G", "#if !defined G", "#if !defined(G)", "#pragma once"}) {

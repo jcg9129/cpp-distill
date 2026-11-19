@@ -39,9 +39,11 @@ struct Engine {
   std::vector<std::size_t> discovering;
   std::set<std::string, std::less<>> identifiers, undefined;
   std::map<FileIdentity, std::string> onceNames;
+  using OnceSet = std::set<FileIdentity>;
+  OnceSet knownOnce, seenOnce;
   struct Frame { std::size_t node, position; std::optional<std::size_t> guardEpoch; };
   std::vector<Frame> stack;
-  std::size_t unsafeIncludes = 0;
+  std::size_t unsafeIncludes = 0, onceUnsafeIncludes = 0;
   bool macroStackName = false;
   PresumedFile presumed; // Fed every output directive in order (short markers).
   Engine(const CompileCommand& command, const IncludeSearch& includes, const InlineOptions& settings)
@@ -254,11 +256,24 @@ struct Engine {
     }
     return false;
   }
+  static void intersect(OnceSet& a, const OnceSet& b) {
+    std::erase_if(a, [&](const auto& identity) { return !b.contains(identity); });
+  }
   void render(std::size_t id) {
     checkDeadline();
     auto& n = *nodes[id];
     if (recursive(id)) { append("\n"); return; }
+    // A generated guard alone prevents repeated preprocessing, but still
+    // expands an include DAG into an exponentially large output tree.
+    if (n.once && knownOnce.contains(n.info.identity)) {
+      for (const char* a : {"A1", "A2", "A3"}) result.assumptions.insert(a);
+      append("\n"); return;
+    }
     if (stack.size() >= options.maxIncludeDepth) throw Error{n.info.fileName + ":1: include depth limit exceeded"};
+    // If this guard may already be defined, its body may be skipped. Do not
+    // export new facts learned only inside that body to the caller.
+    std::optional<OnceSet> onceEntry;
+    if (n.once && (!seenOnce.insert(n.info.identity).second || onceUnsafeIncludes)) onceEntry = knownOnce;
     ++n.info.times;
     stack.push_back({id, 0, {}});
     if (n.once) {
@@ -268,11 +283,37 @@ struct Engine {
       marker(n, 1);
       newline(); append("#ifndef " + n.guard + "\n#define " + n.guard + "\n"); presumed.directive("ifndef");
       stack.back().guardEpoch = unsafeIncludes;
+      if (!macroStackName && !result.flags.pragmaOperator &&
+          options.names.protectedUserMacro(n.guard, options.libraries)) knownOnce.insert(n.info.identity);
     }
     marker(n, 1);
+    struct Group {
+      OnceSet entry;
+      std::optional<OnceSet> alternatives;
+      bool hadElse = false;
+      void merge(const OnceSet& branch) {
+        if (alternatives) intersect(*alternatives, branch);
+        else alternatives = branch;
+      }
+    };
+    std::vector<Group> groups;
     for (std::size_t i = 0; i < n.scan.lines.size(); ++i) {
       checkDeadline();
       const auto& l = n.scan.lines[i];
+      if (l.directive) {
+        const auto& name = l.directive->name;
+        if (beginsGroup(name)) groups.push_back({knownOnce, {}, false});
+        else if (name == "elif" || name == "elifdef" || name == "elifndef" || name == "else") {
+          auto& group = groups.back();
+          group.merge(knownOnce); knownOnce = group.entry;
+          if (name == "else") group.hadElse = true;
+        } else if (name == "endif") {
+          auto& group = groups.back();
+          group.merge(knownOnce);
+          if (!group.hadElse) group.merge(group.entry);
+          knownOnce = std::move(*group.alternatives); groups.pop_back();
+        }
+      }
       stack.back().position = i;
       if (n.guardDefine == i) stack.back().guardEpoch = unsafeIncludes;
       auto include = n.includes.find(i);
@@ -282,7 +323,12 @@ struct Engine {
         const auto& e = include->second;
         const bool standard = isStandardHeader(e.name);
         result.systemIncludes.push_back({{n.info.fileName, l.tokens.front().line}, e.name, e.angle, rewrite, e.lookup.found, standard, e.lookup.systemDirectory});
-        if (!standard) ++unsafeIncludes;
+        if (!standard) {
+          ++unsafeIncludes;
+          // An unavailable angle header can only occur on skipped paths in a
+          // compiling TU. It has no macro effects (e.g. <intrin.h> on GCC).
+          if (e.lookup.found) { ++onceUnsafeIncludes; knownOnce.clear(); }
+        }
       }
       if (user || rewrite || n.once == i) {
         const auto& d = *l.directive;
@@ -303,13 +349,18 @@ struct Engine {
       }
     }
     if (n.once) { newline(); append("#endif\n"); presumed.directive("endif"); }
+    if (onceEntry) {
+      const bool ownGuard = knownOnce.contains(n.info.identity);
+      intersect(knownOnce, *onceEntry);
+      if (ownGuard) knownOnce.insert(n.info.identity);
+    }
     stack.pop_back();
   }
   InlineResult run() {
     HeaderLookup root{cmd.cwd / cmd.source, pathToUtf8(cmd.source), true, false, {}};
     load(std::move(root), 1);
     prepare(); render(0);
-    for (const auto& node : nodes) if (node->info.times) result.userFiles.push_back(node->info);
+    for (const auto& node : nodes) result.userFiles.push_back(node->info);
     return std::move(result);
   }
 };
