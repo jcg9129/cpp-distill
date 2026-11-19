@@ -115,8 +115,9 @@ GCC filename spellings are retained separately from filesystem identities:
 `./lib/a.h`, and `-I lib/../lib` finds `lib/../lib/a.h`. Nested quoted names
 use the includer's spelled parent, retaining dot components. Markers escape
 backslashes and quotes. Each opened spelling has its own user-file metadata
-record (including the main source), with identity, byte size and render count.
-System include metadata is per occurrence, including skipped branches.
+record (including the main source), with identity, byte size and render count
+(zero if every occurrence of that spelling was elided).
+System include metadata is per rendered occurrence, including skipped branches.
 
 Discovery reads every reachable user file before rendering, including inactive
 branches. This makes later identifier collisions, `#undef`s and macro-stack
@@ -125,7 +126,16 @@ inode (Windows volume serial/file index) and salt as fixed little-endian 64-bit
 integers. The salt starts at zero, and collisions with input identifiers or
 other generated guards are retried. Recursive includes require a whole-file
 guard without an outer `#else`/`#elif`, the first inner directive defining it,
-and all design §4.4 protections. Nonrecursive repeated includes are copied.
+and all design §4.4 protections. Nonrecursive repeated includes are copied,
+except for `#pragma once` headers whose generated guard is guaranteed to be
+defined. These facts follow file identities (including aliases), intersect
+across conditional alternatives, and are invalidated by existing unknown
+system headers. Missing angle headers have no macro effects in a compiling
+translation unit. Elision requires the same name and macro-stack protections
+as recursive skipping.
+Generated guards remain around possible first includes in separate branches;
+textual discovery alone never suppresses an include. This keeps ordinary once
+include DAGs from expanding into exponentially large output trees.
 The include depth counts the main source as level one. Output limits include
 markers and generated guards. Each input file also has a 64 MiB read ceiling.
 Input bytes are not charged against the output limit:

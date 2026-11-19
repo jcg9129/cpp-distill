@@ -39,7 +39,7 @@ struct UserFile {
   std::filesystem::path path;
   std::string fileName;
   FileIdentity identity;
-  std::size_t size = 0, times = 0;
+  std::size_t size = 0, times = 0; // Full renders; elided spellings retain zero.
 };
 struct SourceLocation { std::string file; std::size_t line = 0; auto operator<=>(const SourceLocation&) const = default; };
 struct SystemInclude {
@@ -53,7 +53,7 @@ struct InlineResult {
   std::set<std::string> assumptions;
   std::string text;
   std::vector<UserFile> userFiles; // One record per opened spelling; identity may repeat.
-  std::vector<SystemInclude> systemIncludes; // One record per textual occurrence.
+  std::vector<SystemInclude> systemIncludes; // One record per rendered textual occurrence.
   InlineFlags flags;
   std::vector<std::size_t> keepOffsets; // Physical declaration occurrences before stripping.
   std::vector<std::optional<SourceLocation>> lineMap; // nullopt = generated marker/guard.
