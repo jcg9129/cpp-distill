@@ -531,3 +531,35 @@ existing profile with the same compiler build up to flag-explained differences
 (QOJ vs Kattis differ only in 5 `-std` lines; AtCoder vs QOJ in 59). Would
 catch a judge claiming one compiler but running another. Add only if the
 remaining judges show a need; not required for soundness.
+
+## L1c part A: library feature-test macro data (2026-11-18)
+
+- Added design §4.3.3 and A9, with the separate monotone default-library Boolean,
+  system-header identity requirement, cross-header value conflict rule and
+  approximate config-independence plus all-build agreement gate. The review
+  record documents both rejected proposals: source configuration first, then
+  library build configuration/MinGW threads, conflicts, forced includes and
+  header shadowing. This checkout has no A8; the approved identifier stays A9.
+- Added CI-only per-header `__cpp_lib_*` snapshots with distinct missing/error/
+  successful-empty states, installed-header conditional-stack audits for both
+  distributed GCC 13 and generated GCC 14+ definitions, verified IEEE candidate
+  macros, and versioned per-major classification/agreement with explicit unknowns.
+  Unknown dependencies, native-model inputs and computed includes fail closed.
+- The new PR/dispatch `library.yml` calls profiles/extensions, derives mandatory
+  inputs from both matrices and diffs fresh data against the committed baseline.
+  Weekly drift adds the `library` claim, complete result artifacts and existing
+  stateful per-profile issues. Producers/uploaders never commit changes.
+- The diagnostic `ci/library/probe.py` companion generates a separate TU per
+  header and checks live-judge output without promoting facts; existing DPROBE
+  v1 manifests and expected outputs are unchanged. Resolver/CLI integration is
+  part B. No `src/` files changed.
+- No real data was generated locally. The first branch `library.yml` run must
+  produce `library-generated/library.json`; review it and import it byte for byte
+  to `data/library/library.json` in a follow-up commit, recording the run URL.
+  The initial check intentionally fails until that CI baseline lands. Exact
+  commands and review coverage are in `ci/library/README.md`.
+- Local validation: 159 offline Python tests passed (22 L1c, 66 profiles,
+  16 extensions, 55 drift), plus `git diff --check`. Each pytest command was
+  bounded by `timeout 300`; no C++ build, distill execution, commit or CI dispatch.
+  Actual compiler captures, package-specific audit coverage and cross-platform
+  workflow execution remain for CI.

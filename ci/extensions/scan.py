@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from generate import generate, reachable, ROOT
 from identity import scan_identities
 
@@ -43,7 +44,7 @@ def attribute(file, platform, search):
     return None
 
 
-def scan(platform, compiler, output_dir, headers_version):
+def scan(platform, compiler, output_dir, headers_version, label=None):
     output_dir.mkdir(parents=True, exist_ok=True)
     compiler = str(Path(shutil.which(compiler) or compiler).resolve())
     version = run([compiler, '--version']).stdout.splitlines()[0]
@@ -54,6 +55,14 @@ def scan(platform, compiler, output_dir, headers_version):
     reached = reachable(search)
     libraries = {'linux': ('glibc', 'libstdc++'), 'mingw': ('mingw-w64', 'libstdc++'), 'macos': ('macos-libc',)}[platform]
     provenance = [f'{version}; {triple}; {headers_version}']
+    if platform != 'macos':
+        sys.path.insert(0, str(ROOT / 'ci/library'))
+        from capture import capture
+        major = int(run([compiler, '-dumpfullversion', '-dumpversion']).stdout.split('.')[0])
+        dialect = 'c++23' if major >= 13 else 'c++20' if major >= 11 else 'c++17'
+        capture(compiler, dialect, [], 'extensions-' + (label or platform),
+                output_dir / ((label or platform) + '-library.json'), search=search,
+                reached=reachable(search, with_spellings=True), provenance=headers_version)
     violations = []
     for library in libraries:
         files = {p for p in reached if attribute(p, platform, search) == library}
@@ -74,10 +83,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--platform', choices=('linux', 'mingw', 'macos'), required=True)
     parser.add_argument('--compiler', default='g++')
+    parser.add_argument('--label')
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--headers-version', required=True)
     args = parser.parse_args()
     try:
-        scan(args.platform, args.compiler, args.output_dir, args.headers_version)
+        scan(args.platform, args.compiler, args.output_dir, args.headers_version, args.label)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, f'header scan failed: {error}\n')

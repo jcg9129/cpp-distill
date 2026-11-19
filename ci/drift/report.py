@@ -9,7 +9,8 @@ from urllib.request import Request, urlopen
 import availability
 import evidence
 import reproduction
-from common import arguments, profiles, validate, write
+import library
+from common import CLAIMS, arguments, profiles, validate, write
 from plan import claims
 from state import aggregate, body, decode, disposition, empty, transition, upstream_state
 
@@ -56,7 +57,7 @@ def prepare(batches, issues):
             raise ValueError('duplicate maintenance issue: ' + title)
         indexed[title] = issue
         parts = title.split(': ')
-        if len(parts) == 3 and parts[1] != 'upstream' and parts[2] in ('evidence', 'availability', 'reproduction'):
+        if len(parts) == 3 and parts[1] != 'upstream' and parts[2] in CLAIMS:
             persisted[(parts[1], parts[2])] = decode(issue['body'] or '', parts[1], parts[2])
     operations = []
     for batch in batches:
@@ -122,7 +123,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     selected = profiles(args.profiles)
     batches = []
-    modules = {'availability': availability, 'evidence': evidence, 'reproduction': reproduction}
+    modules = {'availability': availability, 'evidence': evidence, 'reproduction': reproduction, 'library': library}
     for claim in claims(args.claims):
         path = args.artifacts / ('drift-' + claim) / (claim + '.json')
         # Missing/invalid/partial artifacts cause no state changes to any claim.

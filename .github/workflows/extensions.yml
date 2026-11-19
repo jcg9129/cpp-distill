@@ -2,6 +2,7 @@
 name: A1 inventories and A2 identity enforcement
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -29,8 +30,10 @@ jobs:
           - label: mingw
             runner: windows-2025
           - label: macos-arm64
+            library: false
             runner: macos-15
           - label: macos-x86_64
+            library: false
             runner: macos-15-intel
     env:
       SCAN_IMAGE: ${{ matrix.image }}
@@ -56,8 +59,8 @@ jobs:
               apt-get install -y --no-install-recommends python3
               py=python3
             fi
-            "$py" ci/extensions/scan.py --platform linux --output-dir out/extensions --headers-version "$1"
-          ' bash "$SCAN_IMAGE"
+            "$py" ci/extensions/scan.py --platform linux --output-dir out/extensions --headers-version "$1" --label "$2"
+          ' bash "$SCAN_IMAGE" "$SCAN_LABEL"
       - name: Scan reachable MSYS2 MinGW-w64 and libstdc++ headers
         if: runner.os == 'Windows'
         shell: pwsh
@@ -69,7 +72,7 @@ jobs:
           $versions = & C:\msys64\usr\bin\bash.exe -lc 'pacman -Q | sed -n "/^mingw-w64-x86_64-\(gcc\|headers\|crt\)/p"'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
-          python ci/extensions/scan.py --platform mingw --compiler C:/msys64/mingw64/bin/g++.exe --output-dir out/extensions --headers-version ($versions -join '; ')
+          python ci/extensions/scan.py --platform mingw --compiler C:/msys64/mingw64/bin/g++.exe --output-dir out/extensions --headers-version ($versions -join '; ') --label $env:SCAN_LABEL
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Scan reachable macOS SDK headers
         if: runner.os == 'macOS'
@@ -82,6 +85,7 @@ jobs:
           path: |
             out/extensions/*.txt
             out/extensions/*-identity.json
+            out/extensions/*-library.json
           if-no-files-found: error
   merge:
     needs: scan

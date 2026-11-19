@@ -2,6 +2,7 @@
 """Textual A1 inventory: deliberately include inactive defines and undefines."""
 import argparse
 from datetime import date
+from functools import cache
 from pathlib import Path
 import re
 
@@ -42,16 +43,30 @@ def includes(text):
         r'^\s*#\s*(include_next|include)\s*([<"])([^>"\n]+)[>"]', directive_text(text), re.M)]
 
 
-def reachable(search, standard_file=ROOT / "data/names/standard-headers.txt"):
-    """Follow all textual includes, active or not, including include_next."""
+def reachable(search, standard_file=ROOT / "data/names/standard-headers.txt", *, with_spellings=False):
+    """Follow all textual includes, active or not, including include_next.
+
+    By default return A1's set of resolved files. With with_spellings, return
+    an audit-key -> resolved-file mapping, retaining each search index and
+    unresolved relative spelling, including aliases through symlinked dirs.
+    """
     search = [Path(p).resolve() for p in search]
-    queue, seen, reached = [], set(), set()
+    queue, seen, reached = [], set(), {} if with_spellings else set()
+    def location(path, index):
+        if with_spellings and not path.is_relative_to(search[index]):
+            # An absolute quoted operand can name another search directory.
+            index = next((i for i, directory in enumerate(search)
+                          if path.is_relative_to(directory)), None)
+            if index is None:
+                raise ValueError('reachable header outside compiler search paths: ' + str(path))
+        return (path if with_spellings else path.resolve(), index)
+    @cache
     def resolve(name, begin=0, local=None, inherited=-1):
         if local is not None and (local / name).is_file():
-            return ((local / name).resolve(), inherited)
+            return location(local / name, inherited)
         for i in range(begin, len(search)):
             if (search[i] / name).is_file():
-                return ((search[i] / name).resolve(), i)
+                return location(search[i] / name, i)
         return None
     for name in (s.strip() for s in standard_file.read_text().splitlines() if s.strip() and not s.startswith('#')):
         found = resolve(name)
@@ -60,14 +75,22 @@ def reachable(search, standard_file=ROOT / "data/names/standard-headers.txt"):
     for i, directory in enumerate(search):
         pb = directory / 'ext/pb_ds'
         if pb.is_dir():
-            queue.extend((p.resolve(), i) for p in pb.rglob('*') if p.is_file())
+            queue.extend(location(p, i) for p in pb.rglob('*') if p.is_file())
+    @cache
+    def header_includes(resolved):
+        return includes(resolved.read_bytes().decode('utf-8', errors='replace'))
+
     while queue:
         file, index = queue.pop()
         if (file, index) in seen:
             continue
         seen.add((file, index))
-        reached.add(file)
-        for kind, quoted, name in includes(file.read_bytes().decode('utf-8', errors='replace')):
+        resolved = file.resolve() if with_spellings else file
+        if with_spellings:
+            reached[f'{index}/' + file.relative_to(search[index]).as_posix()] = resolved
+        else:
+            reached.add(file)
+        for kind, quoted, name in header_includes(resolved):
             found = resolve(name, index + 1 if kind == 'include_next' else 0,
                             file.parent if quoted and kind == 'include' else None, index)
             if found:

@@ -150,6 +150,12 @@ these, and only these; the report lists each one an output depended on, and
   deletion of unused enums or templates that could otherwise seed an
   evaluation cache. The report lists A7 for every pruned artifact.
 
+- **A9** (L1c, user, 2026-11-18) In default library configuration (§4.3.3),
+  the `__cpp_lib_*` macros defined after any sequence of standard-list includes
+  equal the union of the per-header snapshots, with their recorded values.
+  Different values for a name make that name unknown. The report lists A9
+  whenever a resolution relies on these header-derived facts.
+
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
 
@@ -346,6 +352,10 @@ recorded per name with its provenance: compiler builtin, startup header
 `-H` starts tracing after it), or command operation. Any other header
 processed before the source is a profile error.
 
+Header-defined library feature macros have a separate per-header CI snapshot,
+configuration audit and cross-build agreement file (§4.3.3). They do not add
+source-entry compiler facts.
+
 **Special builtins** (P1-1, P1-2, P2-5). An embedded registry per compiler
 family and version, taken from the compiler's source (`libcpp/init.cc` for
 GCC): `__LINE__`, `__FILE__`, `__COUNTER__`, `__has_include`, `__has_embed`,
@@ -473,7 +483,9 @@ those aliases, so `--judge codeforces` keeps working.
      Function-like macros and all others are presence-only and reported so;
    - then `__has_include` for the headers the A1 lists rely on and library
      version macros, each read after the library header that defines it; these
-     lines are diagnostics and never validate A1 inventories (J1-9).
+     lines are diagnostics and never validate A1 inventories (J1-9). The L1c
+     companion (§4.3.3) additionally prints and compares `__cpp_lib_*` values
+     after each header in a separate TU; it remains diagnostic only.
 3. The expected output is produced in CI by compiling and running the probe
    with the snapshot compiler under the profile's command, in the job that
    produces the snapshot, and ships as `<name>-probe-expected.txt`, so both
@@ -553,19 +565,20 @@ Native-model names are already `unknown` in snapshots, so host CPUs do not
 enter them; a sweep or host-check failure is a reproduction failure. Any other
 difference, a skipped probe, or a missing artifact is a failure, never a pass.
 
-**Schedule.** Evidence and availability weekly; reproduction monthly; both by
+**Schedule.** Evidence, availability and L1c library data (§4.3.3) weekly;
+reproduction monthly; all by
 `workflow_dispatch` too. Fetch, download and build jobs have read-only
 permissions and treat fetched text and binaries as untrusted data (never
 interpolated into shell or scripts). A separate reporting job alone has
 `issues: write`.
 
 **Reporting.** One issue per profile and claim (`drift: <profile>:
-evidence|availability|reproduction`), plus one aggregated issue when a shared
+evidence|availability|reproduction|library`), plus one aggregated issue when a shared
 upstream (Homebrew, GitHub, Docker Hub) fails for several profiles. The issue
 body carries a machine-readable state block (consecutive failures per source,
 last success), so history survives ephemeral runners. Comments only on state
 transitions. Availability issues close automatically after a verified
-recovery; evidence and reproduction issues stay open until a human closes
+recovery; evidence, reproduction and library issues stay open until a human closes
 them. A cancelled, skipped or partial run changes no state. Runs are serialized
 (`concurrency`).
 
@@ -574,6 +587,183 @@ without activity, so the run cannot vouch for itself. The user-side signal is
 independent of CI: `distill --judge X` prints a stderr note when the profile's
 `updated` is older than 180 days, suggesting `--judge-check` (§4.3.1). It does
 not change any fact or exit code.
+
+### 4.3.3 Library feature-test macro facts (L1c)
+
+Approved 2026-11-18 after two adversarial reviews; see
+[`reviews/2026-11-18-library-feature-macros.md`](reviews/2026-11-18-library-feature-macros.md).
+This subsection specifies the resolver work for part B. Part A supplies design,
+CI producers, comparisons and diagnostic tooling; it does not enable facts in
+the resolver. `__cpp_lib_*` names originate in library headers and are separate
+from the source-entry compiler snapshot and the identity registry.
+
+**Profile data.** For each profile, CI uses the same snapshot compiler and
+exact `-x c++ -std=<std> <flags>` argv, including ordered macro operations.
+For every C/C++ standard-list header, `bits/stdc++.h`, `ext/rope` and every
+installed file below `ext/pb_ds/`, a fresh TU contains only `#include <H>`.
+Its `-dM -E` output supplies the feature names and values. A missing header,
+a preprocessing failure and a successful header defining no feature macros
+are distinct states; failed output never proves absence. Internal object-like
+aliases (GCC 14+ `__glibcxx_*`) are expanded through the dump to their integer
+values; unfamiliar replacements remain recorded but unusable.
+
+`ci/profiles/snapshot.py` additionally produces `<profile>-library.json` beside
+the existing outputs. `ci/extensions/scan.py` produces analogous build reports
+using the same reachable-header closure as A1/A2. This includes GCC 13 through
+its Ubuntu and WinLibs profile builds, GCC 14–16, current MinGW, and the older
+AlmaLinux build; macOS libc-only rows are explicitly excluded. Compatibility
+scans select a supported ISO dialect by GCC major; profile scans always retain
+the profile's exact dialect and flags. Adding a profile or eligible compatibility
+matrix row automatically adds a required input to the merger.
+
+**Configuration audit.** Analyse actual installed headers, not `version.def`
+alone: lexical `#if`/`#ifdef`/`#ifndef` stacks, including nested inactive
+branches and previous `#elif` tests controlling `#else`. This handles GCC 13's
+distributed definitions and GCC 14+'s generated `bits/version.h`. For root H
+(a fresh TU containing only `#include <H>`), each literal
+(H, name, value) pair is config-independent only when every controlling
+dependency is compiler-predefined (including `__cplusplus`/`__STRICT_ANSI__`),
+verified include-guard/own-`#ifndef` plumbing, verified internal feature
+requests, or an explicit reviewed library-macro candidate. Request and internal
+value macros are followed through all writes reachable from H and their
+conditions; a prefix alone grants no exemption. Undefined request alternatives
+are known false only when installed writes establish their internal request
+role. Include-edge conditions on **all** paths from H to the definition's file
+propagate transitively, including conditional alternatives and cycles. Paths
+from other roots cannot contribute. Classification is per root and literal
+value; it is never a library-wide property of a name. Compiler-looking names
+written in H's closure or overridden by command/startup definitions lose
+compiler-input status. Trusted compiler definitions are retained so changes to
+their replacements are detectable too.
+
+The embedded candidate allowlist in `ci/library/audit.py` is exactly
+`_GLIBCXX_FLOAT_IS_IEEE_BINARY32` and `_GLIBCXX_DOUBLE_IS_IEEE_BINARY64`.
+Neither is assumed pure: every scanned definition/undefinition, replacement
+and controlling condition must pass the compiler-only dependency audit before
+it is admitted. Their installed definitions and conditions remain in the
+review artifact. Build switches (`_GLIBCXX_USE_CXX11_ABI`, `_GLIBCXX_HAS_GTHREADS`,
+`_GLIBCXX_HOSTED`, `_GLIBCXX_USE_*`, `_GLIBCXX_HAVE_*`, availability, threads,
+locale, etc.) and unrecognised dependencies fail closed. Native-model names
+are excluded from trusted compiler inputs under native flags. Unsupported
+replacement forms and unresolved computed includes also fail closed; they
+may reduce coverage and are visible in reports. Whole-file guards and nested
+`#ifndef X` / `#define X` wrappers carry textual evidence. All installed writes must have the matching guard role and
+identical file contents (aliases are allowed); conflicting writes,
+undefinitions and command/startup overrides revoke guard trust. Only the
+wrapper's actual negative test is exempted, never arbitrary positive/value
+tests of the same name. This also handles C wrappers such as
+`_GLIBCXX_STDLIB_H`, whose guard is inside an outer conditional, and whole-file
+`_GLIBCXX_CMATH` guards surrounding `#include_next`. For a negative guard test
+before entering another file, the audit proves that no guard writer is
+reachable from H without that include edge. The guard is then unset on first
+traversal in the fresh TU. Possible earlier/sibling inclusion defeats that
+proof and remains untrusted. There is no unconditional promotion of library
+configuration macros.
+
+Unparseable files remain in the full audit with their reasons. A malformed file,
+computed include or unsupported absolute include reachable from H taints every
+feature/absence result for H; unreachable failures do not affect it. Recoverable
+literal includes in a malformed file still contribute reachability. Literal
+include operands and `__has_include`/`__has_include_next` arguments are never
+macro-name tokens. The availability predicates themselves remain untrusted:
+the audit does not record verified header-presence tests as compiler inputs.
+Per-header preprocessing status remains independent.
+
+Capture retains search-index/include-spelling keys, including symlink aliases.
+Literal edges follow compiler search order, quoted-include directory and
+`include_next` search position. Reading and include parsing are shared by
+resolved file; condition identifiers are cached. Per-root inbound conditions
+and integer alias values propagate with a changed-node queue. Request/value
+dependencies are expanded once per strongly connected component; every member
+of a cyclic component, including self-loops, remains unrecognised for its
+dependents. Tests check per-root propagation against a small-graph oracle,
+request cycles exhaustively, compiler-call/header-snapshot behavior, and compact
+round trips. Each capture logs discovery, audit, preprocessing, writing and
+total times plus header-key and `-dM` probe counts. Each available requested
+header is preprocessed once.
+
+`ci/library/merge.py` requires reports from the complete profiles and extensions
+matrices and never unions old facts into fresh results. Schema/generator 2
+separates the compact baseline `data/library/library.json` from the uploaded
+`library-evidence.json`. The latter retains complete original build reports,
+including all definitions, conditions, include paths, compiler inputs and
+per-root/per-value classifications. The baseline retains build metadata,
+per-header snapshots/status, per-major/root classification (`independent`,
+permitted `values`, sorted dependency names) and per-header agreement
+(`defined`, `absent`, `unknown` with short reasons). Each compact build also
+retains a full `evidence_sha256`: SHA-256 of its entire report encoded as ASCII
+JSON with sorted keys, separators `(',', ':')` and no trailing newline. Any
+evidence change therefore fails comparison even when facts do not change.
+
+Sorted content-address tables share repeated snapshots, classification maps,
+common dependency sets and agreement records. References use 16 hexadecimal
+digest digits with collision detection; name maps may use deterministic,
+acyclic base-plus-delta records. One table entry occupies one JSON line. The
+format and expansion helpers are documented in `ci/library/README.md`; compact
+records are reviewable without duplicating library-wide evidence for every
+header/build. An approximate profile may use a positive (H, name, value) only
+if that literal pair is independent for H in every build of its major and all
+snapshots agree. All dialects/flags participate. Absence requires all possible
+definitions reachable from H to be independent; a complete untainted closure
+with no definition also proves absence. Unknown, dependent, unavailable or
+disagreeing entries remain explicit. A reproduced profile uses its own snapshot,
+including build-dependent facts, subject to the native model's uncertainty.
+
+**Default library configuration.** Track a separate, monotone Boolean at every
+point. It holds iff on every path to that point there has been no user
+`#define`/`#undef` of any reserved name, macro-stack `push_macro`/`pop_macro`
+pragma, system include outside the standard-header list, or `#pragma GCC
+target`, `optimize`, `push_options`, `pop_options`. Macro-stack pragmas
+continue to disable resolution. At entry, extra user-command reserved `-D`/`-U`,
+`-include` or `-imacros` beyond the profile's own flags lose the Boolean;
+profiles whose own flags have `-include` or `-imacros` get no library facts.
+The existing command model rejects these include options; this rule supplies
+no new permission to accept them. Joins take logical AND independently of
+macro-value joins; losing the Boolean on a path cannot be repaired by a later
+matching definition, undefinition or header include. Dead paths have no effect.
+
+**Include transition (part B).** A standard-list spelling must resolve to an
+actual file inside the compiler's own system include directories. A user file
+shadowing `<charconv>` never qualifies, even when marked `-isystem`. While
+default library configuration holds, and usable data exists for H:
+
+- Each usable positive `__cpp_lib_*` fact in snap(H) becomes defined with its
+  value. A name proven not to be defined by H keeps its previous state.
+- Each unusable, disagreeing or conflicting name becomes unknown. Values
+  accumulated from previous headers must agree: different snapshot values for
+  the same name make it unknown; a later equal include cannot erase a conflict.
+- All other reserved names follow today's invalidation and identity rules.
+
+Otherwise today's rules apply: all `__cpp_lib_*` names become unknown. These
+facts are header transitions, never initial facts or identity exemptions.
+A9 asserts the union rule for sequences of qualifying includes; report it when
+relied on, alongside the provenance of the snapshots and classification.
+
+**CI and drift.** `library.yml` runs on relevant PR changes and by dispatch,
+calls both producer workflows, regenerates the combined data and compares it
+byte for byte with the committed baseline. Missing baseline/input, new/removed
+name, changed value, condition, dependency, classification or agreement fails
+with a unified diff. It uploads both `library-generated/library.json` and
+`library-generated/library-evidence.json` even on a comparison failure. Review
+both files, then import only the compact `library.json` byte for byte in a
+follow-up commit; no baseline is fabricated locally. The weekly drift workflow
+runs the full check as the separate `library` claim, with the existing complete
+result protocol and per-profile stateful issues. Evidence/availability remain
+weekly and source-entry cold reproduction remains monthly. Neither workflow
+commits data or advances a profile's human review date.
+
+**Live judge diagnostic.** The `ci/library/probe.py` companion to §4.3.1's
+judge probe emits a self-contained TU for a selected standard-list header,
+printing the known `__cpp_lib_*` universe's values/absence after that header.
+Submit each header as a separate TU to avoid contamination by prior includes.
+It adds no diagnostic library includes. `--check` reports missing/extra records,
+changed values and header availability differences against that build's
+snapshot. Unknown new macro spellings cannot be discovered by a submitted C++
+program; CI's complete dump discovers them. A preprocessing-error snapshot has
+no successful expectation. This diagnostic uses its own `DLIB` protocol and
+does not change the existing DPROBE v1 manifest or shipped expected output.
+Like `--judge-check`, live observations never promote facts; part B may expose
+this companion through the CLI without changing that restriction.
 
 ### 4.4 Inliner (text level)
 
@@ -682,6 +872,9 @@ requirements* of a resolution (§4.6):
 - any other non-reserved name: *undefined* with a profile (A5), *unknown*
   otherwise.
 
+L1c header facts (§4.3.3) are never initial macro facts. Its separate default
+library Boolean starts from the command restrictions there.
+
 States reached later from `#define`/`#undef` in the source are *derived*;
 they are not compared with any compiler probe (R4-C).
 
@@ -690,6 +883,10 @@ without a profile; `#ifdef LOCAL` (tested, never defined) resolves only with a
 profile.
 
 **Transitions:**
+
+The L1c default-library Boolean and feature-macro exception are specified in
+§4.3.3; their implementation is part B. The other transitions below remain
+unchanged.
 
 - `#define`/`#undef` in an active region set the state.
 - An include of a header on the **standard-header list** (C and C++ standard
@@ -709,7 +906,7 @@ profile.
   C++ standards specify (one embedded list, the same one A1 refers to) ∪ the
   extension list for the library (with a profile, its `library`; without, the
   union of all lists). An include never makes a macro *defined*, only
-  *unknown* (R3-1).
+  *unknown* (R3-1), except for the L1c transition in §4.3.3.
 - An include of any other system header: every macro becomes *unknown*,
   including user macros (R3-2).
 - `#pragma GCC target`, `optimize`, `push_options`, `pop_options`: feature
@@ -1259,7 +1456,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

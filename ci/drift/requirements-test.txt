@@ -1,2 +1,3 @@
-# YAML parsing for workflow wiring tests only; production scripts use the standard library.
+# YAML parsing for workflow wiring and L1c matrix planning; pytest for L1c self-tests.
 PyYAML==6.0.3
+pytest==8.4.2
