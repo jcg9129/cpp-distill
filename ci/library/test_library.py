@@ -143,6 +143,63 @@ def test_request_and_include_configuration_propagates_transitively():
         '0/public': '#include COMPUTED'})['unrecognised']
 
 
+@pytest.mark.parametrize('text,reason', [
+    ('#ifdef PB_DS_CLASS_C_DEC', 'unterminated conditional'),
+    ('#else', 'unmatched else'),
+    ('#elif 1', 'unmatched elif'),
+    ('#endif', 'unmatched endif'),
+    ('#if 1\n#else\n#else\n#endif', 'unmatched else'),
+    ('#if 1\n#else\n#elif 1\n#endif', 'unmatched elif'),
+    ('#define 123', 'malformed macro write'),
+    ('#undef X extra', 'malformed macro write'),
+])
+def test_isolated_unparsed_file_is_listed_without_taint(text, reason):
+    file = '0/ext/pb_ds/detail/broken.hpp'
+    data = audit('#define __cpp_lib_test 1L', {file: text})
+    assert data['unparsed'] == {file: file + ': ' + reason}
+    assert data['macros']['__cpp_lib_test']['independent']
+
+
+@pytest.mark.parametrize('operand', ['<broken>', '"broken"', '<ext/broken>'])
+@pytest.mark.parametrize('kind', ['include', 'include_next'])
+def test_included_unparsed_file_taints_all_results(operand, kind):
+    file = '0/ext/broken'
+    data = audit('#define __cpp_lib_test 1L\n#define __cpp_lib_other 2L', {
+        '0/ext/parent': f'#if 0\n#{kind} {operand}\n#endif',
+        file: '#if 1'})
+    # Bare names resolve locally; ext/broken resolves through the search index.
+    dependency = '<unparsed-file:' + file + '>'
+    assert file in data['unparsed']
+    for entry in data['macros'].values():
+        assert not entry['independent']
+        assert dependency in entry['dependencies']
+        assert dependency in entry['unrecognised']
+
+
+def test_include_from_unparsed_file_still_detects_unparsed_target():
+    data = audit('#define __cpp_lib_test 1L', {
+        '0/parent': '#else\n#include <broken>', '0/broken': '#if 1'})
+    assert set(data['unparsed']) == {'0/parent', '0/broken'}
+    assert data['macros']['__cpp_lib_test']['unrecognised'] == ['<unparsed-file:0/broken>']
+
+
+@pytest.mark.parametrize('mention', ['__cpp_lib_hidden', '__glibcxx_hidden',
+                                    '/* __cpp_lib_ */', '/* __glibcxx_ */'])
+def test_unparsed_file_mentioning_feature_tokens_taints_all_results(mention):
+    file = '0/broken'
+    data = audit('#define __cpp_lib_test 1L', {
+        file: '#if 1\n#define ' + mention + ' 2L'})
+    assert file in data['unparsed']
+    for entry in data['macros'].values():
+        assert not entry['independent']
+        assert entry['dependencies'] == ['<unparsed-file:0/broken>']
+        assert entry['unrecognised'] == ['<unparsed-file:0/broken>']
+    if mention == '__cpp_lib_hidden':
+        # Partial writes supply no values or definitions that could be trusted.
+        assert data['macros'][mention]['definitions'] == []
+        assert data['macros'][mention]['values'] == []
+
+
 def test_conflicting_or_nonliteral_definitions_and_undef_fail_closed():
     for text in ['#define __cpp_lib_test OTHER', '#define __cpp_lib_test(x) x',
                  '#define __cpp_lib_test 1L\n#undef __cpp_lib_test']:
@@ -202,6 +259,12 @@ def test_diff_all_data_changes_including_new_dependency(tmp_path, capsys):
     changed['versions']['14']['dependent']['__cpp_lib_new'] = ['_GLIBCXX_NEW']
     assert not check(json.dumps(changed, indent=2) + '\n', file)
     assert '_GLIBCXX_NEW' in capsys.readouterr().out
+    original['builds']['a']['audit'] = audit('#define __cpp_lib_test 1L')
+    file.write_text(json.dumps(original, indent=2) + '\n')
+    changed = copy.deepcopy(original)
+    changed['builds']['a']['audit'] = audit('#define __cpp_lib_test 1L', {'0/broken': '#if 1'})
+    assert not check(json.dumps(changed, indent=2) + '\n', file)
+    assert '0/broken: unterminated conditional' in capsys.readouterr().out
     assert not check('{}\n', tmp_path / 'absent')
     file.write_bytes(b'{}\r\n')
     assert not check(b'{}\n', file)
@@ -213,6 +276,8 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
     (search / 'ext/pb_ds').mkdir(parents=True)
     for name in ['charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp']:
         (search / name).write_text('')
+    (search / 'charconv').write_text('#define __cpp_lib_test 1L')
+    (search / 'ext/pb_ds/tree.hpp').write_text('#ifdef PB_DS_CLASS_C_DEC')
     calls = []
     def compiler(executable, args, source='', check=True):
         calls.append((args, source, check))
@@ -226,17 +291,21 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
             out = '# 0 "<built-in>"\n#define __AVX2__ 1\n#define __cplusplus 202302L\n'
         else:
             out = '#define __cpp_lib_test 1L\n' if 'charconv' in source else ''
-        return subprocess.CompletedProcess(args, 1 if 'broken' in source else 0, out, '')
+        return subprocess.CompletedProcess(args, 1 if 'broken' in source or 'tree.hpp' in source else 0, out, '')
     flags = ['-O2', '-DX=1', '-UX', '-march=native']
     with patch('capture.command', side_effect=compiler), patch('capture.header_names',
-            return_value=['charconv', 'empty', 'missing', 'broken']):
+            return_value=['charconv', 'empty', 'missing', 'broken', 'ext/pb_ds/tree.hpp']):
         path = capture('/fixture/g++', 'c++23', flags, 'fixture', tmp_path / 'capture.json',
-                       search=[search], reached=set())
+                       search=[search], reached={search / 'charconv', search / 'ext/pb_ds/tree.hpp'})
     data = json.loads(path.read_text())
     assert data['headers']['charconv']['macros'] == {'__cpp_lib_test': '1L'}
     assert data['headers']['empty'] == dict(status='ok', macros={})
     assert data['headers']['missing']['status'] == 'missing'
     assert data['headers']['broken']['status'] == 'error'
+    assert data['headers']['ext/pb_ds/tree.hpp'] == dict(status='error', macros={})
+    assert data['audit']['unparsed'] == {
+        '0/ext/pb_ds/tree.hpp': '0/ext/pb_ds/tree.hpp: unterminated conditional'}
+    assert data['audit']['macros']['__cpp_lib_test']['independent']
     for args, source_text, _ in calls:
         if '-dM' in args:
             assert args == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']

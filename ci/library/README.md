@@ -42,6 +42,11 @@ the trusted compiler definitions so changes to dependency replacements are visib
 native flags. Unresolved computed includes taint the audit; the existing A1
 reachability limitation is not silently taken as proof of absence. The merger
 requires all audited definitions for an absence fact to be independent.
+Files with unparseable conditional structure or macro writes are retained in
+`audit.unparsed` with their reasons. An unparsed file taints all feature results
+with `<unparsed-file:PATH>` if another audited file includes it or its text
+contains `__cpp_lib_` or `__glibcxx_`; otherwise it is listed without taint.
+Per-header preprocessing snapshots retain their independent `ok`/`error` status.
 
 Failed acquisition or audit leaves incomplete inputs and fails the check. A
 baseline difference still uploads the generated output and prints a unified

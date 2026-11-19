@@ -37,26 +37,32 @@ def own_guard(name, conditions):
     return all(name not in identifiers(re.sub(negative, '1', c)) for c in conditions)
 
 
-def parse(text, file):
-    """Keep previous elif tests for else/elif; no expression evaluation."""
+def directives(text):
+    """Read directives independently of conditional structure."""
     cleaned = directive_text(text)
     # A raw literal can contain newlines that look like directives. Retain
     # quoted include operands, but erase raw literals before line matching.
     cleaned = re.sub(r'(?:u8|u|U|L)?R"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"',
                      '""', cleaned, flags=re.S)
     lines = cleaned.splitlines()
-    directives = []
+    result = []
     for line in lines:
         match = re.match(r'^\s*#\s*(' + NAME + r')\b(.*)', line)
         if match:
-            directives.append((match[1], match[2].strip()))
+            result.append((match[1], match[2].strip()))
+    return result
+
+
+def parse(text, file):
+    """Keep previous elif tests for else/elif; no expression evaluation."""
+    instructions = directives(text)
     guard = None
-    if len(directives) > 1 and directives[0][0] == 'ifndef':
-        candidate = directives[0][1]
-        if directives[1] == ('define', candidate) or directives[1] == ('define', candidate + ' 1'):
+    if len(instructions) > 1 and instructions[0][0] == 'ifndef':
+        candidate = instructions[0][1]
+        if instructions[1] == ('define', candidate) or instructions[1] == ('define', candidate + ' 1'):
             # Only whole-file guards, never a configuration #ifndef.
             depth, end, alternative = 0, None, False
-            for i, (op, _) in enumerate(directives):
+            for i, (op, _) in enumerate(instructions):
                 if op in ('if', 'ifdef', 'ifndef'):
                     depth += 1
                 elif op in ('else', 'elif', 'elifdef', 'elifndef') and depth == 1:
@@ -66,28 +72,32 @@ def parse(text, file):
                     if depth == 0:
                         end = i
                         break
-            if end == len(directives) - 1 and not alternative:
+            if end == len(instructions) - 1 and not alternative:
                 guard = candidate
-    stack, writes, includes = [], [], []
-    for op, body in directives:
+    stack, seen_else, writes, includes = [], [], [], []
+    for op, body in instructions:
         if op in ('if', 'ifdef', 'ifndef'):
             expression = body if op == 'if' else ('!' if op == 'ifndef' else '') + 'defined(' + body + ')'
             stack.append([expression])
+            seen_else.append(False)
         elif op in ('elif', 'elifdef', 'elifndef', 'else'):
-            if not stack:
+            if not stack or seen_else[-1]:
                 raise ValueError(file + ': unmatched ' + op)
-            if op != 'else':
+            if op == 'else':
+                seen_else[-1] = True
+            else:
                 stack[-1].append(body if op == 'elif' else 'defined(' + body + ')')
         elif op == 'endif':
             if not stack:
                 raise ValueError(file + ': unmatched endif')
             stack.pop()
+            seen_else.pop()
         elif op in ('define', 'undef', 'include', 'include_next'):
             conditions = [c for branch in stack for c in branch]
             deps = set().union(*(identifiers(c) for c in conditions)) if conditions else set()
             if op in ('define', 'undef'):
                 match = re.fullmatch('(' + NAME + r')(.*)', body)
-                if not match:
+                if not match or (op == 'undef' and match[2].strip()):
                     raise ValueError(file + ': malformed macro write')
                 name, value = match.groups()
                 writes.append(dict(name=name, value=value.strip() if op == 'define' else None,
@@ -104,10 +114,22 @@ def classify(files, predefines, blocked=frozenset()):
     """files maps stable search-directory-relative paths to installed contents.
 
     Include-edge conditions and request-macro writes participate transitively.
-    Unknown computed includes conservatively taint every definition. This is
-    intentionally stricter than parsing version.def or matching macro prefixes.
+    Unknown computed includes and potentially relevant unparsed files taint
+    every definition. This is intentionally stricter than parsing version.def
+    or matching macro prefixes.
     """
-    parsed = {f: parse(t, f) for f, t in sorted(files.items())}
+    parsed, unparsed, unparsed_names = {}, {}, set()
+    for file, text in sorted(files.items()):
+        try:
+            parsed[file] = parse(text, file)
+        except ValueError as error:
+            unparsed[file] = str(error)
+            unparsed_names.update(re.findall(r'\b__cpp_lib_[A-Za-z_0-9]+\b', text))
+            # Discard partial writes and guard claims. Recover only include
+            # operands so an unparsed source can still expose an incoming edge
+            # to another unparsed file; its conditions are unknown.
+            parsed[file] = ([], [(op, body, set(), None) for op, body in directives(text)
+                                if op in ('include', 'include_next')], None)
     all_writes = [w for ws, _, _ in parsed.values() for w in ws]
     writes = {}
     for w in all_writes:
@@ -126,13 +148,18 @@ def classify(files, predefines, blocked=frozenset()):
             include_evidence.append(dict(file=file, kind=kind, operand=operand, dependencies=sorted(deps), conditions=conditions))
             match = re.fullmatch(r'[<"]([^>"\n]+)[>"]', operand)
             if not match:
-                computed.update(deps | {'<computed-include>'})
+                if file not in unparsed:
+                    computed.update(deps | {'<computed-include>'})
                 continue
             local = str(Path(file).parent / match[1]).replace('\\', '/')
             targets = set(by_name.get(match[1], [])) | ({local} if local in files else set())
             for target in targets - {file}:
                 inbound[target].update(deps - guards)
                 edges.append((file, target))
+    included = {target for _, target in edges}
+    unknown = computed | {'<unparsed-file:' + file + '>' for file in unparsed
+                          if file in included or '__cpp_lib_' in files[file]
+                          or '__glibcxx_' in files[file]}
     # Propagate ancestry to a fixed point; edges are indexed once, not found by
     # repeatedly comparing every include with every reachable header.
     changed = True
@@ -178,17 +205,22 @@ def classify(files, predefines, blocked=frozenset()):
                     bad.update(dependencies(w['value'], seen | {name}))
                 else:
                     bad.add(name)
-            for dep in set(w['dependencies']) | inbound[w['file']] | computed:
+            for dep in set(w['dependencies']) | inbound[w['file']] | unknown:
                 bad.update(dependencies(dep, seen | {name}))
         return bad
 
     result = {}
-    for name, entries in sorted(writes.items()):
+    for name in sorted(writes.keys() | unparsed_names):
         if not name.startswith('__cpp_lib_'):
             continue
-        bad, deps = set(), set()
+        entries = writes.get(name, [])
+        bad, deps = set(), set(unknown)
+        # Names seen only in unparsed text have no trusted definitions, but
+        # still need explicit taint (including for absence agreement).
+        for dep in unknown:
+            bad.update(dependencies(dep))
         for w in entries:
-            direct = set(w['dependencies']) | inbound[w['file']] | computed
+            direct = set(w['dependencies']) | inbound[w['file']] | unknown
             deps.update(direct)
             for dep in direct:
                 bad.update(dependencies(dep))
@@ -205,7 +237,7 @@ def classify(files, predefines, blocked=frozenset()):
                             unrecognised=sorted(bad), definitions=entries)
     support = {n: entries for n, entries in sorted(writes.items()) if n in PURE_CANDIDATES or n.startswith('__glibcxx_')}
     return dict(generator=VERSION, pure_candidates=sorted(PURE_CANDIDATES), macros=result,
-                support=support, includes=include_evidence,
+                support=support, includes=include_evidence, unparsed=unparsed,
                 compiler_inputs={n: predefines[n] if isinstance(predefines, dict) else None
                                  for n in sorted(set(predefines) & compiler)},
                 blocked_inputs=sorted(blocked))

@@ -643,6 +643,11 @@ replacement forms and unresolved computed includes also fail closed; they
 may reduce coverage and are visible in reports. Whole-file guards, internal
 request/value definitions and the two candidate macros carry textual evidence.
 There is no unconditional promotion of library configuration macros.
+Unparseable files remain in the audit with their failure reasons instead of
+aborting capture. If another audited file includes one (using the audit's edge
+resolution), or its text contains `__cpp_lib_` or `__glibcxx_`, all feature results
+become config-dependent with `<unparsed-file:PATH>`; isolated files without those
+tokens are listed without taint. Per-header preprocessing status is independent.
 
 `ci/library/merge.py` requires reports from the complete profiles and extensions
 matrices. `data/library/library.json` (generator/schema version 1) retains
