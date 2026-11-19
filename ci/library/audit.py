@@ -10,12 +10,53 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / 'ci/extensions'))
 from generate import directive_text
 
-VERSION = 2
+VERSION = 3
 NAME = r'[A-Za-z_][A-Za-z_0-9]*'
 INTEGER = re.compile(r'(?:0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\Z')
 # Candidates, never unconditional exemptions: verify every reachable write.
 PURE_CANDIDATES = frozenset({'_GLIBCXX_FLOAT_IS_IEEE_BINARY32',
                              '_GLIBCXX_DOUBLE_IS_IEEE_BINARY64'})
+HEADER_TEST = re.compile(r'\b(__has_include(?:_next)?)\s*\(\s*(<[^>\n]+>|"[^"\n]+")\s*\)')
+
+
+def header_test_key(predicate, operand, file):
+    # Quote lookup and include_next depend on the search-relative source file.
+    return predicate + '(' + operand + ')@' + file.split('/', 1)[1]
+
+
+@lru_cache(maxsize=8192)
+def condition_inputs(expression, file):
+    tests = set()
+    def replace(match):
+        tests.add(header_test_key(*match.groups(), file))
+        return '0'
+    rest = HEADER_TEST.sub(replace, expression)
+    return frozenset(tests | set(identifiers(rest)))
+
+
+def apply_trust(audit, inputs):
+    """Project stored SCC requirements using explicitly justified build facts.
+
+    Retaining the unfiltered requirements makes cross-build revocation possible
+    without reparsing headers or rerunning the per-root graph audit at merge.
+    """
+    audit['trusted_inputs'] = inputs
+    projections = {}
+    for header, root in audit['roots'].items():
+        used = set()
+        for entry in root['macros'].values():
+            used.update(entry['requirements'])
+            for record in [entry, *entry['pairs'].values()]:
+                key = tuple(record['requirements'])
+                if key not in projections:
+                    projections[key] = sorted(set(key) - inputs.keys())
+                record['unrecognised'] = projections[key]
+                record['independent'] = not projections[key]
+        root['trusted_inputs'] = {n: rule for n, rule in inputs.items() if n in used}
+        for name, requirements in root.get('condition_macros', {}).items():
+            if not (set(requirements) - inputs.keys()):
+                root['trusted_inputs'][name] = dict(rule='independent-library-macro', root=header)
+    return audit
 
 
 @lru_cache(maxsize=8192)
@@ -149,7 +190,7 @@ def parse(text, file):
         elif op in ('define', 'undef', 'include', 'include_next'):
             conditions = [('!(' + c + ')') if otherwise or i < len(branch) - 1 else c
                           for branch, otherwise in zip(stack, seen_else) for i, c in enumerate(branch)]
-            deps = set().union(*(identifiers(c) for c in conditions)) if conditions else set()
+            deps = set().union(*(condition_inputs(c, file) for c in conditions)) if conditions else set()
             if op in ('define', 'undef'):
                 match = re.fullmatch('(' + NAME + r')(.*)', body)
                 if not match or (op == 'undef' and match[2].strip()):
@@ -181,7 +222,7 @@ def propagate(evidence, successors):
                 queued.add(target)
 
 
-def dependency_expander(edges, seeds):
+def dependency_expander(edges, seeds, grounded=frozenset()):
     """Expand once per SCC; cyclic request/value plumbing fails closed."""
     indices, low, stack, active, results = {}, {}, [], set(), {}
     def connect(name):
@@ -209,7 +250,7 @@ def dependency_expander(edges, seeds):
             for dep in edges.get(member, ()):
                 if dep not in members:
                     common.update(results[dep])
-        if len(members) > 1 or name in edges.get(name, ()):
+        if (len(members) > 1 or name in edges.get(name, ())) and not members <= grounded:
             common.update(members)
         for member in members:
             results[member] = common.copy()
@@ -219,7 +260,59 @@ def dependency_expander(edges, seeds):
     return lambda name: results.get(name, frozenset({name}))
 
 
-def classify(files, predefines, blocked=frozenset(), *, roots=None):
+def grounded_macros(start, includes, intrinsic, writers, invalid):
+    """Prove include-induced cycles from an entry path and lexical definitions.
+
+    A macro needs all its lexical/value prerequisites and a reachable writer.
+    An include needs a reachable source and all macro conditions. Each event
+    fires once. Thus an unconditional definition can unlock a later conditional
+    include returning to its provider, but an unanchored macro cycle cannot
+    bootstrap itself. External inputs stay in the SCC requirements regardless.
+    """
+    subscribers, remaining, ready, proven = {}, {}, deque(), set()
+    def clause(event, requirements):
+        remaining[event] = len(requirements)
+        for prerequisite in requirements:
+            subscribers.setdefault(prerequisite, []).append(event)
+        if not requirements:
+            ready.append(event)
+    names = intrinsic.keys()
+    for name, deps in intrinsic.items():
+        if name not in invalid:
+            clause(('lexical', name), {('macro', n) for n in deps & names})
+    for file, targets in includes.items():
+        for i, (target, deps) in enumerate(targets):
+            clause(('include', file, i, target), {('file', file)} | {('macro', n) for n in deps & names})
+    ready.append(('file', start))
+    emitted, lexical, available = set(), set(), set()
+    def maybe(name):
+        if name in lexical and name in available:
+            ready.append(('macro', name))
+    while ready:
+        event = ready.popleft()
+        if event in emitted:
+            continue
+        emitted.add(event)
+        kind, name, *_ = event
+        if kind == 'file':
+            for macro in writers.get(name, ()):
+                available.add(macro)
+                maybe(macro)
+        elif kind == 'lexical':
+            lexical.add(name)
+            maybe(name)
+        elif kind == 'include':
+            ready.append(('file', event[3]))
+        elif kind == 'macro':
+            proven.add(name)
+        for dependent in subscribers.get(event, ()):
+            remaining[dependent] -= 1
+            if not remaining[dependent]:
+                ready.append(dependent)
+    return proven
+
+
+def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inputs=None):
     """Audit fresh TUs rooted at the requested search-relative header spellings.
 
     Literal edges follow compiler search order, including quote and include_next
@@ -237,6 +330,7 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None):
                                 for op, body in directives(text)
                                 if op in ('include', 'include_next')], set())
     writes = {}
+    file_writes = {f: ws for f, (ws, _, _) in parsed.items()}
     for ws, _, _ in parsed.values():
         for w in ws:
             writes.setdefault(w['name'], []).append(w)
@@ -298,6 +392,20 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None):
         return (name in requests or name.startswith('__glibcxx_') and
                 '__cpp_lib_' + name[10:] in writes)
 
+    # These lexical proofs do not depend on the root. Avoid repeating them for
+    # every write in every fresh TU (hundreds of thousands of calls on GCC 15).
+    write_deps = {}
+    for ws in file_writes.values():
+        for w in ws:
+            if w['name'] not in PURE_CANDIDATES and not w['name'].startswith(('__cpp_lib_', '__glibcxx_')):
+                continue
+            deps = clean(w['dependencies'], w['conditions'], w['guard_tests'])
+            if w['name'].startswith('__glibcxx_'):
+                feature = '__cpp_lib_' + w['name'][10:]
+                if own_guard(feature, w['conditions']):
+                    deps.discard(feature)
+            write_deps[id(w)] = deps
+
     results = {}
     for root in sorted(by_name if roots is None else roots):
         start = resolve(root)
@@ -338,58 +446,74 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None):
                     result.remove(guard)
             return result
 
+        root_edges = {f: [] for f in reached}
         for file in reached:
             for target, deps, conditions in edges[file]:
-                inbound[target].update(external_guards(deps, conditions, (file, target)))
+                cleaned = external_guards(deps, conditions, (file, target))
+                root_edges[file].append((target, cleaned))
+                inbound[target].update(cleaned)
                 successors[file].add(target)
         propagate(inbound, successors)
-        local = {n: [w for w in ws if w['file'] in reached] for n, ws in writes.items()}
-        local = {n: ws for n, ws in local.items() if ws}
+        local = {}
+        for file in sorted(reached):
+            for w in file_writes[file]:
+                local.setdefault(w['name'], []).append(w)
         requests = {n for n in request_roles
                     if all(w['value'] in ('', None) for w in local.get(n, []))}
         compiler = compiler_inputs - local.keys()
-        dependency_edges = {n: set() for n in compiler | (requests - local.keys())}
+        audited_local = {n: ws for n, ws in local.items()
+                         if n in PURE_CANDIDATES or n.startswith(('__cpp_lib_', '__glibcxx_'))}
+        # Materialize only inputs actually used by this root, rather than all
+        # hundreds of unused compiler predefines in every SCC graph.
+        dependency_edges = {}
         seeds = {n: set() for n in dependency_edges}
-        value_sets = {n: set() for n in local}
-        value_users = {n: set() for n in local}
+        value_sets = {n: set() for n in audited_local}
+        value_users = {n: set() for n in audited_local}
 
         def direct(w):
-            deps = external_guards(clean(w['dependencies'], w['conditions'], w['guard_tests']),
-                                   w['conditions'])
-            # Internal values share their corresponding feature's own-ifndef.
-            if w['name'].startswith('__glibcxx_'):
-                feature = '__cpp_lib_' + w['name'][10:]
-                if own_guard(feature, w['conditions']):
-                    deps.discard(feature)
+            deps = external_guards(write_deps[id(w)], w['conditions'])
             # Own-ifndef plumbing never erases an include-path condition.
             return deps | inbound[w['file']]
 
-        for name, ws in local.items():
-            deps, bad = set(), set()
+        direct_deps = {id(w): direct(w) for ws in audited_local.values() for w in ws}
+        condition_names = set()
+        intrinsic, writers, invalid_names = {}, {}, set()
+        for name, ws in audited_local.items():
+            deps, own, bad = set(), set(), set()
             for w in ws:
+                writers.setdefault(w['file'], set()).add(name)
+                own.update(external_guards(write_deps[id(w)], w['conditions']))
                 body = w['value']
                 if body is not None and INTEGER.fullmatch(body):
                     value_sets[name].add(body)
-                elif body in local and plumbing(body):
+                elif body in audited_local and plumbing(body):
                     value_users[body].add(name)
                 if not (body is not None and INTEGER.fullmatch(body)):
                     if body and plumbing(body):
                         deps.add(body)
+                        own.add(body)
                     elif not (name in requests and body in ('', None)):
                         bad.add(name)
-                deps.update(direct(w))
-            if name in PURE_CANDIDATES or plumbing(name):
-                dependency_edges[name] = deps | unknown
-                seeds[name] = bad
+                deps.update(direct_deps[id(w)])
+            condition_names.update(deps)
+            dependency_edges[name] = deps | unknown
+            seeds[name] = bad
+            intrinsic[name] = own
+            if bad:
+                invalid_names.add(name)
+        for name in condition_names & (compiler | (requests - local.keys())):
+            dependency_edges[name] = set()
+            seeds[name] = set()
         propagate(value_sets, value_users)
-        expand = dependency_expander(dependency_edges, seeds)
+        grounded = grounded_macros(start, root_edges, intrinsic, writers, invalid_names)
+        expand = dependency_expander(dependency_edges, seeds, grounded)
         macros = {}
-        for name, ws in sorted(local.items()):
+        for name, ws in sorted(audited_local.items()):
             if not name.startswith('__cpp_lib_'):
                 continue
             pairs, all_deps, all_bad = {}, set(unknown), set(unknown)
             for w in ws:
-                deps = direct(w) | unknown
+                deps = direct_deps[id(w)] | unknown
                 body = w['value']
                 vals = ({body} if body is not None and INTEGER.fullmatch(body)
                         else value_sets.get(body, set()) if plumbing(body or '') else set())
@@ -409,12 +533,28 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None):
                           plumbing(w['value']) and value_sets.get(w['value'])) for w in ws)
             macros[name] = dict(values=sorted(value_sets[name]), independent=not all_bad,
                                 dependencies=sorted(all_deps), unrecognised=sorted(all_bad),
+                                requirements=sorted(all_bad),
                                 pairs={v: dict(independent=not (bad or invalid),
                                               dependencies=sorted(deps),
+                                              requirements=sorted(bad | ({'<nonliteral-or-undef>'} if invalid else set())),
                                               unrecognised=sorted(bad | ({'<nonliteral-or-undef>'} if invalid else set())))
                                        for v, (deps, bad) in sorted(pairs.items())})
-        results[root] = dict(macros=macros, taint=sorted(unknown))
-    return dict(generator=VERSION, pure_candidates=sorted(PURE_CANDIDATES), roots=results,
+        results[root] = dict(macros=macros, taint=sorted(unknown),
+                            condition_macros={n: sorted(expand(n)) for n in sorted(condition_names & local.keys())
+                                              if n.startswith(('__cpp_lib_', '__glibcxx_'))})
+    header_tests = {}
+    for file, (ws, includes, _) in parsed.items():
+        conditions = [c for w in ws for c in w['conditions']]
+        conditions += [c for _, _, _, cs, _ in includes for c in cs or []]
+        for c in conditions:
+            for match in HEADER_TEST.finditer(c):
+                predicate, operand = match.groups()
+                key = header_test_key(predicate, operand, file)
+                entry = header_tests.setdefault(key, dict(predicate=predicate, operand=operand, files=set()))
+                entry['files'].add(file)
+    header_tests = {k: dict(v, files=sorted(v['files'])) for k, v in sorted(header_tests.items())}
+    result = dict(generator=VERSION, pure_candidates=sorted(PURE_CANDIDATES), roots=results,
+                header_tests=header_tests,
                 # Definitions and conditions live once in the full artifact.
                 macros={n: ws for n, ws in sorted(writes.items()) if n.startswith('__cpp_lib_')},
                 support={n: ws for n, ws in sorted(writes.items()) if n in PURE_CANDIDATES or n.startswith('__glibcxx_')},
@@ -422,3 +562,4 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None):
                 compiler_inputs={n: predefines[n] if isinstance(predefines, dict) else None
                                  for n in sorted(set(predefines) & compiler_inputs)},
                 blocked_inputs=sorted(blocked))
+    return apply_trust(result, trusted_inputs or {})

@@ -8,7 +8,8 @@ import subprocess
 import sys
 from time import perf_counter
 
-from audit import ROOT, VERSION, classify
+from audit import ROOT, VERSION, classify, apply_trust
+from probe import build_inputs, trusted_build_inputs
 sys.path.append(str(ROOT / 'ci/extensions'))
 sys.path.append(str(ROOT / 'ci/profiles'))
 from generate import reachable
@@ -57,7 +58,8 @@ def write(path, data):
     path.write_text(json.dumps(data, sort_keys=True, indent=2) + '\n', encoding='utf-8', newline='\n')
 
 
-def capture(compiler, std, flags, build, output, *, search=None, reached=None, provenance=None):
+def capture(compiler, std, flags, build, output, *, search=None, reached=None, provenance=None,
+            reproduced=False):
     started = perf_counter()
     argv = ['-x', 'c++', '-std=' + std, *flags]
     version = command(compiler, ['-dumpfullversion', '-dumpversion']).stdout.strip()
@@ -102,6 +104,10 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
     audit = classify(files, {n: v for n, v in predefines.items() if n not in volatile},
                      overridden | volatile, roots=names)
     audited = perf_counter()
+    print(f'library audit: {audited - discovered:.2f}s ({len(files)} header keys, '
+          f'{len(names)} roots)', file=sys.stderr, flush=True)
+    observations = build_inputs(compiler, std, flags, search, audit, command)
+    observed = perf_counter()
     headers, probes = {}, 0
     disabled = any(f.startswith(('-include', '-imacros')) for f in flags)
     for header in names:
@@ -119,22 +125,28 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
                 major=version.split('.')[0], std=std, flags=flags,
                 triple=command(compiler, ['-dumpmachine']).stdout.strip(),
                 compiler=command(compiler, ['--version']).stdout.splitlines()[0],
-                provenance=provenance, volatile=sorted(volatile), headers=headers, audit=audit)
+                provenance=provenance, reproduced=reproduced, observations=observations,
+                volatile=sorted(volatile), headers=headers, audit=audit)
+    # A raw report describes its own build. The merger reapplies the rules over
+    # the complete GCC-major matrix before licensing approximate-profile facts.
+    apply_trust(audit, trusted_build_inputs(data, [data]))
     write(output, data)
     finished = perf_counter()
     print(f'library capture: discovery={discovered - started:.2f}s '
           f'audit={audited - discovered:.2f}s '
-          f'preprocessing={preprocessed - audited:.2f}s '
+          f'inputs={observed - audited:.2f}s '
+          f'preprocessing={preprocessed - observed:.2f}s '
           f'write={finished - preprocessed:.2f}s total={finished - started:.2f}s '
           f'({len(files)} header keys, {probes} -dM probes)', file=sys.stderr, flush=True)
     return output
 
 
-def profile_capture(profile_file, compiler):
+def profile_capture(profile_file, compiler, *, reproduced=False):
     import tomllib
     from provenance import identity
     profile = tomllib.loads(profile_file.read_text(encoding='utf-8-sig'))
     return capture(compiler, profile['std'], profile['flags'], 'profile-' + profile['name'],
                    profile_file.with_name(profile['name'] + '-library.json'),
+                   reproduced=reproduced,
                    provenance=dict(build=identity(profile, 'build'),
                                    snapshot_compiler=identity(profile, 'snapshot_compiler')))

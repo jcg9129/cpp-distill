@@ -259,7 +259,7 @@ def main():
         output = capture(args.profile, args.compiler, args.reproduced_build)
         sys.path.insert(0, str(ROOT / 'ci/library'))
         from capture import profile_capture
-        profile_capture(args.profile.resolve(), args.compiler)
+        profile_capture(args.profile.resolve(), args.compiler, reproduced=args.reproduced_build is not None)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         parser.exit(1, f'snapshot failed: {error}\n')
     print(output)

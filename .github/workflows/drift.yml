@@ -121,6 +121,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.library == 'true'
     uses: ./.github/workflows/library.yml
+    with:
+      cold_start: ${{ github.event_name == 'schedule' && github.event.schedule == '17 6 * * 1' }}
     permissions:
       contents: read
   library-comparison:

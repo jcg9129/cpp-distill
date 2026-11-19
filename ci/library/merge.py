@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 import sys
 
-from audit import ROOT, VERSION
+from audit import ROOT, VERSION, apply_trust
 from capture import write
+from probe import trusted_build_inputs
 
 
 def canonical(data):
@@ -32,6 +33,15 @@ def merge(reports, expected):
     if set(builds) != set(expected):
         raise ValueError('incomplete library matrix; missing=' + str(sorted(set(expected) - builds.keys())) +
                          '; unexpected=' + str(sorted(builds.keys() - set(expected))))
+
+    # Raw captures can justify only their own inputs. Revoke those assumptions
+    # unless every scanned build of the major supplies the required evidence.
+    # Mutate the reports so the full evidence and its compact digests describe
+    # exactly the classifications used below; requirements remain unchanged.
+    for major in {b['major'] for b in builds.values()}:
+        rows = [b for b in builds.values() if b['major'] == major]
+        for report in rows:
+            apply_trust(report['audit'], trusted_build_inputs(report, rows))
 
     # Content-address whole repeated records, rather than repeating the same
     # snapshots/classifications/absence lists hundreds of times. References are

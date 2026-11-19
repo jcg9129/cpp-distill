@@ -11,12 +11,12 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from audit import ROOT, VERSION, classify, identifiers, parse
+from audit import ROOT, VERSION, classify, identifiers, parse, header_test_key, apply_trust
 from fixtures import l1c_reference as reference
 from capture import capture, dump, header_names, write
 from merge import (merge, check, expected_builds, baseline_text, digest,
                    get_snapshot, get_agreement, get_classification)
-from probe import compare, source
+from probe import compare, source, build_inputs, trusted_build_inputs
 
 
 def audit(text, extra=None, predefines=()):
@@ -70,7 +70,8 @@ def test_header_test_arguments_are_not_macro_names(predicate, operand):
     expression = f'{predicate}({operand})'
     assert identifiers(expression) == {predicate}
     entry = macro(f'#if {expression}\n#define __cpp_lib_test 1L\n#endif', predefines={predicate})
-    assert entry['unrecognised'] == [predicate]
+    assert entry['unrecognised'] == [header_test_key(predicate, operand, '0/version')
+                                      if operand.startswith(('<', '"')) else predicate]
 
 
 def test_literal_include_operands_are_not_macro_names():
@@ -341,7 +342,7 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
             assert args == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']
             assert source_text.count('#include') == 1
     assert [source_ for args, source_, _ in calls if '-dM' in args] == [
-        f'#include <{h}>\n' for h in ['charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp']]
+        f'#include <{h}>\n' for h in ['bits/c++config.h', 'charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp']]
     assert '__AVX2__' in data['volatile']
     assert '__AVX2__' not in data['audit']['compiler_inputs']
     assert data['audit']['compiler_inputs']['__cplusplus'] == '#define __cplusplus 202302L'
@@ -421,6 +422,11 @@ def test_workflow_wiring_and_actions_pinned():
     pipeline = workflows['library']['jobs']
     assert pipeline['profiles']['with']['profiles'] == 'all'
     assert pipeline['profiles']['with']['artifact_prefix'] == 'library-snapshot'
+    assert pipeline['profiles']['with']['cold_start'] == '${{ inputs.cold_start || false }}'
+    assert workflows['library'][True]['workflow_call']['inputs']['cold_start']['default'] is False
+    assert workflows['profiles'][True]['workflow_call']['inputs']['cold_start']['default'] is False
+    assert workflows['drift']['jobs']['library']['with']['cold_start'] == (
+        "${{ github.event_name == 'schedule' && github.event.schedule == '17 6 * * 1' }}")
     assert set(pipeline['data']['needs']) == {'profiles', 'extensions'}
     assert any('--check data/library/library.json' in s.get('run', '') for s in pipeline['data']['steps'])
     upload = next(s for s in pipeline['data']['steps'] if s.get('with', {}).get('name') == 'library-generated')
@@ -436,6 +442,13 @@ def test_workflow_wiring_and_actions_pinned():
     for job in ['snapshot', 'snapshot-container']:
         upload = next(s for s in workflows['profiles']['jobs'][job]['steps'] if s.get('with', {}).get('name', '').endswith('${{ matrix.profile }}'))
         assert '-library.json' in upload['with']['path']
+    container = workflows['profiles']['jobs']['snapshot-container']
+    assert container['timeout-minutes'] == 30
+    setup = next(s for s in container['steps'] if s.get('name') == 'Install container tools')
+    assert 'time apt-get' in setup['run'] and 'Acquire::http::Timeout=30' in setup['run']
+    assert 'ninja-build g++' not in setup['run']
+    snapshot = next(s for s in container['steps'] if s.get('name', '').startswith('Snapshot QOJ'))
+    assert 'time python3' in snapshot['run']
 
 
 
@@ -560,6 +573,181 @@ def test_same_guard_in_distinct_files_and_include_parent_spelling_fail_closed():
     assert data['roots']['root']['macros']['__cpp_lib_test']['unrecognised'] == ['G']
 
 
+@pytest.fixture
+def trust_files():
+    # Reduced GCC 15 request/value plumbing, including a return to the macro
+    # provider through a feature-conditional include (concepts -> type_traits).
+    return {
+        '0/charconv': '#include <bit>\n#define __glibcxx_want_to_chars\n#include <bits/version.h>',
+        '0/bit': '#include <concepts>\n#if _GLIBCXX_HOSTED || __has_include(<ext/numeric_traits.h>)\n'
+                 '#include <ext/numeric_traits.h>\n#endif',
+        '0/concepts': '#define __glibcxx_want_concepts\n#include <bits/version.h>\n'
+                      '#if defined(__cpp_lib_concepts)\n#include <type_traits>\n#endif',
+        '0/type_traits': '#include <bits/version.h>\n#if __glibcxx_type_trait_variable_templates\n'
+                         '#include <concepts>\n#endif',
+        '0/ext/numeric_traits.h': '#include <type_traits>\n#include <bits/c++config.h>',
+        '0/bits/c++config.h': '#if __has_include(<pstl/pstl_config.h>)\n#include <pstl/pstl_config.h>\n#endif',
+        '0/pstl/pstl_config.h': '',
+        '0/bits/version.h': (
+            '#ifndef __cpp_lib_concepts\n#if __cplusplus > 201703L\n#define __glibcxx_concepts 202002L\n'
+            '#if defined(__glibcxx_want_concepts)\n#define __cpp_lib_concepts 202002L\n#endif\n#endif\n#endif\n'
+            '#undef __glibcxx_want_concepts\n'
+            '#ifndef __cpp_lib_type_trait_variable_templates\n#if __cplusplus > 201402L\n'
+            '#define __glibcxx_type_trait_variable_templates 201510L\n#endif\n#endif\n'
+            '#if __cplusplus > 201402L\n#if defined(__glibcxx_want_to_chars)\n'
+            '#define __cpp_lib_to_chars 201611L\n#endif\n#endif\n#undef __glibcxx_want_to_chars'),
+        '0/syncstream': '#if _GLIBCXX_USE_CXX11_ABI\n#define __cpp_lib_syncbuf 201803L\n#endif',
+        '0/thread': '#if _GLIBCXX_HAS_GTHREADS\n#define __cpp_lib_jthread 201911L\n#endif',
+    }
+
+
+def trust_report(files, build='a', hosted='1', present=True):
+    audit_ = classify(files, (), roots=['charconv', 'syncstream', 'thread'])
+    data = dict(schema=2, generator=VERSION, build=build, major='15', gcc='15.2.0',
+                headers={'charconv': dict(status='ok', macros={'__cpp_lib_to_chars': '201611L'})},
+                audit=audit_, observations=dict(hosted=hosted,
+                    headers={k: present for k in audit_['header_tests']}))
+    apply_trust(audit_, trusted_build_inputs(data, [data]))
+    return data
+
+
+def test_gcc15_to_chars_trust_fixture_and_config_negatives(trust_files):
+    a, b = trust_report(trust_files), trust_report(trust_files, 'b')
+    merged = merge([a, b], ['a', 'b'])
+    assert get_agreement(merged, '15', 'charconv')['defined'] == {'__cpp_lib_to_chars': '201611L'}
+    root = a['audit']['roots']['charconv']
+    assert root['macros']['__cpp_lib_to_chars']['independent']
+    for name in ['__cpp_lib_concepts', '__glibcxx_type_trait_variable_templates']:
+        assert root['trusted_inputs'][name] == dict(rule='independent-library-macro', root='charconv')
+    assert root['trusted_inputs']['_GLIBCXX_HOSTED']['rule'] == 'all-major-builds-hosted'
+    assert root['trusted_inputs']['_GLIBCXX_HOSTED']['builds'] == ['a', 'b']
+    for header, name, config in [('syncstream', '__cpp_lib_syncbuf', '_GLIBCXX_USE_CXX11_ABI'),
+                                 ('thread', '__cpp_lib_jthread', '_GLIBCXX_HAS_GTHREADS')]:
+        entry = a['audit']['roots'][header]['macros'][name]
+        assert not entry['independent'] and config in entry['unrecognised']
+
+
+@pytest.mark.parametrize('hosted', ['0', None])
+def test_nonhosted_or_missing_build_revokes_hosted_trust(trust_files, hosted):
+    a, b = trust_report(trust_files), trust_report(trust_files, 'b', hosted=hosted)
+    assert a['audit']['roots']['charconv']['macros']['__cpp_lib_to_chars']['independent']
+    merged = merge([a, b], ['a', 'b'])
+    assert get_agreement(merged, '15', 'charconv')['unknown']['__cpp_lib_to_chars'] == 'config-dependent'
+    assert '_GLIBCXX_HOSTED' not in a['audit']['trusted_inputs']
+    assert '_GLIBCXX_HOSTED' in a['audit']['roots']['charconv']['macros']['__cpp_lib_to_chars']['unrecognised']
+
+
+@pytest.mark.parametrize('predicate', ['__has_include', '__has_include_next'])
+@pytest.mark.parametrize('present', [True, False])
+def test_header_presence_requires_all_builds_including_negative_answers(predicate, present):
+    files = {'0/charconv': f'#if {predicate}(<optional.h>)\n#define __cpp_lib_to_chars 201611L\n#endif'}
+    a, b = trust_report(files, present=present), trust_report(files, 'b', present=present)
+    merged = merge([a, b], ['a', 'b'])
+    assert get_agreement(merged, '15', 'charconv')['defined']
+    key = next(iter(a['audit']['header_tests']))
+    assert a['audit']['trusted_inputs'][key]['value'] is present
+    for other in [not present, None]:
+        b['observations']['headers'][key] = other
+        merged = merge([a, b], ['a', 'b'])
+        assert not get_agreement(merged, '15', 'charconv')['defined']
+        assert key not in a['audit']['trusted_inputs']
+    del b['observations']
+    assert not get_agreement(merge([a, b], ['a', 'b']), '15', 'charconv')['defined']
+
+
+def test_reproduced_profile_header_scope_and_major_isolation():
+    files = {'0/charconv': '#if __has_include(<optional.h>)\n#define __cpp_lib_to_chars 201611L\n#endif'}
+    a, b = trust_report(files), trust_report(files, 'b', present=False)
+    a['reproduced'] = True
+    merge([a, b], ['a', 'b'])
+    key = next(iter(a['audit']['header_tests']))
+    assert a['audit']['trusted_inputs'][key]['builds'] == ['a']
+    assert key not in b['audit']['trusted_inputs']
+    b['major'] = '14'
+    a['reproduced'] = False
+    merge([a, b], ['a', 'b'])
+    assert a['audit']['trusted_inputs'][key]['builds'] == ['a']
+    assert b['audit']['trusted_inputs'][key]['builds'] == ['b']
+
+
+def test_dependent_library_macro_and_other_root_never_grant_trust():
+    files = {'0/charconv': '#include <base>\n#if defined(__cpp_lib_base)\n'
+                          '#define __cpp_lib_to_chars 201611L\n#endif',
+             '0/base': '#if _GLIBCXX_HAS_GTHREADS\n#define __cpp_lib_base 1L\n#endif',
+             '0/other': '#define __cpp_lib_unrelated 1L'}
+    data = trust_report(files)
+    entry = data['audit']['roots']['charconv']['macros']['__cpp_lib_to_chars']
+    assert not entry['independent'] and entry['unrecognised'] == ['_GLIBCXX_HAS_GTHREADS']
+    assert '__cpp_lib_base' not in data['audit']['roots']['charconv']['trusted_inputs']
+    files['0/charconv'] = files['0/charconv'].replace('__cpp_lib_base', '__cpp_lib_unrelated')
+    entry = trust_report(files)['audit']['roots']['charconv']['macros']['__cpp_lib_to_chars']
+    assert entry['unrecognised'] == ['__cpp_lib_unrelated']
+
+
+def test_library_condition_fixpoint_and_unanchored_cycles():
+    text = '#define __cpp_lib_base 1L\n'
+    for i in range(80):
+        previous = '__cpp_lib_base' if not i else f'__glibcxx_link_{i-1}'
+        text += f'#if {previous}\n#define __glibcxx_link_{i} 1L\n#endif\n'
+    text += '#if __glibcxx_link_79\n#define __cpp_lib_test 1L\n#endif'
+    assert macro(text)['independent']
+    for cycle in ['#if __cpp_lib_base\n#define __cpp_lib_base 1L\n#endif',
+                  '#if __glibcxx_b\n#define __cpp_lib_base 1L\n#endif\n'
+                  '#if __cpp_lib_base\n#define __glibcxx_b 1L\n#endif']:
+        entry = macro(cycle + '\n#if __cpp_lib_base\n#define __cpp_lib_test 1L\n#endif')
+        assert not entry['independent'] and '__cpp_lib_base' in entry['unrecognised']
+
+
+def test_build_input_probes_batch_contexts_hosted_alias_and_fail_closed(tmp_path):
+    search = [tmp_path / 'first', tmp_path / 'second', tmp_path / 'third']
+    files = {'1/sub/header': '#if __has_include_next(<h>) && __has_include("local.h")\n'
+                            '#define __cpp_lib_test 1L\n#endif'}
+    audit_ = classify(files, (), roots=['sub/header'])
+    calls = []
+    def compiler(executable, args, source='', check=True):
+        calls.append((args, source))
+        output = ('#define _GLIBCXX_HOSTED __STDC_HOSTED__\n#define __STDC_HOSTED__ 1\n' if '-dM' in args
+                  else 'DLIB_INPUT_0 1\n')
+        return subprocess.CompletedProcess(args, 0, output, '')
+    result = build_inputs('g++', 'c++23', ['-O2'], search, audit_, compiler)
+    assert result['hosted'] == '1' and set(result['headers'].values()) == {True}
+    assert len(calls) == 3
+    next_args = next(a for a, s in calls if '__has_include(<h>)' in s)
+    assert next_args == ['-x', 'c++', '-std=c++23', '-nostdinc', '-I-', '-I', str(search[2]), '-E', '-P', '-']
+    quote_args = next(a for a, s in calls if '__has_include("local.h")' in s)
+    assert quote_args[quote_args.index('-iquote') + 1] == str(search[1] / 'sub')
+    def failed(*args, **kwargs):
+        return subprocess.CompletedProcess([], 1, '', 'fixture error')
+    result = build_inputs('g++', 'c++23', [], search, audit_, failed)
+    assert result['hosted'] is None and set(result['headers'].values()) == {None}
+
+
+def test_header_probe_conflicting_contexts_missing_records_and_overrides(tmp_path):
+    files = {f'{i}/header': '#if __has_include_next("local.h")\n#define __cpp_lib_test 1L\n#endif'
+             for i in range(2)}
+    audit_ = classify(files, (), roots=['header'])
+    search = [tmp_path / 'first', tmp_path / 'second']
+    def compiler(executable, args, source='', check=True):
+        if '-dM' in args:
+            output = '#define _GLIBCXX_HOSTED 1\n'
+        else:
+            # include_next ignores the source's local quote directory. Two
+            # spellings of one query must both agree before evidence is usable.
+            assert '-iquote' not in args
+            output = f'DLIB_INPUT_0 {int("-I" in args)}\n'
+        return subprocess.CompletedProcess(args, 0, output, '')
+    observed = build_inputs('g++', 'c++23', [], search, audit_, compiler)
+    assert observed['hosted'] == '1' and set(observed['headers'].values()) == {None}
+    audit_['blocked_inputs'] = ['_GLIBCXX_HOSTED', '__has_include_next']
+    observed = build_inputs('g++', 'c++23', [], search, audit_, compiler)
+    assert observed['hosted'] is None and set(observed['headers'].values()) == {None}
+    audit_['blocked_inputs'] = []
+    def missing(*args, **kwargs):
+        return subprocess.CompletedProcess([], 0, '', '')
+    observed = build_inputs('g++', 'c++23', [], search, audit_, missing)
+    assert observed['hosted'] is None and set(observed['headers'].values()) == {None}
+
+
 def test_absolute_includes_are_explicit_unknown_not_proven_absence():
     result = classify({'0/root': '#include "/not-a-search-relative-name"\n#define __cpp_lib_test 1L'}, (), roots=['root'])
     assert result['roots']['root']['taint'] == ['<absolute-include>']
@@ -577,7 +765,9 @@ def test_fourteen_build_compact_size_and_classifications_survive_sharing():
             deps = [f'CONFIG_{h % 20}'] if h else ['__cplusplus']
             macros = {n: dict(independent=not h, values=[v], dependencies=deps,
                               unrecognised=deps if h else [],
-                              pairs={v: dict(independent=not h)}) for n, v in values.items()}
+                              requirements=deps if h else [],
+                              pairs={v: dict(independent=not h, requirements=deps if h else [])})
+                      for n, v in values.items()}
             roots[header] = dict(macros=macros, taint=[])
         reports.append(dict(schema=2, generator=VERSION, build=f'build-{i}', major=major,
                             headers={h: dict(status='ok', macros=values) for h in headers},
@@ -634,4 +824,5 @@ def test_internal_own_ifndef_never_erases_inbound_feature_conditions():
              '0/internal': '#define __glibcxx_test 1L',
              '0/feature': '#define __cpp_lib_test __glibcxx_test'}
     entry = classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']
-    assert not entry['independent'] and entry['unrecognised'] == ['__cpp_lib_test']
+    assert not entry['independent']
+    assert '__cpp_lib_test' in entry['unrecognised']

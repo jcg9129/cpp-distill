@@ -2,8 +2,9 @@
 # L1c CI data pipeline
 
 Design: [§4.3.3](../../docs/design.md#433-library-feature-test-macro-facts-l1c).
-All compiler execution and real data generation happen in CI. Local tests use
-synthetic text and mocked subprocesses only. Part A does not enable resolver facts.
+Shipped evidence is generated in CI. Offline tests use synthetic text and mocked
+subprocesses; local compiler benchmarks write only to `out/`. Part A does not
+enable resolver facts.
 
 `profiles.yml` invokes the L1c capture after each predefined snapshot with the
 same executable, dialect and flags. Each `snapshot-<profile>` artifact adds
@@ -21,8 +22,11 @@ collisions. The merger reads both matrix sources and requires exactly one
 report per eligible row. It fails for missing, duplicate, extra or unsupported
 reports; additions cannot silently be excluded. It regenerates the entire data
 set without merging committed facts and compares it byte for byte.
+PR and manual captures use the AtCoder compiler cache by default. Only the weekly
+scheduled L1c drift call passes `cold_start: true`; monthly reproduction retains
+its separate cold capture.
 
-The generated artifact contains two files (schema/generator 2):
+The generated artifact contains two files (schema 2, generator 3):
 
 - `library.json`: the compact, deterministic baseline to import into
   `data/library/`. It retains build metadata, per-header snapshot facts/status,
@@ -72,13 +76,41 @@ possible earlier inclusion remains untrusted. This covers `#include_next` C
 wrappers without treating `_GLIBCXX_CMATH` or `_GLIBCXX_STDLIB_H` as general
 compiler inputs.
 
-The two IEEE candidates are verified from their actual reachable definitions;
-configuration switches never receive blanket trust. Header writes and
+The two IEEE candidates are verified from their actual reachable definitions.
+The audit also trusts these inputs, recording the rule for each in
+`audit.trusted_inputs` and each root's `trusted_inputs`:
+
+- Other `__cpp_lib_*` and `__glibcxx_*` macros whose reachable writes are
+  independently justified for that same root (`independent-library-macro`).
+  SCC expansion follows both conditions and request/value aliases. A queue
+  proves grounding from the root: a macro needs a reachable writer and all its
+  lexical/value prerequisites; an include needs its source and macro conditions.
+  This licenses a later feature-conditional include returning to an already
+  grounded provider. Unanchored cycles and unsupported writes remain dependent.
+- `_GLIBCXX_HOSTED` only when **every** scanned build of that GCC major records
+  value 1 (`all-major-builds-hosted`). Judges are hosted. One non-hosted build
+  or missing observation revokes trust for the entire major.
+- Literal `__has_include` / `__has_include_next` queries only when every build
+  of the major records the same boolean answer (`header-presence-agreement`).
+  Agreement on absence is valid; disagreement or missing evidence is not.
+  A reproduced profile's header-query set is its own build. Quote lookup and
+  `include_next` search position are preserved, with source-relative query keys
+  that do not depend on machine-specific search-directory indexes. Computed
+  operands remain untrusted.
+
+`probe.build_inputs` captures the expanded hosted value and batches compiler
+header queries by lookup context, using the discovered search order and quote
+directory. Raw `observations` and `audit.header_tests` (predicate, operand, source
+files) are retained in each report. A raw capture applies these rules to its own
+build. At merge, the complete matrix determines the approved inputs, and the
+merger reapplies them to stored, unfiltered SCC `requirements` without rerunning
+the audit. Full merged evidence records the effective rules, values and build
+sets, so assumptions can be reproduced or revoked from artifacts alone.
+
+Other configuration switches never receive blanket trust. Header writes and
 command/startup overrides revoke compiler-input trust for that root. Native-model
 names remain untrusted under native flags. Literal include operands and
-`__has_include`/`__has_include_next` arguments are not macro identifiers; the
-availability predicates themselves remain untrusted because their presence tests
-are not recorded as verified build inputs. A reachable computed include,
+header-test arguments are not macro identifiers. A reachable computed include,
 unsupported absolute include or unparsed file taints the entire root, including
 absence claims; unreachable failures are listed without affecting it.
 
@@ -136,6 +168,15 @@ C++ cannot enumerate unknown new macro spellings. Missing headers are reported,
 while a header that errors on the judge cannot supply runtime output. The checker
 rejects incomplete/duplicate records and reports presence/value mismatches.
 Observations never modify facts or the existing DPROBE protocol.
+
+Capture logs print the audit duration as soon as it completes, followed by
+discovery, input observations, preprocessing, serialization and total durations.
+The QOJ container job times package setup, compiler acquisition, diagnostic
+build, snapshot and diagnostic output separately.
+[Run 44474492375](https://github.com/jcg9129/cpp-distill/actions/runs/44474492375/job/135391720777) spent 29m51s
+in `Install container tools`, before checkout; the audit never ran. Bootstrap
+APT network waits/retries are bounded and it avoids installing an extra default
+GCC before the pinned GCC 15. The job timeout remains 30 minutes.
 
 Run offline Python verification separately from the existing directories, whose
 scripts use local module names:

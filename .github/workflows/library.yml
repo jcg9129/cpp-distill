@@ -2,6 +2,11 @@
 name: L1c library feature macro data
 on:
   workflow_call:
+    inputs:
+      cold_start:
+        description: Ignore the AtCoder compiler cache for weekly drift
+        type: boolean
+        default: false
   workflow_dispatch:
   pull_request:
     paths:
@@ -23,7 +28,7 @@ jobs:
     with:
       profiles: all
       artifact_prefix: library-snapshot
-      cold_start: true
+      cold_start: ${{ inputs.cold_start || false }}
   extensions:
     uses: ./.github/workflows/extensions.yml
   data:
