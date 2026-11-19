@@ -2,6 +2,7 @@
 """Textual A1 inventory: deliberately include inactive defines and undefines."""
 import argparse
 from datetime import date
+from functools import cache
 from pathlib import Path
 import re
 
@@ -59,6 +60,7 @@ def reachable(search, standard_file=ROOT / "data/names/standard-headers.txt", *,
             if index is None:
                 raise ValueError('reachable header outside compiler search paths: ' + str(path))
         return (path if with_spellings else path.resolve(), index)
+    @cache
     def resolve(name, begin=0, local=None, inherited=-1):
         if local is not None and (local / name).is_file():
             return location(local / name, inherited)
@@ -74,6 +76,10 @@ def reachable(search, standard_file=ROOT / "data/names/standard-headers.txt", *,
         pb = directory / 'ext/pb_ds'
         if pb.is_dir():
             queue.extend(location(p, i) for p in pb.rglob('*') if p.is_file())
+    @cache
+    def header_includes(resolved):
+        return includes(resolved.read_bytes().decode('utf-8', errors='replace'))
+
     while queue:
         file, index = queue.pop()
         if (file, index) in seen:
@@ -84,7 +90,7 @@ def reachable(search, standard_file=ROOT / "data/names/standard-headers.txt", *,
             reached[f'{index}/' + file.relative_to(search[index]).as_posix()] = resolved
         else:
             reached.add(file)
-        for kind, quoted, name in includes(resolved.read_bytes().decode('utf-8', errors='replace')):
+        for kind, quoted, name in header_includes(resolved):
             found = resolve(name, index + 1 if kind == 'include_next' else 0,
                             file.parent if quoted and kind == 'include' else None, index)
             if found:

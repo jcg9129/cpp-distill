@@ -649,6 +649,21 @@ resolution), or its text contains `__cpp_lib_` or `__glibcxx_`, all feature resu
 become config-dependent with `<unparsed-file:PATH>`; isolated files without those
 tokens are listed without taint. Per-header preprocessing status is independent.
 
+Capture retains every search-index/include-spelling key, including symlink
+aliases, and the audit conservatively retains edges to all matching keys.
+Reading and include parsing are shared by resolved file; include lookup caches
+retain search position and quoted-include directory. Condition identifiers are
+cached as immutable sets. Inbound conditions and integer alias values propagate
+with a changed-node queue. Request/value dependencies are expanded once per
+strongly connected component; terminal evidence is shared, and every member of
+a cyclic component (including a self-loop) is unrecognised for every member
+and its dependents. Schema/generator versions remain unchanged. Against a frozen
+reference implementation, tests compare JSON bytes for acyclic inputs and
+independent classifications for all inputs. Each capture logs discovery, audit,
+preprocessing, writing and total times plus the number of header keys and
+`-dM` probes. Preprocessing still runs once per available requested header,
+independently of audit variants and aliases.
+
 `ci/library/merge.py` requires reports from the complete profiles and extensions
 matrices. `data/library/library.json` (generator/schema version 1) retains
 per-build snapshots and audit evidence, per-GCC-major config-independent

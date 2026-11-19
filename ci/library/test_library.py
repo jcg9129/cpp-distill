@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Synthetic headers and compiler mocks only; never build or execute C++."""
 import copy
+from graphlib import CycleError, TopologicalSorter
 import json
+import random
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
@@ -9,7 +11,9 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+import capture as capture_module
 from audit import ROOT, classify, parse
+from fixtures import l1c_reference as reference
 from capture import capture, dump, header_names
 from merge import merge, check, expected_builds
 from probe import compare, source
@@ -426,3 +430,187 @@ def test_workflow_wiring_and_actions_pinned():
     for job in ['snapshot', 'snapshot-container']:
         upload = next(s for s in workflows['profiles']['jobs'][job]['steps'] if s.get('with', {}).get('name', '').endswith('${{ matrix.profile }}'))
         assert '-library.json' in upload['with']['path']
+
+
+@pytest.mark.parametrize('cyclic', [False, True])
+def test_audit_matches_frozen_reference_on_branching_and_cyclic_graphs(cyclic):
+    # Compare classifications for every graph, and full output for DAGs.
+    # Include shared request/value chains, multiple writes and malformed headers.
+    for seed in range(60):
+        rng = random.Random(seed)
+        names = ['__glibcxx_' + str(i) for i in range(5)]
+        requests = ['__glibcxx_want_' + str(i) for i in range(3)]
+        terminals = ['__cplusplus', 'BUILTIN', 'SWITCH', '_GLIBCXX_FLOAT_IS_IEEE_BINARY32']
+        conditions = names + requests + terminals
+        files = {}
+        for i, name in enumerate(names):
+            text = '#define __cpp_lib_' + str(i) + ' ' + name + '\n'
+            choices = conditions if cyclic else names[:i] + terminals
+            values = names if cyclic else names[:i]
+            for _ in range(2):
+                condition = ' && '.join(rng.sample(choices, 2))
+                value = rng.choice(values + ['1L', '2L', 'BAD', ''])
+                text += f'#if {condition}\n#define {name} {value}\n#endif\n'
+            files[f'{i % 2}/part{i}'] = text
+        files['0/requests'] = ''.join(
+            f'#if {rng.choice(conditions if cyclic else names + requests[:i] + terminals)}\n'
+            f'#define {name}\n#else\n#undef {name}\n#endif\n'
+            for i, name in enumerate(requests))
+        files['1/config'] = '#if BUILTIN\n#define _GLIBCXX_FLOAT_IS_IEEE_BINARY32 1\n#endif\n'
+        files['0/root'] = '#if SWITCH\n#include <part0>\n#endif\n#include <part1>\n'
+        files['1/part0'] = '#include <part4>\n'
+        if seed % 3 == 0:
+            files['0/part0'] += '#if __has_include("unknown")\n#include COMPUTED\n#endif\n'
+        if seed % 5 == 0:
+            files['1/broken'] = '#else\n#include <part2>\n'
+        if seed % 7 == 0:
+            files['0/root'] += '#include <broken>\n'
+        predefines = {'BUILTIN': '#define BUILTIN 1'}
+        blocked = {'BUILTIN'} if seed % 2 else set()
+        expected = reference.classify(files, predefines, blocked)
+        actual = classify(files, predefines, blocked)
+        assert {n: m['independent'] for n, m in actual['macros'].items()} == {
+            n: m['independent'] for n, m in expected['macros'].items()}, seed
+        if not cyclic:
+            assert json.dumps(actual, sort_keys=True, indent=2) == json.dumps(expected, sort_keys=True, indent=2), seed
+
+
+def test_shared_request_and_value_chains_scale_without_losing_evidence():
+    # Each level has two routes to the same preceding levels. Re-expanding
+    # complete paths instead of sharing results grows exponentially.
+    text = '#define __glibcxx_want_0\n#define __glibcxx_want_1\n'
+    text += '#define __glibcxx_0 202600L\n#define __glibcxx_1 202600L\n'
+    for i in range(2, 60):
+        text += (f'#if __glibcxx_want_{i-1} && __glibcxx_want_{i-2}\n'
+                 f'#define __glibcxx_want_{i}\n#endif\n'
+                 f'#define __glibcxx_{i} __glibcxx_{i-1}\n'
+                 f'#define __glibcxx_{i} __glibcxx_{i-2}\n')
+    # Internal value names qualify as plumbing only with a corresponding feature.
+    for i in range(60):
+        text += f'#if __glibcxx_want_{i}\n#define __cpp_lib_{i} __glibcxx_{i}\n#endif\n'
+    data = classify({'0/version': text}, ())
+    assert len(data['macros']) == 60
+    for entry in data['macros'].values():
+        assert entry['values'] == ['202600L']
+        assert entry['independent']
+
+
+@pytest.mark.parametrize('handoff', [False, True])
+def test_capture_bytes_and_compiler_calls_match_reference(tmp_path, handoff, capsys):
+    from generate import reachable, includes
+    first, second, outside = (tmp_path / name for name in ('first', 'second', 'uapi'))
+    for directory in (first, second, outside):
+        directory.mkdir()
+    try:
+        for name in ('asm', 'alias'):
+            (first / name).symlink_to(outside, target_is_directory=True)
+        (second / 'asm').symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f'directory symlinks unavailable: {error}')
+    (first / 'ext/pb_ds').mkdir(parents=True)
+    (first / 'ext/pb_ds/tree.hpp').write_text('#else\n#include <same>\n')
+    (first / 'version').write_text(
+        '#ifndef _VERSION_H\n#define _VERSION_H\n'
+        '#if _GLIBCXX_HOSTED\n#include <asm/bits.h>\n#endif\n'
+        '#if THREADS\n#include <alias/bits.h>\n#endif\n'
+        '#include <same>\n#include <broken>\n#include COMPUTED\n'
+        '#define __glibcxx_want_a\n#define __glibcxx_a 202600L\n'
+        '#if __glibcxx_want_a && !defined(__cpp_lib_a)\n'
+        '#define __cpp_lib_a __glibcxx_a\n#endif\n#endif\n')
+    (outside / 'bits.h').write_text('#include "local.h"\n#include_next <asm/bits.h>\n')
+    (outside / 'local.h').write_text('#define __cpp_lib_local 1L\n')
+    (first / 'same').write_text('#include_next <same>\n')
+    (second / 'same').write_text('#if __cplusplus > 0\n#define __cpp_lib_same 2L\n#endif\n')
+    (first / 'broken').write_text('#if 1\n')
+    seeds = tmp_path / 'headers.txt'
+    seeds.write_text('version\nsame\nmissing\n')
+    search = [first, second]
+    expected_reached = reference.reachable(search, seeds, with_spellings=True)
+    # Aliases retain separate keys, but each physical file is parsed once.
+    with patch('generate.includes', wraps=includes) as parsed:
+        reached = reachable(search, seeds, with_spellings=True)
+    assert reached == expected_reached
+    assert parsed.call_count == len(set(reached.values()))
+
+    calls = []
+    def compiler(executable, args, source='', check=True):
+        calls.append((str(executable), args, source, check))
+        if args[0] == '-dumpfullversion':
+            out = '15.2.0'
+        elif args[0] == '-dumpmachine':
+            out = 'aarch64-linux-gnu'
+        elif args[0] == '--version':
+            out = 'fixture GCC'
+        elif '-dD' in args:
+            out = '# 0 "<built-in>"\n#define __cplusplus 202302L\n#define BUILTIN 1\n'
+            out += '# 1 "stdc-predef.h"\n#define STARTUP 1\n'
+        else:
+            out = '#define __glibcxx_a 202600L\n#define __cpp_lib_a __glibcxx_a\n'
+        return subprocess.CompletedProcess(args, int('tree.hpp' in source), out, '')
+
+    headers = ['version', 'same', 'missing', 'ext/pb_ds/tree.hpp']
+    for module, original, output in [(reference, reference.reachable, 'old.json'),
+                                     (capture_module, reachable, 'new.json')]:
+        kwargs = {'reached': reached} if handoff else {}
+        with patch.object(module, 'command', side_effect=compiler), \
+             patch.object(module, 'header_names', return_value=headers), \
+             patch.object(module, 'reachable', side_effect=lambda paths, **kw: original(paths, seeds, **kw)):
+            module.capture('/fixture/g++', 'c++23', ['-O2', '-DX=1', '-UX'], 'fixture',
+                           tmp_path / output, search=search, **kwargs)
+    assert (tmp_path / 'new.json').read_bytes() == (tmp_path / 'old.json').read_bytes()
+    assert calls[:len(calls)//2] == calls[len(calls)//2:]
+    probes = [source for _, args, source, _ in calls[len(calls)//2:] if '-dM' in args]
+    assert probes == ['#include <' + header + '>\n' for header in headers if header != 'missing']
+    log = capsys.readouterr().err
+    assert 'library capture: discovery=' in log and 'audit=' in log and 'preprocessing=' in log
+    assert '3 -dM probes' in log
+
+
+def test_cycles_and_their_dependents_are_unrecognised():
+    graph = {'a': ['b'], 'b': ['a'], 'self': ['self'],
+             'cycle_tail': ['a'], 'self_tail': ['self'], 'clean': []}
+    text = ''
+    for name, deps in graph.items():
+        if deps:
+            text += '#if ' + ' && '.join('__glibcxx_want_' + dep for dep in deps) + '\n'
+        text += f'#define __glibcxx_want_{name}\n'
+        if deps:
+            text += '#endif\n'
+        text += f'#if __glibcxx_want_{name}\n#define __cpp_lib_{name} 1L\n#endif\n'
+    files = {'0/version': text}
+    actual = classify(files, ())['macros']
+    expected = reference.classify(files, ())['macros']
+    for name in graph:
+        entry = actual['__cpp_lib_' + name]
+        assert entry['independent'] == expected['__cpp_lib_' + name]['independent']
+        assert entry['independent'] == (name == 'clean')
+        evidence = ([] if name == 'clean' else ['self'] if name in ('self', 'self_tail')
+                    else ['a', 'b'])
+        assert entry['unrecognised'] == ['__glibcxx_want_' + dep for dep in evidence]
+
+
+def test_reference_equivalence_for_all_three_node_graphs():
+    # Exhaust every directed edge combination, including self loops and
+    # multiple cycle entries. Only acyclic graphs must retain identical bytes.
+    names = ['__glibcxx_want_' + str(i) for i in range(3)]
+    for mask in range(1 << 9):
+        text = ''
+        graph = {}
+        for i, name in enumerate(names):
+            deps = [other for j, other in enumerate(names) if mask & (1 << (3*i+j))]
+            graph[name] = deps
+            if deps:
+                text += '#if ' + ' && '.join(deps) + '\n'
+            text += '#define ' + name + '\n'
+            if deps:
+                text += '#endif\n'
+            text += f'#if {name}\n#define __cpp_lib_{i} 1L\n#endif\n'
+        files = {'0/version': text}
+        actual, expected = classify(files, ()), reference.classify(files, ())
+        assert {n: m['independent'] for n, m in actual['macros'].items()} == {
+            n: m['independent'] for n, m in expected['macros'].items()}, mask
+        try:
+            TopologicalSorter(graph).prepare()
+        except CycleError:
+            continue
+        assert json.dumps(actual, sort_keys=True, indent=2) == json.dumps(expected, sort_keys=True, indent=2), mask

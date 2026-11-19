@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Fail-closed textual libstdc++ feature-macro audit, including inactive branches."""
+from collections import deque
+from functools import lru_cache
 import re
 import sys
 from pathlib import Path
@@ -18,6 +20,7 @@ PURE_CANDIDATES = frozenset({'_GLIBCXX_FLOAT_IS_IEEE_BINARY32',
                              '_GLIBCXX_DOUBLE_IS_IEEE_BINARY64'})
 
 
+@lru_cache(maxsize=8192)
 def identifiers(expression):
     # Remove pp-numbers before identifiers, so 201703L does not depend on L.
     expression = re.sub(r'\b(?:0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\b', '0', expression)
@@ -25,7 +28,7 @@ def identifiers(expression):
     rest = re.sub(NAME, '', expression)
     if re.search(r'[^\s0()!~+*/%<>=&|^?:,\-]', rest):
         names.add('<unparsed-condition>')
-    return names
+    return frozenset(names)
 
 
 def own_guard(name, conditions):
@@ -110,6 +113,65 @@ def parse(text, file):
     return writes, includes, guard
 
 
+def propagate(evidence, successors):
+    """Union evidence to a fixed point using a queue of changed sources."""
+    pending = deque(name for name, values in evidence.items() if values)
+    queued = set(pending)
+    while pending:
+        source = pending.popleft()
+        queued.remove(source)
+        for target in successors[source]:
+            before = len(evidence[target])
+            evidence[target].update(evidence[source])
+            if len(evidence[target]) != before and target not in queued:
+                pending.append(target)
+                queued.add(target)
+
+
+def dependency_expander(edges, seeds):
+    """Expand each dependency once, treating all cyclic members as unrecognised.
+
+    Tarjan visits strongly connected components in dependency order. Every
+    member shares terminal evidence and, for a cyclic component, all member
+    names. Anything depending on a cycle inherits that unrecognised evidence.
+    """
+    indices, low, stack, active, results = {}, {}, [], set(), {}
+    def connect(name):
+        indices[name] = low[name] = len(indices)
+        stack.append(name)
+        active.add(name)
+        for dep in edges.get(name, ()):
+            if dep not in indices:
+                connect(dep)
+                low[name] = min(low[name], low[dep])
+            elif dep in active:
+                low[name] = min(low[name], indices[dep])
+        if low[name] != indices[name]:
+            return
+        members = set()
+        while True:
+            member = stack.pop()
+            active.remove(member)
+            members.add(member)
+            if member == name:
+                break
+        common = set()
+        for member in members:
+            common.update(seeds.get(member, {member}))
+            for dep in edges.get(member, ()):
+                if dep not in members:
+                    common.update(results[dep])
+        if len(members) > 1 or name in edges.get(name, ()):
+            common.update(members)
+        for member in members:
+            results[member] = common.copy()
+
+    for name in edges:
+        if name not in indices:
+            connect(name)
+    return lambda name: results.get(name, frozenset({name}))
+
+
 def classify(files, predefines, blocked=frozenset()):
     """files maps stable search-directory-relative paths to installed contents.
 
@@ -161,54 +223,50 @@ def classify(files, predefines, blocked=frozenset()):
     unknown = computed | {'<unparsed-file:' + file + '>' for file in unparsed
                           if file in included or '__cpp_lib_' in files[file]
                           or '__glibcxx_' in files[file]}
-    # Propagate ancestry to a fixed point; edges are indexed once, not found by
-    # repeatedly comparing every include with every reachable header.
-    changed = True
-    while changed:
-        changed = False
-        for file, target in edges:
-            before = len(inbound[target])
-            inbound[target].update(inbound[file])
-            changed |= len(inbound[target]) != before
+    # Only revisit successors of a file whose inbound evidence has grown.
+    successors = {f: set() for f in files}
+    for file, target in edges:
+        successors[file].add(target)
+    propagate(inbound, successors)
     compiler = (set(predefines) | {'__cplusplus', '__STRICT_ANSI__'}) - writes.keys() - set(blocked)
 
     def plumbing(name):
         return (name.startswith('__glibcxx_want_') or name.startswith('__glibcxx_') and
                 '__cpp_lib_' + name[10:] in writes)
 
-    def values(name, seen=frozenset()):
-        if name in seen:
-            return set()
-        result = set()
-        for entry in writes.get(name, []):
-            body = entry['value']
-            if body is not None and INTEGER.fullmatch(body):
-                result.add(body)
-            elif body and plumbing(body):
-                result.update(values(body, seen | {name}))
-        return result
-
-    def dependencies(name, seen=frozenset()):
-        if name in compiler or name in guards:
-            return set()
-        if name in seen:
-            return {name}  # cycles outside guards are unrecognised
-        if name not in PURE_CANDIDATES and not plumbing(name):
-            return {name}
-        entries = writes.get(name, [])
-        if not entries:
-            return {name}
-        bad = set()
+    # Precompute each macro's direct evidence once. Multiple writes, aliases
+    # and include paths often repeat the same dependency subgraphs.
+    value_sets = {name: set() for name in writes}
+    value_users = {name: set() for name in writes}
+    dependency_edges, dependency_seeds = {}, {}
+    for name, entries in writes.items():
+        direct, bad = set(), set()
         for w in entries:
-            if w['value'] is not None and not (INTEGER.fullmatch(w['value']) or
-                    (name.startswith('__glibcxx_want_') and w['value'] == '')):
-                if plumbing(w['value']):
-                    bad.update(dependencies(w['value'], seen | {name}))
+            body = w['value']
+            if body is not None and INTEGER.fullmatch(body):
+                value_sets[name].add(body)
+            elif body and plumbing(body) and body in writes:
+                value_users[body].add(name)
+            if body is not None and not (INTEGER.fullmatch(body) or
+                    (name.startswith('__glibcxx_want_') and body == '')):
+                if plumbing(body):
+                    direct.add(body)
                 else:
                     bad.add(name)
-            for dep in set(w['dependencies']) | inbound[w['file']] | unknown:
-                bad.update(dependencies(dep, seen | {name}))
-        return bad
+            direct.update(w['dependencies'])
+            direct.update(inbound[w['file']])
+        if name not in compiler and name not in guards and (name in PURE_CANDIDATES or plumbing(name)):
+            dependency_edges[name] = direct | unknown
+            dependency_seeds[name] = bad
+    for name in compiler | guards:
+        dependency_edges[name] = set()
+        dependency_seeds[name] = set()
+    # Values are ordinary reachability: a cycle contributes no new integers.
+    propagate(value_sets, value_users)
+    def values(name):
+        return value_sets.get(name, ())
+
+    dependencies = dependency_expander(dependency_edges, dependency_seeds)
 
     result = {}
     for name in sorted(writes.keys() | unparsed_names):

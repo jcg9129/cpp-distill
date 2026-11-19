@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """CI-only per-header -dM snapshots and installed-header dependency evidence."""
+from functools import cache
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+from time import perf_counter
 
 from audit import ROOT, VERSION, classify
 sys.path.append(str(ROOT / 'ci/extensions'))
@@ -56,6 +58,7 @@ def write(path, data):
 
 
 def capture(compiler, std, flags, build, output, *, search=None, reached=None, provenance=None):
+    started = perf_counter()
     argv = ['-x', 'c++', '-std=' + std, *flags]
     version = command(compiler, ['-dumpfullversion', '-dumpversion']).stdout.strip()
     if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)+', version):
@@ -65,7 +68,11 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
     reached = reachable(search, with_spellings=True) if reached is None else reached
     # Include libc and retain every search-relative spelling, even when its
     # symlink target lies outside the search paths. Include edges use these keys.
-    files = {name: file.read_bytes().decode('utf-8', errors='replace')
+    @cache
+    def contents(file):
+        return file.read_bytes().decode('utf-8', errors='replace')
+
+    files = {name: contents(file)
              for name, file in sorted(reached.items())}
     # -dD provenance distinguishes real compiler predefines from stdc-predef.h
     # and command definitions. Special builtin tests remain unrecognised.
@@ -90,8 +97,10 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
         if not model.exists():
             raise ValueError('missing native model for library capture')
         volatile = {s.split()[0] for s in model.read_text().splitlines() if s and not s.startswith('#')}
+    discovered = perf_counter()
     audit = classify(files, {n: v for n, v in predefines.items() if n not in volatile}, overridden | volatile)
-    headers = {}
+    audited = perf_counter()
+    headers, probes = {}, 0
     disabled = any(f.startswith(('-include', '-imacros')) for f in flags)
     for header in header_names(search):
         if disabled:
@@ -99,15 +108,23 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
         elif not any((p / header).is_file() for p in search):
             headers[header] = dict(status='missing', macros={})
         else:
+            probes += 1
             process = command(compiler, [*argv, '-dM', '-E', '-'], '#include <' + header + '>\n', check=False)
             headers[header] = dict(status='ok' if process.returncode == 0 else 'error',
                                    macros=dump(process.stdout) if process.returncode == 0 else {})
+    preprocessed = perf_counter()
     data = dict(schema=1, generator=VERSION, build=build, gcc=version,
                 major=version.split('.')[0], std=std, flags=flags,
                 triple=command(compiler, ['-dumpmachine']).stdout.strip(),
                 compiler=command(compiler, ['--version']).stdout.splitlines()[0],
                 provenance=provenance, volatile=sorted(volatile), headers=headers, audit=audit)
     write(output, data)
+    finished = perf_counter()
+    print(f'library capture: discovery={discovered - started:.2f}s '
+          f'audit={audited - discovered:.2f}s '
+          f'preprocessing={preprocessed - audited:.2f}s '
+          f'write={finished - preprocessed:.2f}s total={finished - started:.2f}s '
+          f'({len(files)} header keys, {probes} -dM probes)', file=sys.stderr, flush=True)
     return output
 
 
