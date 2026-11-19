@@ -179,6 +179,8 @@ TEST(validate_configuration_exact_flags_specials_and_target) {
   auto c = probeConfiguration(command, "local", po);
   if (!c.ok()) throw std::runtime_error(c.error().message);
   CHECK(sawPthreadMacroProbe);
+  CHECK_EQ(c.value().facts.dialect.name, "gnu++20");
+  CHECK_EQ(c.value().facts.flags, (std::vector<std::string>{"-O2", "-pthread", "-DA=1", "-UA", "-DA=", "-U__has_include", "-DDISTILL_PRESENT_0=0"}));
   po.runner = runProcess;
   CHECK(c.value().probe.macros.contains("__OPTIMIZE__"));
   CHECK_EQ(c.value().facts.initialState("A").definition->replacement, "");

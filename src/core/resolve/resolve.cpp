@@ -33,7 +33,12 @@ std::string spell(const std::vector<Token>& t) {
   for (const auto& x : t) { if (!s.empty()) s += ' '; s += x.text; }
   return s;
 }
-using States = std::map<std::string, MacroFact, std::less<>>;
+struct States : MacroFacts {
+  bool defaultLibrary = true;
+  // nullopt is a persistent conflict/unknown from a prior header, separate
+  // from the ordinary macro state (which an equal-valued join can retain).
+  std::map<std::string, std::optional<std::string>, std::less<>> libraryValues;
+};
 struct Group { std::vector<std::size_t> branches; std::size_t end = 0; };
 struct Engine {
   const InlineResult& raw;
@@ -50,6 +55,7 @@ struct Engine {
   std::vector<bool> keep, resync;
   std::map<std::size_t, SourceLocation> markerAt; // Generated markers by first line.
   PresumedFile presumed; // Of the output, for short markers.
+  std::string librarySelector;
   std::size_t verbatim = 0; // Depth of enclosing demoted blocks.
   Engine(const InlineResult& r, const CompileCommand& c, ConditionEvaluator& e, const ResolveOptions& o)
       : raw(r), cmd(c), evaluator(e), options(o), requirements(o.requirements) {}
@@ -72,6 +78,9 @@ struct Engine {
   void prepare() {
     checkDeadline();
     scan = take(scanDirectives(raw.text));
+    if (options.profile && options.libraryData)
+      librarySelector = options.libraryData->selector(*options.profile, options.libraryAgreementOnly,
+                                                       &result.libraryDisabledReason);
     if (options.profile) {
       auto inherited = profileRequirements(*options.profile);
       if (!requirements.dialect) requirements.dialect = inherited.dialect;
@@ -281,6 +290,10 @@ struct Engine {
   void transition(std::size_t i, States& state) {
     const auto& l = scan.lines[i]; if (!l.directive) return;
     const auto& d = *l.directive; const auto& t = d.tokens;
+    if ((d.name == "define" || d.name == "undef") && !t.empty() && isReserved(t[0].text))
+      state.defaultLibrary = false;
+    if (d.name == "pragma" && !t.empty() && (t[0].text == "push_macro" || t[0].text == "pop_macro"))
+      state.defaultLibrary = false; // prepare() retains the existing global refusal.
     if (d.name == "define" && !t.empty()) {
       // Test phase-2 adjacency without treating comments as empty gaps.
       bool function = false;
@@ -301,7 +314,40 @@ struct Engine {
     else if (d.name == "include" && !t.empty()) {
       const auto header = t[0].text.substr(1, t[0].text.size() - 2);
       const bool standard = isStandardHeader(header);
+      if (!standard) state.defaultLibrary = false;
+      // Metadata is tied to this textual occurrence, including quoted includes
+      // rewritten by the inliner. A spelling alone never licenses a snapshot.
+      auto includeLocation = locations[i];
+      const auto rawLine = l.tokens.front().line;
+      if (rawLine <= raw.lineMap.size() && raw.lineMap[rawLine - 1]) includeLocation = *raw.lineMap[rawLine - 1];
+      const auto hit = std::find_if(raw.systemIncludes.begin(), raw.systemIncludes.end(), [&](const auto& h) {
+        return h.location == includeLocation && h.spelling == header;
+      });
+      const LibraryHeader* library = nullptr;
+      if (standard && state.defaultLibrary && !librarySelector.empty() && hit != raw.systemIncludes.end() &&
+          hit->found && hit->compilerSystem && options.libraryData)
+        library = options.libraryData->find(librarySelector, header);
       for (auto& [name, f] : state) {
+        if (name.starts_with("__cpp_lib_")) {
+          const auto value = library ? options.libraryData->state(*library, name) : 1;
+          if (value == 0) {
+            // Keeping a known binding across this include also relies on the
+            // header's absence evidence, and must carry A9 into the report.
+            if (!origin(f, FactOrigin::library)) f.provenance.push_back(FactOrigin::library);
+            continue;
+          }
+          auto prior = state.libraryValues.find(name);
+          if (value >= 2 && (prior == state.libraryValues.end() ||
+              (prior->second && *prior->second == options.libraryData->values[value]))) {
+            const auto replacement = std::string(options.libraryData->values[value]);
+            state.libraryValues[name] = replacement;
+            f = {MacroState::known, Macro{false, {}, false, replacement}, {FactOrigin::library}};
+          } else {
+            state.libraryValues[name] = std::nullopt;
+            f = {MacroState::unknown, {}, {FactOrigin::systemHeader}};
+          }
+          continue;
+        }
         // Source writes (including an equal-valued branch join) do not inherit
         // A2's external identity guarantee. Neither do earlier invalidations.
         const bool externalFact = !f.provenance.empty() && std::all_of(f.provenance.begin(), f.provenance.end(), [](auto o) {
@@ -321,11 +367,20 @@ struct Engine {
       }
     } else if (d.name == "pragma" && t.size() >= 2 && t[0].text == "GCC" &&
         (t[1].text == "target" || t[1].text == "optimize" || t[1].text == "push_options" || t[1].text == "pop_options")) {
+      state.defaultLibrary = false;
       for (const auto& name : featureNames) state[name] = {MacroState::unknown, {}, {FactOrigin::pragma}};
     }
   }
   States join(const std::vector<States>& paths) {
     auto state = paths.front();
+    for (std::size_t j = 1; j < paths.size(); ++j) {
+      state.defaultLibrary = state.defaultLibrary && paths[j].defaultLibrary;
+      for (const auto& [name, value] : paths[j].libraryValues) {
+        const auto old = state.libraryValues.find(name);
+        if (old == state.libraryValues.end()) state.libraryValues.emplace(name, value);
+        else if (old->second != value) old->second = std::nullopt;
+      }
+    }
     for (std::size_t j = 1; j < paths.size(); ++j) for (auto& [name, f] : state) {
       const auto& other = paths[j].at(name);
       if (f.state != other.state || f.definition != other.definition) f = {MacroState::unknown, {}, {FactOrigin::join}};
@@ -445,12 +500,23 @@ struct Engine {
       for (auto& d : result.decisions) { d.decision = Decision::unknown; d.reason = "resolution disabled"; }
     } else {
       States state;
+      // cmd is the extra user command; the profile's own ordered operations
+      // are already represented by its snapshots and must not be subtracted.
+      for (const auto& op : cmd.localMacros())
+        if (isReserved(op.value.substr(0, op.value.find_first_of("(=")))) state.defaultLibrary = false;
+      for (const auto& arg : cmd.args)
+        if (arg.option.starts_with("-include") || arg.option.starts_with("-imacros")) state.defaultLibrary = false;
+      if (options.profile) for (const auto& flag : options.profile->flags)
+        if (flag.starts_with("-include") || flag.starts_with("-imacros")) state.defaultLibrary = false;
       for (const auto& name : names) state.emplace(name, initial(name));
       walk(0, scan.lines.size(), state); render();
     }
     for (const auto& d : result.decisions) {
       const auto key = d.decision == Decision::trueValue ? "true" : d.decision == Decision::falseValue ? "false" : d.decision == Decision::dead ? "dead" : "unknown: " + d.reason;
       ++result.counts[key];
+      if (d.decision == Decision::trueValue || d.decision == Decision::falseValue)
+        for (const auto& u : d.external) if (origin(u.fact, FactOrigin::library))
+          result.libraryProvenance.insert(std::string(options.libraryData->provenance) + " selector=" + librarySelector);
       if (d.decision == Decision::unknown) result.unknownInUserCode = true;
     }
     return std::move(result);

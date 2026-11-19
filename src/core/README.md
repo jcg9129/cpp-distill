@@ -303,6 +303,18 @@ A2(a), including source changes to those bindings; startup-header facts have no
 such protection. A missing feature model conservatively invalidates all reserved
 names at GCC option pragmas. A3 also checks withheld approximate-snapshot bindings.
 
+`library/` embeds the reviewed L1c baseline at CMake configuration time (Python
+3.11+ is required for the build). The generator validates the compact JSON and
+emits shared header-state arrays, including the `ext/pb_ds/` standard-list prefix;
+no runtime JSON or Python is needed. Approximate profiles use GCC-major agreement;
+reproduced profiles use their own matching build snapshots, retaining native
+uncertainty. The resolver applies these facts only to actual compiler-directory
+includes while its separate default-library Boolean holds. Configuration loss
+joins with AND; header values accumulate and conflicts stay unknown. A resolved
+use, including preserving a binding through proven absence, carries A9 and the
+baseline generator/schema, digest and selected major/profile into the report.
+Local satisfaction reruns use the major's audited agreement.
+
 `EvaluationRequirements` records dialect and target integer layout separately
 from external macro facts. Missing fields in options inherit from a profile;
 without a profile only command dialect is available. Command-overridden

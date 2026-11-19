@@ -12,7 +12,7 @@ int ranges;
 #ifndef __cpp_lib_mdspan
 int no_mdspan;
 #endif
-#if __cpp_lib_ranges >= 202110L
+#if defined(__cpp_lib_ranges) && defined(__cpp_constexpr)
 int newer_ranges;
 #endif
 #if defined(__cpp_lib_zzz_future)

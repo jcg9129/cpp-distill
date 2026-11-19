@@ -32,6 +32,7 @@ std::string origins(const MacroFact& f, bool profile) {
       case FactOrigin::systemHeader: name = "system header"; break;
       case FactOrigin::pragma: name = "pragma"; break;
       case FactOrigin::join: name = "join"; break;
+      case FactOrigin::library: name = "A9 library"; break;
       case FactOrigin::commandOperation: name = profile ? "profile command" : "configuration command"; break;
       default: name = profile ? "profile" : "configuration"; break;
     }
@@ -76,6 +77,10 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
   if (r.assumptions.empty()) out << " none";
   for (const auto& a : r.assumptions) out << ' ' << a;
   out << '\n';
+  if (r.assumptions.contains("A9")) for (const auto& provenance : r.resolution.libraryProvenance)
+    out << "library facts: " << provenance << '\n';
+  if (!r.resolution.libraryDisabledReason.empty())
+    out << "library facts: none (" << r.resolution.libraryDisabledReason << ")\n";
   if (r.pruningModel && r.retention) {
     auto pruning = renderPruningReport(*r.pruningModel,*r.retention);
     if (pruning.ok()) out << pruning.value();

@@ -2,6 +2,7 @@
 #pragma once
 #include "core/inline/inline.h"
 #include "core/profile/profile.h"
+#include "core/library/library.h"
 
 namespace distill {
 // PP arithmetic uses intmax_t/uintmax_t; the other widths affect literal parsing.
@@ -52,6 +53,10 @@ struct ResolveOptions {
   const Profile* profile = nullptr;
   EvaluationRequirements requirements; // Missing fields inherit from profile.
   NameLists names;
+  const LibraryData* libraryData = &embeddedLibraryData();
+  // Local satisfaction reruns have compiler observations, not a reproduced
+  // judge library build. They may use only the major's audited agreement.
+  bool libraryAgreementOnly = false;
   std::size_t maxConditionTokens = 100000, maxNesting = 200;
   std::size_t maxOutputBytes = 128 * 1024 * 1024;
   // Raw-text lines of conditional directives kept unknown (cross-host demotion).
@@ -66,6 +71,8 @@ struct ResolveResult {
   std::vector<ResolutionDecision> decisions;
   std::vector<std::string> disabledReasons;
   bool unknownInUserCode = false;
+  std::set<std::string> libraryProvenance; // Only facts used by resolved decisions.
+  std::string libraryDisabledReason; // Coverage rejection; other facts still apply.
   std::map<std::string, std::size_t, std::less<>> counts;
 };
 Result<ResolveResult> resolveConditions(const InlineResult& raw, const CompileCommand&,

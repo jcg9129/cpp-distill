@@ -592,10 +592,10 @@ not change any fact or exit code.
 
 Approved 2026-11-18 after two adversarial reviews; see
 [`reviews/2026-11-18-library-feature-macros.md`](reviews/2026-11-18-library-feature-macros.md).
-This subsection specifies the resolver work for part B. Part A supplies design,
-CI producers, comparisons and diagnostic tooling; it does not enable facts in
-the resolver. `__cpp_lib_*` names originate in library headers and are separate
-from the source-entry compiler snapshot and the identity registry.
+Part A supplies CI producers, comparisons and diagnostic tooling; part B
+embeds the reviewed baseline and implements resolver header transitions.
+`__cpp_lib_*` names originate in library headers and are separate from the
+source-entry compiler snapshot and the identity registry.
 
 **Profile data.** For each profile, CI uses the same snapshot compiler and
 exact `-x c++ -std=<std> <flags>` argv, including ordered macro operations.
@@ -624,7 +624,8 @@ distributed definitions and GCC 14+'s generated `bits/version.h`. For root H
 (H, name, value) pair is config-independent only when every controlling
 dependency is compiler-predefined (including `__cplusplus`/`__STRICT_ANSI__`),
 verified include-guard/own-`#ifndef` plumbing, verified internal feature
-requests, or an explicit reviewed library-macro candidate. Request and internal
+requests, an explicit reviewed library-macro candidate, or the reviewed trusted
+inputs below (user-approved 2026-11-19). Request and internal
 value macros are followed through all writes reachable from H and their
 conditions; a prefix alone grants no exemption. Undefined request alternatives
 are known false only when installed writes establish their internal request
@@ -642,9 +643,9 @@ Neither is assumed pure: every scanned definition/undefinition, replacement
 and controlling condition must pass the compiler-only dependency audit before
 it is admitted. Their installed definitions and conditions remain in the
 review artifact. Build switches (`_GLIBCXX_USE_CXX11_ABI`, `_GLIBCXX_HAS_GTHREADS`,
-`_GLIBCXX_HOSTED`, `_GLIBCXX_USE_*`, `_GLIBCXX_HAVE_*`, availability, threads,
-locale, etc.) and unrecognised dependencies fail closed. Native-model names
-are excluded from trusted compiler inputs under native flags. Unsupported
+`_GLIBCXX_USE_*`, `_GLIBCXX_HAVE_*`, threads, locale, etc.) and unrecognised
+dependencies fail closed, except for the narrowly justified inputs below.
+Native-model names are excluded from trusted compiler inputs under native flags. Unsupported
 replacement forms and unresolved computed includes also fail closed; they
 may reduce coverage and are visible in reports. Whole-file guards and nested
 `#ifndef X` / `#define X` wrappers carry textual evidence. All installed writes must have the matching guard role and
@@ -665,25 +666,42 @@ computed include or unsupported absolute include reachable from H taints every
 feature/absence result for H; unreachable failures do not affect it. Recoverable
 literal includes in a malformed file still contribute reachability. Literal
 include operands and `__has_include`/`__has_include_next` arguments are never
-macro-name tokens. The availability predicates themselves remain untrusted:
-the audit does not record verified header-presence tests as compiler inputs.
-Per-header preprocessing status remains independent.
+macro-name tokens. The audit additionally trusts:
+
+- Independent `__cpp_lib_*` and `__glibcxx_*` condition macros justified for
+  the same root. SCC expansion follows conditions and request/value aliases;
+  a grounding queue requires reachable writers and all lexical/value
+  prerequisites, including include-edge conditions. Unanchored cycles and
+  unsupported writes remain dependent.
+- `_GLIBCXX_HOSTED` when every scanned build of the GCC major records value 1.
+  A missing or non-hosted observation revokes trust for the entire major.
+- Literal `__has_include` and `__has_include_next` queries when every build of
+  the major agrees on presence or absence. Reproduced profiles use their own
+  build's query set. Query keys preserve quote lookup and `include_next`
+  position with source-relative identities. Missing/disagreeing evidence and
+  computed operands remain untrusted.
+
+`audit.trusted_inputs` and per-root `trusted_inputs` record the rules. Captures
+retain hosted values, context-sensitive header-query observations and unfiltered
+SCC requirements. The merger reapplies matrix-approved trust to those requirements
+without rerunning the audit, retaining effective rules and build sets in full
+evidence. Per-header preprocessing status remains independent.
 
 Capture retains search-index/include-spelling keys, including symlink aliases.
 Literal edges follow compiler search order, quoted-include directory and
 `include_next` search position. Reading and include parsing are shared by
 resolved file; condition identifiers are cached. Per-root inbound conditions
 and integer alias values propagate with a changed-node queue. Request/value
-dependencies are expanded once per strongly connected component; every member
-of a cyclic component, including self-loops, remains unrecognised for its
-dependents. Tests check per-root propagation against a small-graph oracle,
-request cycles exhaustively, compiler-call/header-snapshot behavior, and compact
+dependencies are expanded by strongly connected component, with the grounding
+proof above admitting independently justified library-macro conditions and
+leaving unanchored cycles unrecognised. Tests check per-root propagation against
+a small-graph oracle, request cycles exhaustively, compiler-call/header-snapshot behavior, and compact
 round trips. Each capture logs discovery, audit, preprocessing, writing and
 total times plus header-key and `-dM` probe counts. Each available requested
 header is preprocessed once.
 
 `ci/library/merge.py` requires reports from the complete profiles and extensions
-matrices and never unions old facts into fresh results. Schema/generator 2
+matrices and never unions old facts into fresh results. Schema 2/generator 3
 separates the compact baseline `data/library/library.json` from the uploaded
 `library-evidence.json`. The latter retains complete original build reports,
 including all definitions, conditions, include paths, compiler inputs and
@@ -708,6 +726,19 @@ definitions reachable from H to be independent; a complete untainted closure
 with no definition also proves absence. Unknown, dependent, unavailable or
 disagreeing entries remain explicit. A reproduced profile uses its own snapshot,
 including build-dependent facts, subject to the native model's uncertainty.
+
+Part B generates a compact, interned table at CMake configuration time and
+rejects missing/malformed baseline data. It embeds per-major agreement and
+per-reproduced-profile snapshots for standard-list headers, rather than full
+JSON. Reproduced lookup checks the profile's recorded build/command identity;
+native-dependent entries remain unknown. Local satisfaction reruns use major
+agreement, since compiler observations alone do not reproduce a named judge's
+library build. Reports include generator/schema, the baseline SHA-256 and the
+selected profile build or GCC major when a resolved decision uses a fact.
+Major agreement (including satisfaction reruns) requires a dialect scanned for
+that major and each profile/configuration flag to occur in a same-dialect scanned
+build or the explicit harmless warning/debug/diagnostic/constexpr-limit/pipe allowlist;
+optimization flags require a scanned match because they change predefines.
 
 **Default library configuration.** Track a separate, monotone Boolean at every
 point. It holds iff on every path to that point there has been no user
@@ -894,7 +925,7 @@ profile.
 **Transitions:**
 
 The L1c default-library Boolean and feature-macro exception are specified in
-§4.3.3; their implementation is part B. The other transitions below remain
+§4.3.3 (implemented in part B). The other transitions below remain
 unchanged.
 
 - `#define`/`#undef` in an active region set the state.

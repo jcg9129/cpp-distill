@@ -1,2 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Boolean checks work with the LLVM-free oracle across target integer layouts.
+# Library-value arithmetic is covered in resolve_library_shipped_acceptance_and_provenance.
 g++ -std=gnu++23 main.cpp

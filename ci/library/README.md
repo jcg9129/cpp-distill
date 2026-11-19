@@ -190,3 +190,15 @@ timeout 300 python3 -m pytest -q ci/drift
 
 Install the pinned `ci/drift/requirements-test.txt` first. No C++ build or distill
 execution is needed for these tests.
+
+## Resolver embedding (part B)
+
+CMake invokes `embed.py` with the reviewed baseline. It validates versions,
+content addresses and references, then emits interned dense header-state arrays
+with shared name/value pools. Only standard-list transitions and reproduced
+profile build identities enter the binary. Values dependent on volatile native
+inputs remain unknown, using conservative per-major dependency closures even
+for own-build snapshots. Missing/malformed data fails configuration; edits to
+the baseline or generator trigger regeneration. Runtime needs no data files.
+The embedded provenance records schema 2, generator 3, embedding format 1 and
+the SHA-256 of the exact baseline bytes.

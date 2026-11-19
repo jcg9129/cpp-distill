@@ -47,8 +47,12 @@ Result<Configuration> probeConfiguration(CompileCommand c, std::string kind, con
     }
   }
   result.argv.push_back(pathToUtf8(result.command.compiler));
-  for (const auto& a : result.command.args) if (a.classification != Class::input && a.classification != Class::controlled)
+  for (const auto& a : result.command.args) if (a.classification != Class::input && a.classification != Class::controlled) {
     result.argv.insert(result.argv.end(), a.spelling.begin(), a.spelling.end());
+    // Dialect is recorded separately. Preserve every other configuration flag
+    // for the same scanned-build coverage check used by judge profiles.
+    if (a.option != "-std=") p.flags.insert(p.flags.end(), a.spelling.begin(), a.spelling.end());
+  }
   return result;
 }
 Result<CompileCommand> flatCommand(const CompileCommand& local, const Profile* p,
@@ -93,6 +97,7 @@ Result<bool> satisfies(const Configuration& c, const InlineResult& raw, const Co
                        const ResolveResult& resolution, ConditionEvaluator& evaluator,
                        std::optional<std::chrono::steady_clock::time_point> deadline, ResolveResult* observed) {
   ResolveOptions options; options.profile = &c.facts; options.deadline = deadline;
+  options.libraryAgreementOnly = true;
   auto rerun = resolveConditions(raw, command, evaluator, options);
   if (!rerun.ok()) return rerun.error();
   const bool equal = sameDecisions(resolution, rerun.value());

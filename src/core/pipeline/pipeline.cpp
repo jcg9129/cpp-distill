@@ -340,6 +340,7 @@ struct Pipeline {
                 for (const auto origin : u.fact.provenance) {
                   if (origin == FactOrigin::a3) result.assumptions.insert("A3");
                   if (origin == FactOrigin::a5) result.assumptions.insert("A5");
+                  if (origin == FactOrigin::library) result.assumptions.insert("A9");
                 }
                 if (options.profile && !u.fact.provenance.empty()) result.assumptions.insert("A4");
               }

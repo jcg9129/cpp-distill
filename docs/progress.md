@@ -563,3 +563,25 @@ remaining judges show a need; not required for soundness.
   bounded by `timeout 300`; no C++ build, distill execution, commit or CI dispatch.
   Actual compiler captures, package-specific audit coverage and cross-platform
   workflow execution remain for CI.
+
+## L1c part B — library feature resolver (2026-11-19)
+
+Implemented header-only library facts from the reviewed `data/library/library.json`.
+CMake validates and embeds a compact, interned table with per-major agreement
+and reproduced-profile snapshots; the resolver tracks default library configuration
+monotonically across paths, verifies compiler-directory provenance and retains
+unknown/conflicting accumulated values. Resolved library decisions report A9,
+generator/schema, baseline SHA-256 and the selected major/profile build. Local
+satisfaction reruns use audited major agreement. The design now records the
+2026-11-19 approved independent-library-macro, hostedness and header-presence
+audit trust extensions already implemented in CI.
+
+Coverage includes shipped CSES/Codeforces charconv acceptance, GCC 14+ jthread
+uncertainty, reserved writes/command operations, forced includes, option/macro-stack
+pragmas, joins/dead paths, shadow headers and persistent conflicts. LLVM-free
+verification: `cmake --build build -j2` and all six CTest suites passed (272
+unit tests passed, two platform-specific unit skips); 223 offline Python tests
+passed (84 library, 66 profiles, 18 extensions, 55 drift). The generated source
+is 303,920 bytes versus the 3,940,318-byte baseline; its compiled table sections
+occupy 282,772 bytes in the local unoptimized build. SDK evaluator/worker and
+other-platform coverage remain in CI. No LLVM was downloaded or built.
