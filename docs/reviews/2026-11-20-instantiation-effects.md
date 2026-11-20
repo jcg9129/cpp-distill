@@ -76,6 +76,119 @@ the Clang evaluator accepts it. Those test/evaluator files are unchanged.
 All 33 targeted pruning unit tests and 44 standalone compiler probe combinations
 also passed. `git diff --check` passed. No commit or push was made.
 
+### D3d-6 CI repair
+
+LLVM 23's default `NestedNameSpecifier` constructor creates an **invalid**
+sentinel. The D3d-6 `inertType` change called `getKind()` on that sentinel
+for types other than tags, typedefs and using-types (including `decltype`,
+references and template specializations). That reaches `llvm_unreachable`;
+in the release SDK it is undefined behaviour and crashed the worker.
+Initialize the absent qualifier with `std::nullopt` instead. Written
+qualifiers still pass through the same conservative type-selection check.
+The existing constexpr negative cases exercise the crashing paths without
+changing their expected storage roots or allowing a worker failure.
+
+The caide `github-issue8` review entry again carries the required
+`same removal:` classification. Its A11 explanation and removal assertions
+are unchanged; the Python validator correctly requires that classification.
+
+The pinned LLVM 23.1.5 revision-1 ARM64 release SDK was checksum-verified
+inside `spike-work/`; Release compilation used Clang 22.1.8 with `-j2`.
+A minimal probe compiled against those headers with GCC UBSan reports
+`NestedNameSpecifier.h:32:7: runtime error: execution reached an unreachable
+program point` for the old default construction. The `std::nullopt` version
+exits successfully. The original extraction suite also passes on this ARM64
+host: the reported x86-64 segmentation fault is a manifestation of undefined
+behaviour, not a reliable cross-architecture failure oracle.
+
+With the repaired D3d-6 worker, the same atl revision, CSES profile and command
+as above still produce the following local measurements (180-second outer
+limits). Counts are `family ...` report lines containing
+`instantiation effect: possible trigger of X`, excluding primary-byte totals.
+
+| Example | Bytes | `atl::static_modulus` | `atl::montgomery` | `atl::scalar_ntt` |
+| --- | ---: | ---: | ---: | ---: |
+| online-convolution quick | 149,050 | 114 | 6 | 26 |
+| polynomial-gcd quick | 157,713 | 118 | 5 | 39 |
+
+Original and repaired-worker pruned outputs for both examples were compiled
+and run under GCC 15.2.0 and Clang 22.1.8: all eight comparisons matched
+`quick.out` byte for byte, with 120-second compilation and five-second execution
+limits. The profile's x86-64 GCC 13 judge remains unavailable on this ARM64 host.
+
+These remain the D3d-6 sizes, compared with 84,539 / 99,721 bytes before D3d-5;
+they are not measurements of an implemented D3d-7 refinement.
+
+The complete LLVM-free fork-mode CTest run passed all six suites with
+120-second per-test limits (142.93 seconds overall). The Python measurement
+suite passed all six tests; all 33 targeted pruning unit tests passed. All 81
+caide fixtures, including `github-issue8`, passed in the worker-enabled build.
+
+The clean sequential worker-enabled CTest run passed **102 of 103** checks
+with 120-second per-test limits (658.89 seconds overall), including all 54
+pruning fixtures and all 102 extraction model cases (724 checks). The sole
+failure is the already documented ARM64 `resolver_differential` /
+`resolve_fake_external_model_and_errors` signed-`wchar_t` model mismatch; the
+main unit suite, Clang resolver suite and every pipeline/CLI suite pass.
+The downloaded SDK was deleted after building. `git diff --check` passes.
+
+### D3d-7 — stopped pending lifetime-extended temporary handling
+
+The requested block-scope dynamic-initialization refinement has the intended
+basis: [stmt.dcl]/4 requires execution to reach the declaration, and /5 requires
+construction before destruction
+([C++20 text](https://timsong-cpp.github.io/cppwp/n4861/stmt.dcl#4)).
+Constant initialization is static initialization
+([C++20 basic.start.static/2](https://timsong-cpp.github.io/cppwp/n4861/basic.start.static#2));
+its possible destruction must remain conservative
+([C++20 basic.start.term/1–3](https://timsong-cpp.github.io/cppwp/n4861/basic.start.term#1)).
+
+However, the requested blanket exemption for constexpr references and
+trivially destructible classes is not sound without also accounting for
+**lifetime-extended temporaries**. For example (C++20):
+
+```cpp
+#include <cstdio>
+#include <type_traits>
+struct Noisy {
+  int member = 0;
+  constexpr ~Noisy() {
+    if (!std::is_constant_evaluated()) std::puts("destroy");
+  }
+};
+template<int> constexpr const int& value = Noisy{}.member;
+const int* dormant() { return &value<0>; }
+int main() { std::puts("main"); }
+```
+
+GCC 15.2 compiles this and prints `main` then `destroy`. Removing `dormant`
+leaves only `main`. The reference is constexpr, but binding it materializes a
+separate object whose lifetime extends to termination
+([C++20 class.temporary/6–7](https://timsong-cpp.github.io/cppwp/n4861/class.temporary#6)).
+Even the referent is scalar here; the complete temporary needs destruction.
+This is ordinary temporary destruction, outside A11's parameter-object exclusion.
+A trivially destructible `struct Holder { const Noisy& member; };` with
+`template<int> constexpr Holder value{Noisy{}};` has the same problem; a GCC
+`static_assert(std::is_trivially_destructible_v<Holder>)` passes.
+
+Clang 22 rejects the direct non-trivial-reference constant-expression example
+as unsupported. That parse gate does not justify a cross-target exemption:
+replace `Noisy` in the reference example with
+`Pick<(sizeof(long)==4)>::type`, where the false case is a trivial user
+class with `int member = 0;` and the true case is `Noisy`. The worker can parse
+the trivial case on LP64 while a judge selects the non-trivial temporary on
+LLP64/ILP32. A bounded
+local probe modeled the size selection: the trivial case passed Clang; the
+non-trivial case passed GCC and lost `destroy` when `dormant` was removed.
+The repaired D3d-6 worker accepts the trivial case and reports `dormant` as a
+possible trigger of `value`.
+
+Per the task's stop-if-unsound instruction, D3d-7 is **not implemented** and
+§4.7, rule 1 and the policy version remain D3d-6. A sound revision must preserve
+potential non-trivial destruction of lifetime-extended temporaries, including
+reference members of otherwise trivial aggregates, independently of the
+variable's own destructor/type. No extension of A11 is assumed.
+
 The sections below record the superseded D3d-5 investigation and measurements.
 
 Policy D3d-5 repairs a missing direction in the retention relation. A template

@@ -634,7 +634,9 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     const auto* t = q.getTypePtr();
     if (const auto* p = dyn_cast<PointerType>(t)) return inertType(p->getPointeeType(),depth+1);
     if (const auto* a = dyn_cast<ArrayType>(t)) return inertType(a->getElementType(),depth+1);
-    NestedNameSpecifier qualifier;
+    // LLVM 23's default constructor produces an invalid sentinel, not an
+    // empty qualifier. Types without a written qualifier must start null.
+    NestedNameSpecifier qualifier = std::nullopt;
     if (const auto* n = dyn_cast<TagType>(t)) qualifier = n->getQualifier();
     else if (const auto* n = dyn_cast<TypedefType>(t)) qualifier = n->getQualifier();
     else if (const auto* n = dyn_cast<UsingType>(t)) qualifier = n->getQualifier();
