@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept ClassObject | instantiation effect:
+kept SystemSelected | instantiation effect:
+kept SystemSelectedMember | instantiation effect:
+kept AliasSelected | instantiation effect:
+kept UserSelected | instantiation effect:
+kept UserSelectedEnum | instantiation effect:
+kept Placeholder | instantiation effect:
+kept DecltypePlaceholder | instantiation effect:
+kept Dependent | instantiation effect:
+kept ConstrainedPlaceholder | instantiation effect:
+kept Dormant | instantiation effect:
+removed Dead | outside the retention closure

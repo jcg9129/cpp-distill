@@ -288,6 +288,43 @@ int main(int argc, char** argv) {
         check(!kept(label),"inert pattern retained");
       }
     });
+    run("nonclass NTTPs and proven trivial parameter objects are not storage effects", [&] {
+      for (const auto* source : {
+          "using U=unsigned; template<U N> struct Candidate {};",
+          "template<class T> using Identity=T; template<Identity<unsigned> N> struct Candidate {};",
+          "using uint32_t=unsigned; namespace std { using ::uint32_t; } using U=std::uint32_t; template<U N> struct Candidate {};",
+          "enum class Mode { quick }; template<Mode M> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; template<V* P> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; template<V& P> struct Candidate {};",
+          "template<class T, T* P> struct Candidate {};",
+          "template<class T, T& P> struct Candidate {};",
+          "template<auto* P> struct Candidate {};",
+          "template<auto& P> struct Candidate {};",
+          "struct V { int x[2]; }; template<V P> struct Candidate {};",
+          "struct Base {}; struct V:Base { int x; }; template<V P> struct Candidate {};",
+          "template<unsigned N> void Candidate() { []<unsigned P>(){}; }"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP exemption disabled");
+        check(family(m,"Candidate").instantiationEffect.empty(),"nonclass/trivial NTTP classified effectful: " + std::string(source));
+        check(!kept("Candidate"),"inert NTTP retained: " + std::string(source));
+      }
+    });
+    run("unknown NTTP bindings remain conservative", [&] {
+      for (const auto* source : {
+          "template<auto P> struct Candidate {};",
+          "template<decltype(auto) P> struct Candidate {};",
+          "template<class T> concept Any=true; template<Any auto P> struct Candidate {};",
+          "template<class T, T P> struct Candidate {};",
+          "template<class T, typename T::type P> struct Candidate {};",
+          "template<bool B> struct Pick { using type=int; }; template<> struct Pick<false> { struct type { constexpr ~type(){} }; }; template<Pick<(sizeof(long)>4)>::type P> struct Candidate {};",
+          "template<bool B> struct Pick { enum class type { zero }; }; template<> struct Pick<false> { struct type { constexpr ~type(){} }; }; template<Pick<(sizeof(long)>4)>::type P> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; using Alias=V; template<Alias P> struct Candidate {};"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP control disabled");
+        check(!family(m,"Candidate").instantiationEffect.empty(),"possible class binding lost: " + std::string(source));
+        check(kept("Candidate"),"unknown NTTP removed");
+      }
+    });
     run("constexpr arithmetic template members", [&] {
       m = extract("template<class T> constexpr bool scalar = false;\n"
                   "template<class T> struct Unused { static constexpr bool x = !scalar<T>; };\n"

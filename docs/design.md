@@ -1347,9 +1347,14 @@ template parameter names and local names are not indexed.
    interpreted attribute roots in template contexts, and template entities
    referenced by interpreted assembly/alias symbols (retaining their patterns
    alone need not emit the referenced specializations). Non-type template
-   parameters outside the existing positive syntactic scalar type whitelist
-   also seed this rule: class-valued parameters create static template parameter
-   objects, including when an `auto` or dependent type becomes class-valued.
+   parameters also seed this rule when they can introduce class-valued template
+   parameter objects with nontrivial destruction. Direct scalar, enum, pointer,
+   member-pointer and reference types (including proven aliases) are exempt, as
+   are non-template user class types with provably trivial destruction of every
+   base and member. Written system-template selections stay conservative even
+   when locally scalar. Placeholder and dependent types stay conservative unless
+   their written shape excludes a class object: a judge-selected user branch can
+   supply a class binding absent from all known worker specializations.
    This includes member and nested templates, partial specializations,
    variable and function templates,
    generic lambdas, and out-of-line members. Keep effect sources and every

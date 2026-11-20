@@ -8,6 +8,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Mangle.h"
+#include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/Builtins.h"
@@ -651,6 +652,79 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     // Syntactic types only: no deduced auto, decltype, template or member types.
     return isa<BuiltinType>(t);
   }
+  bool standardScalarAlias(const NamedDecl* d, QualType q) const {
+    if (!q->isScalarType()) return false;
+    auto name = d->getQualifiedNameAsString();
+    if (name.starts_with("std::")) name.erase(0,5);
+    // The fixed/least/fast-width integer typedefs and size types have scalar
+    // types by contract, including the C names imported with using-declarations.
+    if (name == "size_t" || name == "ptrdiff_t" || name == "intptr_t" || name == "uintptr_t" ||
+        name == "intmax_t" || name == "uintmax_t") return true;
+    if (name.starts_with("uint")) name.erase(0,4);
+    else if (name.starts_with("int")) name.erase(0,3);
+    else return false;
+    if (name.starts_with("_least")) name.erase(0,6);
+    else if (name.starts_with("_fast")) name.erase(0,5);
+    if (!name.ends_with("_t")) return false;
+    name.resize(name.size()-2);
+    return !name.empty() && std::all_of(name.begin(),name.end(),[](char c) { return c >= '0' && c <= '9'; });
+  }
+  mutable std::set<const CXXRecordDecl*> trivialParameterRecords;
+  bool potentialParameterObject(QualType q, unsigned depth = 0) const {
+    if (depth > 50 || q.isNull()) return true;
+    const auto* t = q.getTypePtr();
+    NestedNameSpecifier qualifier;
+    if (const auto* n = dyn_cast<TagType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<TypedefType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<UsingType>(t)) qualifier = n->getQualifier();
+    // A selected member can change kind on another target, even when it is an
+    // enum or scalar typedef here: Pick<sizeof(long)>::type may name a class
+    // in another specialization. Namespace qualifications are harmless.
+    if (qualifier.getKind() == NestedNameSpecifier::Kind::Type) return true;
+    // Unlike a static variable, an NTTP that is a pointer/reference (even to
+    // a dependent or nontrivially destructible class) creates no object of its
+    // pointee/referent type. Do not recurse into these types as inertType does.
+    if (isa<BuiltinType,EnumType,PointerType,ReferenceType,MemberPointerType>(t)) return false;
+    if (const auto* u = dyn_cast<UsingType>(t)) {
+      if (!e.user(u->getDecl()->getBeginLoc())) return !standardScalarAlias(u->getDecl(),q);
+      return potentialParameterObject(u->desugar(),depth+1);
+    }
+    if (const auto* a = dyn_cast<TypedefType>(t)) {
+      if (!e.user(a->getDecl()->getBeginLoc())) return !standardScalarAlias(a->getDecl(),q);
+      return potentialParameterObject(a->desugar(),depth+1);
+    }
+    if (const auto* p = dyn_cast<ParenType>(t)) return potentialParameterObject(p->getInnerType(),depth+1);
+    if (const auto* m = dyn_cast<MacroQualifiedType>(t)) return potentialParameterObject(m->getUnderlyingType(),depth+1);
+    if (const auto* s = dyn_cast<SubstTemplateTypeParmType>(t)) return potentialParameterObject(s->getReplacementType(),depth+1);
+    if (const auto* a = dyn_cast<ArrayType>(t)) return potentialParameterObject(a->getElementType(),depth+1);
+    if (const auto* s = dyn_cast<TemplateSpecializationType>(t)) {
+      const auto* d = s->getTemplateName().getAsTemplateDecl();
+      // Preserve the written system-template selection even if its canonical
+      // type here is scalar: another judge may select a class instead.
+      if (d && e.user(d->getBeginLoc()) && s->isTypeAlias())
+        return potentialParameterObject(s->getAliasedType(),depth+1);
+      return true;
+    }
+    if (const auto* r = dyn_cast<RecordType>(t)) {
+      const auto* d = dyn_cast<CXXRecordDecl>(r->getDecl());
+      if (!d || !(d = d->getDefinition()) || !e.user(d->getBeginLoc()) ||
+          d->isDependentContext() || isa<ClassTemplateSpecializationDecl>(d) ||
+          d->getDescribedClassTemplate() || d->hasAttrs() || !d->hasTrivialDestructor()) return true;
+      if (trivialParameterRecords.contains(d)) return false;
+      // A locally trivial destructor is insufficient if a base/member type
+      // was selected by the system library. Prove those types recursively,
+      // memoizing successes so shared member-type DAGs do not expand exponentially.
+      for (const auto& b : d->bases()) if (potentialParameterObject(b.getType(),depth+1)) return true;
+      for (const auto* f : d->fields()) if (potentialParameterObject(f->getType(),depth+1)) return true;
+      trivialParameterRecords.insert(d);
+      return false;
+    }
+    // Keep auto, decltype(auto) and unresolved dependent member types
+    // conservative. A target-dependent user branch can bind a class argument
+    // absent from all of the worker's known specializations; A1/A6/A9 do not
+    // prohibit that. See the review's unseen_argument.cpp counterexample.
+    return true;
+  }
   bool safeSystemMacros(const VarDecl* v) {
     auto r = e.range(v->getSourceRange()); if (!r) return false;
     for (const auto& [offset,names] : e.systemMacros) if (r->begin <= offset && offset < r->end) for (const auto& name : names) {
@@ -840,9 +914,9 @@ public:
   }
   bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl* d) {
     // Class-valued NTTPs introduce static template parameter objects, not
-    // VarDecls. auto/dependent/target-selected types can become class-valued on
-    // the judge; exempt only the existing positive syntactic scalar subset.
-    if (current != noFamily && e.user(d->getBeginLoc()) && !inertType(d->getType()))
+    // VarDecls. Use a separate type proof: the static-variable whitelist both
+    // rejects safe scalar sugar and incorrectly examines pointer pointees.
+    if (current != noFamily && e.user(d->getBeginLoc()) && potentialParameterObject(d->getType()))
       e.model.families[current].instantiationEffect = "potential template parameter object storage";
     return true;
   }
