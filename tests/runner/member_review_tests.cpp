@@ -3,6 +3,7 @@
 #include "core/render/render.h"
 #include "core/path.h"
 #include "core/temporary.h"
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 
@@ -16,11 +17,12 @@ std::string read(const std::filesystem::path& p) {
 }
 }
 int main(int argc, char** argv) {
-  if (argc != 2) return 1;
+  if (argc != 3) return 1;
   try {
     TemporaryDirectory temp(".member-review-",std::filesystem::current_path());
     { std::ofstream f(temp.path / "empty.cpp"); }
-    auto command = take(parseCompileCommand({"g++","-std=c++23","empty.cpp"},temp.path));
+    const std::string gcc = std::getenv("DISTILL_TEST_GXX") ? std::getenv("DISTILL_TEST_GXX") : "g++";
+    auto command = take(parseCompileCommand({gcc,"-std=c++23","empty.cpp"},temp.path));
     ProbeOptions po; po.temporaryRoot = temp.path;
     auto config = take(probeConfiguration(command,"independent member review",po));
     PruneWorkerOptions worker; worker.executable = std::filesystem::absolute(argv[1]); worker.temporaryRoot = temp.path;
@@ -57,7 +59,9 @@ int main(int argc, char** argv) {
         text.replace(pos,std::string("sizeof(long) == 4").size(),"true");
       }
       { std::ofstream f(temp.path / "output.cpp"); f << text; }
-      for (const auto* compiler : {"g++","clang++"}) {
+      // The resolver CI SDK supplies libraries, not a clang++ on PATH.
+      // Always run the oracle with GCC and the configured build compiler.
+      for (const auto& compiler : {gcc,std::string(argv[2])}) {
         ProcessSpec spec; spec.cwd = temp.path; spec.timeout = std::chrono::seconds(20);
         spec.argv = {compiler,"-std=c++23","output.cpp","-o","run"};
         auto built = take(runProcess(spec));
