@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "clang/prune_extract.h"
 #include "core/names/names.h"
+#include "core/library/library.h"
 #include "resources.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Attr.h"
@@ -597,10 +598,11 @@ public:
   }
   // After parsing, the include graph and system-header classifications are fixed.
   // Raw lexing includes inactive branches and macro replacement lists. Keep this
-  // inventory separate so later work can union other scanned library builds.
+  // inventory together with the union of all scanned library builds.
   void collectLibraryMemberNames() {
     if (!e.model.assumeLibrarySpelledMembers) return;
     e.model.libraryMemberNames = expandedLibraryMemberNames;
+    for (auto name : embeddedLibraryData().memberNames) e.model.libraryMemberNames.emplace(name);
     for (const auto& [key,file] : headerFiles) {
       (void)key;
       bool invalid = false; const auto buffer = e.sm.getBufferData(file,&invalid);

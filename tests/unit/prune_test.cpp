@@ -2,6 +2,7 @@
 #include "support.h"
 #include "core/prune/extract.h"
 #include "core/names/adl.h"
+#include "core/library/library.h"
 #include "core/report/prune.h"
 #include <algorithm>
 #include <iomanip>
@@ -95,6 +96,8 @@ TEST(prune_library_spelled_members_identity_fallback_and_report) {
   b.m.libraryMemberNamesComputed = true;
   r = b.run(); CHECK(!r.families[member].kept); CHECK(r.assumptions.contains("A12"));
   auto report = renderPruningReport(b.m,r).value();
+  CHECK(!embeddedLibraryData().memberInventoryProvenance.empty());
+  CHECK(report.find("library member inventory: " + std::string(embeddedLibraryData().memberInventoryProvenance)) != report.npos);
   CHECK(report.find("pruning assumption: A12 library-spelled-members\n") != report.npos);
   CHECK(report.find("member units kept=0 removed=1\n") != report.npos);
   b.m.libraryMemberNames.insert("unused"); r = b.run(); CHECK(r.families[member].kept);

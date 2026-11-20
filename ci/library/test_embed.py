@@ -2,6 +2,7 @@
 """Resolver table tests: synthetic data plus round trips of the reviewed baseline."""
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 
@@ -15,10 +16,12 @@ NAME = '__cpp_lib_test'
 
 
 def report(build='profile-test', value='1L', condition='', volatile=(), reproduced=True, status='ok'):
+    from member_inventory import inventory
     text = '#define ' + NAME + ' 1L'
     if condition:
         text = '#if ' + condition + '\n' + text + '\n#endif'
     return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
+                member_inventory=inventory({'0/charconv': text}),
                 std='c++23', triple='x86_64-pc-linux-gnu', flags=[], compiler='synthetic',
                 reproduced=reproduced, provenance=dict(build='recipe=https://example.test'),
                 volatile=list(volatile), observations={},
@@ -106,13 +109,47 @@ def test_embed_baseline_round_trip_is_small_and_deterministic():
         assert embedded[-1] == build['flags']
     text = generate(raw, standard)
     assert text == generate(raw, standard)
-    assert len(text) < 400_000 and len(text) < len(raw) // 10
+    # ~305 KB of transitions plus ~283 KB of front-coded member-name source.
+    # 620 KB allows 5% growth while rejecting the former 852 KB literal array.
+    assert len(text.encode('utf-8')) < 620_000
     assert hashlib.sha256(raw).hexdigest() in text
     # Dictionary order is irrelevant to table layout; exact bytes still identify
     # distinct baselines in provenance.
     reordered = json.dumps(data, sort_keys=True).encode()
     other = generate(reordered, standard)
     assert text.replace(hashlib.sha256(raw).hexdigest(), '') == other.replace(hashlib.sha256(reordered).hexdigest(), '')
+
+
+@pytest.mark.parametrize('baseline', [False, True])
+def test_embed_compiled_member_inventory_round_trip(tmp_path, baseline):
+    compiler = shutil.which('g++') or shutil.which('clang++')
+    if compiler is None:
+        pytest.skip('C++20 compiler unavailable')
+    data = json.loads((ROOT / 'data/library/library.json').read_bytes()) if baseline else combined(report())
+    if not baseline:
+        # Short suffixes, long prefixes, UTF-8 prefixes, and multiple chunks.
+        data['member_names'] = sorted({'a', 'aa', 'café', 'caféine', '𐐀', '𐐀x',
+                                       'long_' + 'x' * 200 + 'a', 'long_' + 'x' * 200 + 'b'} |
+                                      {f'member_{i:05}' for i in range(2000)} |
+                                      set(data['member_names']))
+    standard = {s for s in (ROOT / 'data/names/standard-headers.txt').read_text().splitlines()
+                if s and not s.startswith('#')}
+    generated = tmp_path / 'embedded.cpp'
+    generated.write_text(generate(baseline_text(data).encode(), standard), encoding='utf-8')
+    driver = tmp_path / 'main.cpp'
+    driver.write_text('''#include "core/library/library.h"
+#include <iostream>
+int main() {
+  const auto& data = distill::embeddedLibraryData();
+  if (&data != &distill::embeddedLibraryData()) return 1;
+  for (auto name : data.memberNames) std::cout << name << '\\n';
+}
+''')
+    binary = tmp_path / 'inventory'
+    subprocess.run([compiler, '-std=c++20', '-I', str(ROOT / 'src'), str(generated),
+                    str(driver), '-o', str(binary)], check=True, capture_output=True, timeout=60)
+    result = subprocess.run([str(binary)], check=True, capture_output=True, timeout=30)
+    assert result.stdout.decode('utf-8').splitlines() == data['member_names']
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'generator', 'missing', 'address', 'reference', 'cycle'])

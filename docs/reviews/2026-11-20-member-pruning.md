@@ -11,11 +11,12 @@ and its independent opt-out. See [design §4.7](../design.md#47-pruning).
 > The judge's standard library headers call, name or take the address of a member
 > of a user type only through an identifier spelled in, or produced by macro
 > expansion of, the library headers the translation unit includes on the worker,
-> or as an operator function, conversion function, constructor or destructor.
+> or spelled in the headers of a scanned library build, or as an operator
+> function, conversion function, constructor or destructor.
 
 User, 2026-11-20. This replaces the proposed A10 member-name registry assumption;
 A10 was never adopted. The library-name index alone was insufficient (range
-formatting probes `set_debug_format`). A12 uses actual worker headers and assumes
+formatting probes `set_debug_format`). A12 uses actual worker headers plus all scanned library builds and assumes
 that this bounds the judge's library; it does not prove matching headers.
 
 After collecting the include graph, the worker raw-lexes every included system
@@ -25,13 +26,24 @@ is normalized by Clang. The inventory also includes identifier tokens actually
 produced by preprocessing the full unpruned translation unit through system
 macros, including pasted results, user-supplied arguments and user macros invoked
 in system context. Expansion ancestry is followed through spelling and invocation
-locations, including scratch buffers. Under A12 the worker headers/configuration
-bound the judge's; unexpanded macros produce nothing in this TU. An unreadable or
-incomplete inventory disables member pruning with a report reason. Whole-family
+locations, including scratch buffers. Under A12 these headers and the scanned
+inventory bound the judge's; unexpanded worker macros produce nothing in this TU. An unreadable or
+incomplete worker inventory disables member pruning with a report reason. Whole-family
 pruning and its existing safety gates continue. Language lookup names (`begin`,
 `end`, `get`, and coroutine protocol names) are protected independently of headers.
-The collection and retention code leave an explicit union point for inventories
-from all scanned library builds; that widening is future work, not implemented.
+The explicit union point now adds every identifier spelled in the reachable
+headers of every eligible scanned L1c libstdc++ build, including libc headers.
+Capture raw-tokenizes those headers without conditional filtering, normalizes
+line splices/UCNs and excludes comments/literals/pp-numbers. Merge stores one
+sorted union and compact per-build counts, name digests and token-pasting flags;
+full evidence retains per-build names and pasting header keys. Pasting is
+report-only; worker expansions still cover local pasting. This can only keep
+more members. The report names the scanned-build count and generator.
+Generator 4 produces the inventory; generator 3 remains accepted and reports
+`scanned-build inventory unavailable`, using worker headers only until a reviewed
+CI import. Dispatch `.github/workflows/library.yml` on the updated branch with
+no inputs, then review/import the `library-generated` artifact as described in
+[ci/library/README.md](../../ci/library/README.md#first-capture-or-reviewed-refresh).
 
 `--no-assume=library-spelled-members` disables only member pruning. It uses the
 same repeatable/comma-list parser as `instantiation-effects`. Every enabled member

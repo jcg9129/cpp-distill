@@ -128,6 +128,11 @@ TEST(resolve_fake_external_model_and_errors) {
   auto r = resolve("#if 1 + 2\nx\n#endif\n", e);
   CHECK_EQ(r.decisions[0].reason, "unknown integer model"); CHECK(e.inputs.empty());
   ResolveOptions o; o.requirements.integers = IntegerModel{};
+  if (const auto* mode = std::getenv("DISTILL_TEST_EVALUATOR"); mode && std::string_view(mode) == "differential") {
+    // This arithmetic fixture needs a known model, not an x86 wchar layout
+    // that the native ARM64 GCC oracle cannot represent.
+    test::TempDirectory temp; o.requirements.integers = localIntegerModel(temp.path);
+  }
   r = resolve("#if 1 + 2\nx\n#endif\n", e, o);
   CHECK(r.decisions[0].requirements.integers.has_value());
   e.answer = [](const auto&) -> Result<bool> { return Error{"bad expression"}; };
@@ -500,7 +505,7 @@ TEST(resolve_library_shipped_acceptance_and_provenance) {
     CHECK_EQ(r.decisions[0].external[0].fact.provenance, (std::vector{FactOrigin::library}));
     CHECK_EQ(r.decisions[0].external[0].fact.definition->replacement, "201611L");
     CHECK_EQ(r.libraryProvenance.size(), 1u);
-    CHECK(r.libraryProvenance.begin()->find("generator=3 schema=2 embed=1 sha256:") != std::string::npos);
+    CHECK(r.libraryProvenance.begin()->find("generator=4 schema=2 embed=1 sha256:") != std::string::npos);
     CHECK(r.libraryProvenance.begin()->find("selector=" + data.selector(p)) != std::string::npos);
     // Check actual replacement arithmetic with a model the local oracle can
     // represent (the Codeforces profile itself has MinGW's LLP64 layout).

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / 'ci/extensions'))
 from generate import directive_text
 
-VERSION = 3
+VERSION = 4
 NAME = r'[A-Za-z_][A-Za-z_0-9]*'
 INTEGER = re.compile(r'(?:0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\Z')
 # Candidates, never unconditional exemptions: verify every reachable write.
