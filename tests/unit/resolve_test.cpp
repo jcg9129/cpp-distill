@@ -612,6 +612,50 @@ TEST(resolve_library_agreement_requires_scanned_dialect_and_flags) {
   p = lookupProfile("atcoder").value(); p.flags.push_back("-Wshadow");
   CHECK(data.selector(p).empty()); CHECK_EQ(data.selector(p, true), "gcc-15");
 }
+TEST(resolve_library_agreement_rejects_flags_from_separate_builds) {
+  constexpr std::string_view first[]{"-O2"}, second[]{"-fno-exceptions"};
+  constexpr std::string_view both[]{"-O2", "-fno-exceptions"};
+  const LibraryBuild builds[]{
+    {"", "15", "15.2.0", "gnu++20", "", "", first},
+    {"", "15", "15.2.0", "gnu++20", "", "", second},
+    {"", "14", "14.2.0", "gnu++20", "", "", both},
+    {"", "15", "15.2.0", "c++23", "", "", both}};
+  const LibraryData data{{}, {}, {}, builds, "synthetic"};
+  for (const bool reproduced : {false, true}) {
+    auto p = featureProfile(reproduced);
+    for (const bool harmless : {false, true}) {
+      p.flags = {"-O2", "-fno-exceptions"};
+      if (harmless) p.flags = {"-Wshadow", "-fno-exceptions", "-g3", "-O2", "-pipe"};
+      std::string reason;
+      CHECK(data.selector(p, reproduced, &reason).empty());
+      CHECK_EQ(reason, std::string("profile flag combination not covered by a single scanned build: ") +
+                       (harmless ? "-fno-exceptions -O2" : "-O2 -fno-exceptions"));
+      CHECK(data.selector(p, reproduced).empty());
+      // Individually missing flags keep the existing diagnostic and profile order.
+      p.flags.insert(p.flags.begin(), "-fno-rtti");
+      p.flags.push_back("-ffreestanding");
+      CHECK(data.selector(p, reproduced, &reason).empty());
+      CHECK_EQ(reason, "profile flags not covered by scanned builds: -fno-rtti -ffreestanding");
+    }
+  }
+}
+TEST(resolve_library_agreement_accepts_flags_in_one_build) {
+  // Build flags may be reordered and may contain extra flags.
+  constexpr std::string_view flags[]{"-fno-rtti", "-fno-exceptions", "-O2"};
+  const LibraryBuild builds[]{{"", "15", "15.2.0", "gnu++20", "", "", flags}};
+  const LibraryData data{{}, {}, {}, builds, "synthetic"};
+  for (const bool reproduced : {false, true}) {
+    auto p = featureProfile(reproduced);
+    for (const auto& profileFlags : {std::vector<std::string>{"-O2", "-fno-exceptions"},
+         std::vector<std::string>{"-Wshadow", "-O2", "-g3", "-fno-exceptions", "-pipe"},
+         std::vector<std::string>{"-Wshadow", "-g3", "-pipe"}, std::vector<std::string>{}}) {
+      p.flags = profileFlags;
+      std::string reason = "stale reason";
+      CHECK_EQ(data.selector(p, reproduced, &reason), "gcc-15");
+      CHECK(reason.empty());
+    }
+  }
+}
 TEST(resolve_library_satisfaction_uses_configuration_coverage) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
   auto p = featureProfile(); p.dialect = {"c++23", false, 202302};
