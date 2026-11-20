@@ -526,11 +526,11 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     // Only direct written carriers. Desugaring a trait/alias here could certify
     // a parameter that is an unrelated type on the judge. Pattern and instance
     // checks are intersected, so substitution never improves the certificate.
+    // LLVM 23 stores written qualifiers on the type nodes themselves.
     const auto* t = q.getTypePtrOrNull();
     while (t) {
       if (const auto* p = dyn_cast<PointerType>(t)) t = p->getPointeeType().getTypePtr();
       else if (const auto* r = dyn_cast<ReferenceType>(t)) t = r->getPointeeType().getTypePtr();
-      else if (const auto* r = dyn_cast<ElaboratedType>(t)) t = r->getNamedType().getTypePtr();
       else if (const auto* r = dyn_cast<RecordType>(t)) return e.owner(r->getDecl()) == current;
       else if (const auto* r = dyn_cast<InjectedClassNameType>(t)) return e.owner(r->getDecl()) == current;
       else if (const auto* s = dyn_cast<TemplateSpecializationType>(t)) {
