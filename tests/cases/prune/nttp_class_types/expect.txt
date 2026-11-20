@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed ClassObject | outside the retention closure
+removed SystemSelected | outside the retention closure
+removed SystemSelectedMember | outside the retention closure
+removed AliasSelected | outside the retention closure
+removed UserSelected | outside the retention closure
+removed UserSelectedEnum | outside the retention closure
+removed Placeholder | outside the retention closure
+removed DecltypePlaceholder | outside the retention closure
+removed Dependent | outside the retention closure
+removed ConstrainedPlaceholder | outside the retention closure
+removed Dormant | outside the retention closure
+removed Dead | outside the retention closure
+# A11 excludes template parameter object destruction, including unknown bindings.
+report | pruning assumption: A11 instantiation-effects

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+a11-exclusion | A11 excludes constexpr variable and its lifetime-extended temporary destruction
+removed dormant | outside the retention closure
+report | pruning assumption: A11 instantiation-effects

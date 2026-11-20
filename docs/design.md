@@ -156,6 +156,11 @@ these, and only these; the report lists each one an output depended on, and
   Different values for a name make that name unknown. The report lists A9
   whenever a resolution relies on these header-derived facts.
 
+- **A11 (`instantiation-effects`)** (user, 2026-11-20) The program's observable behaviour and its compilation success do not depend on whether the definition of a function friend declared in a template has been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118), nor on the destruction of template parameter objects, of constexpr variables and the temporaries whose lifetime they extend, or of block-scope variables with static or thread storage duration whose declaration control never reached.
+  By default every pruned artifact relies on A11; reports print
+  `A11 instantiation-effects` alongside A7. `--no-assume=instantiation-effects`
+  disables this assumption while keeping pruning enabled (§4.7).
+
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
 
@@ -183,6 +188,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
+| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; only `instantiation-effects` (A11) is switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
@@ -1293,7 +1299,9 @@ template parameter names and local names are not indexed.
    link a user `typedef`/`using` whose right-hand side is spelled with builtin
    type keywords or names the next link directly — no templates, `decltype`,
    dependent or member types anywhere in the chain (R5-2) — or `std::size_t`,
-   `std::ptrdiff_t` or an `<cstdint>` type.
+   `std::ptrdiff_t` or a standard C/C++ integer/size typedef. Imported scalar
+   typedefs represented by `UsingType` are followed too; written type-qualified
+   member selections remain conservative even when locally scalar.
    Policy **D3d-3**, under A7, additionally exempts defining `constexpr`
    variables with static storage, no thread storage, volatile/reference type or
    variable attributes, when `safeSystemMacros` holds and either:
@@ -1340,6 +1348,95 @@ template parameter names and local names are not indexed.
    declarations included, without filtering by Clang's viability or the
    instantiations it saw. A construct the traversal doesn't support
    pins its family; if its dependencies can't be bounded, pruning is disabled.
+6. **Instantiation effects** (policy **D3d-7**): preserving a template's
+   definition does not preserve the code that instantiates it. Effect sources
+   are static/thread storage definitions in template contexts outside rule 1's
+   inert exemptions and the additional storage proofs below, interpreted
+   attribute roots in template contexts, and
+   template entities referenced by interpreted assembly/alias symbols
+   (retaining their patterns alone need not emit the referenced specializations).
+   Rule 1's roots are unchanged. Under A11, constexpr variables of any scope
+   or type and all block-scope static/thread variables are not storage effect
+   sources. Constant initialization has no independent runtime effect;
+   dynamic initialization of block storage requires control to reach its
+   declaration, preserved through ordinary dependencies. A11 excludes constexpr
+   destruction (including lifetime-extended temporaries) and destruction of
+   block storage whose declaration is never reached. This block exemption is
+   an assumption, not a language guarantee inferred from compiler behavior.
+   Other static/thread storage is exempt only with an all-target proof of
+   constant initialization, no possible non-trivial destruction of its own
+   type, and **no lifetime-extended temporary in its initializer**, including
+   through aggregate reference members and default member initializers.
+   The additional proof uses the existing syntactic constant initializer proof
+   and a written, target-stable non-reference scalar/array type or a provably
+   trivially destructible user class. User aliases are inspected as written;
+   classes must be non-template and all their bases/fields must have provably
+   trivial destruction. References are allowed as fields only; their
+   initializers still must pass the syntactic proof, which rejects materialized
+   temporaries and default member/default argument expressions outright.
+   Dependent types/initializers, deduced types, template-selected member types
+   and system class selections do not pass this additional proof. Implicit
+   specializations use their pattern; explicit specializations are checked
+   independently. The original positive inert exemptions remain in force.
+   This includes member and nested templates, partial specializations,
+   variable and function templates,
+   generic lambdas, and out-of-line members. Keep effect sources and every
+   family that can reach one in the potential dependency graph of **all**
+   families, including otherwise unused declarations and template patterns.
+   Edges are identifier-token references to indexed names, AST references,
+   dependent-call name matches, type associations, family unions and positive
+   system-entity edges. Reverse transitive closure covers aliases, default
+   arguments, unevaluated operands, constraints, constant evaluation and
+   default member initializers; ordinary forward closure still runs afterward.
+   Report these as `instantiation effect: ...`, with the effect source as cause.
+   Clang's observed instantiations are positive evidence, never a filter on
+   possible triggers. If the reverse closure reaches a user specialization of
+   a system template or a free ADL/operator hook, pruning is disabled with
+   `unbounded system instantiation effects through ...`: A6 bounds hook names,
+   not their incoming library instantiations on another target. Hidden friends
+   in record families instead have bounded carrier/association paths only when
+   every non-member callable in the family has a direct parameter carrying that
+   same record family (optionally through pointers/references; aliases and type
+   substitutions do not certify this). This certificate remains necessary when
+   a hidden hook reaches a remaining storage or attribute effect, even though
+   the friend declaration itself is no longer an effect source. The graph has a
+   four-million-edge limit; exceeding it disables pruning. See the
+   [instantiation-effects review](reviews/2026-11-20-instantiation-effects.md).
+
+**Under A11 (user, 2026-11-20).** Function friend declarations in templates,
+potential class-valued non-type template parameter objects, constexpr variables
+and block-scope static/thread variables no longer seed rule 6. Their ordinary
+name, type, value and AST dependencies still participate in forward closure.
+Non-constexpr static/thread storage outside blocks can still introduce dynamic
+initialization or destruction independently of control reaching a declaration;
+it remains a source unless positively proven harmless as above. Templated
+attribute/symbol roots also remain sources. Reverse closure preserves their
+potential triggers, including dormant patterns and target-dependent paths;
+unbounded incoming library hooks still refuse. Every enabled pruned artifact
+reports `A11 instantiation-effects` alongside A7, even when no family is deleted
+(unless disabled by the flag below).
+
+**Without `instantiation-effects` (user, 2026-11-20).**
+`--no-assume=instantiation-effects` keeps policy D3d-7 and pruning enabled but
+restores D3d-5's function-friend declarations in template contexts and potential
+template parameter objects as rule-6 effect sources. The pre-A11 NTTP proofs
+remain valid: written scalar/enum/pointer/reference/member-pointer types,
+recognized scalar aliases and recursively proven trivial non-template user
+classes do not introduce parameter-object destruction. Unknown placeholders,
+dependent bindings, system class selections and template-qualified member
+types remain conservative, including locally scalar or trivial selections.
+All non-inert template static/thread storage, including constexpr and block
+storage, is again a source unless the constant-initialization, trivial-type and
+no-extended-temporary proof above succeeds. Necessarily-dynamic block locals
+are conservatively retained as sources; the optional dynamic-initialization
+proof is not used. Rule-1 exemptions, forward/reverse closure, attribute/symbol
+sources and refusal gates still apply. This mode needs A1–A7 and A9 where
+applicable, but does not need A11. Reports say
+`policy: D3d-7, without instantiation-effects`, explicitly record that the flag
+disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
+The setting is part of serialized worker protocol version 3 and checked as
+immutable input on return. There is no pruning-result cache; the serialized
+model and policy identity distinguish the modes.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. It catches range and editing
@@ -1498,7 +1595,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7, and A9 for L1c) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, A11, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

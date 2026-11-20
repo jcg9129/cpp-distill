@@ -8,6 +8,7 @@
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/Mangle.h"
+#include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/Builtins.h"
@@ -520,12 +521,51 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
   std::size_t visits = 0;
   std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
   std::map<std::string,std::set<FamilyId>,std::less<>> symbols;
+  std::set<FamilyId> templatedSymbols;
+  std::set<FamilyId> callableCarriersSeen;
+  bool ownRecordParameter(QualType q) const {
+    // Only direct written carriers. Desugaring a trait/alias here could certify
+    // a parameter that is an unrelated type on the judge. Pattern and instance
+    // checks are intersected, so substitution never improves the certificate.
+    // LLVM 23 stores written qualifiers on the type nodes themselves.
+    const auto* t = q.getTypePtrOrNull();
+    while (t) {
+      if (const auto* p = dyn_cast<PointerType>(t)) t = p->getPointeeType().getTypePtr();
+      else if (const auto* r = dyn_cast<ReferenceType>(t)) t = r->getPointeeType().getTypePtr();
+      else if (const auto* r = dyn_cast<RecordType>(t)) return e.owner(r->getDecl()) == current;
+      else if (const auto* r = dyn_cast<InjectedClassNameType>(t)) return e.owner(r->getDecl()) == current;
+      else if (const auto* s = dyn_cast<TemplateSpecializationType>(t)) {
+        const auto* d = s->getTemplateName().getAsTemplateDecl();
+        return isa_and_nonnull<ClassTemplateDecl>(d) && e.owner(d) == current;
+      }
+      else return false;
+    }
+    return false;
+  }
+  // Include member/nested templates, partial specializations, instantiated
+  // contexts and out-of-line members. Classification never depends on which
+  // specializations the local Clang parse happened to instantiate.
+  bool templated(const Decl* d) const {
+    for (; d; d = d->getDeclContext() ? Decl::castFromDeclContext(d->getDeclContext()) : nullptr) {
+      if (const auto* r = dyn_cast<CXXRecordDecl>(d))
+        if (r->getDescribedClassTemplate() || isa<ClassTemplateSpecializationDecl>(r)) return true;
+      if (const auto* f = dyn_cast<FunctionDecl>(d))
+        if (f->getDescribedFunctionTemplate() || f->getPrimaryTemplate() || f->getInstantiatedFromMemberFunction()) return true;
+      if (const auto* v = dyn_cast<VarDecl>(d))
+        if (v->getDescribedVarTemplate() || isa<VarTemplateSpecializationDecl>(v)) return true;
+      if (const auto* c = dyn_cast<DeclContext>(d); c && c->isDependentContext()) return true;
+    }
+    return false;
+  }
   bool symbolRoot(std::string_view symbol, std::string_view form) {
     auto found = symbols.find(symbol);
     if (found == symbols.end()) {
       e.disable("unresolved " + std::string(form) + " symbol: " + std::string(symbol)); return false;
     }
-    for (auto id : found->second) e.model.families[id].root = std::string(form) + " symbol reference";
+    for (auto id : found->second) {
+      e.model.families[id].root = std::string(form) + " symbol reference";
+      if (templatedSymbols.contains(id)) e.model.families[id].instantiationEffect = "template symbol reference";
+    }
     return true;
   }
   void assembly(std::string_view text, clang::SourceLocation at) {
@@ -594,23 +634,102 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     const auto* t = q.getTypePtr();
     if (const auto* p = dyn_cast<PointerType>(t)) return inertType(p->getPointeeType(),depth+1);
     if (const auto* a = dyn_cast<ArrayType>(t)) return inertType(a->getElementType(),depth+1);
+    // LLVM 23's default constructor produces an invalid sentinel, not an
+    // empty qualifier. Types without a written qualifier must start null.
+    NestedNameSpecifier qualifier = std::nullopt;
+    if (const auto* n = dyn_cast<TagType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<TypedefType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<UsingType>(t)) qualifier = n->getQualifier();
+    // A locally scalar member selection can name a class on another target.
+    if (qualifier.getKind() == NestedNameSpecifier::Kind::Type) return false;
+    if (const auto* u = dyn_cast<UsingType>(t)) {
+      if (!e.user(u->getDecl()->getBeginLoc())) return standardScalarAlias(u->getDecl(),q);
+      return inertType(u->desugar(),depth+1);
+    }
     if (const auto* a = dyn_cast<TypedefType>(t)) {
       const auto* d = a->getDecl();
-      const auto name = d->getQualifiedNameAsString();
-      if (!e.user(d->getBeginLoc())) {
-        return q->isScalarType() && (name == "std::size_t" || name == "std::ptrdiff_t" ||
-          (name.starts_with("std::") && (name.substr(5).starts_with("int") || name.substr(5).starts_with("uint")) && name.ends_with("_t")));
-      }
-      auto underlying = d->getUnderlyingType();
+      if (!e.user(d->getBeginLoc())) return standardScalarAlias(d,q);
       const auto* info = d->getTypeSourceInfo();
       if (!info) return false;
-      const auto loc = info->getTypeLoc();
-      const auto* written = loc.getType().getTypePtr();
-      if (!isa<BuiltinType>(written) && !isa<TypedefType>(written)) return false;
-      return inertType(underlying,depth+1);
+      const auto* written = info->getTypeLoc().getType().getTypePtr();
+      if (!isa<BuiltinType,TypedefType,UsingType>(written)) return false;
+      return inertType(info->getTypeLoc().getType(),depth+1);
     }
     // Syntactic types only: no deduced auto, decltype, template or member types.
     return isa<BuiltinType>(t);
+  }
+  bool standardScalarAlias(const NamedDecl* d, QualType q) const {
+    if (!q->isScalarType()) return false;
+    auto name = d->getQualifiedNameAsString();
+    if (name.starts_with("std::")) name.erase(0,5);
+    // The fixed/least/fast-width integer typedefs and size types have scalar
+    // types by contract, including the C names imported with using-declarations.
+    if (name == "size_t" || name == "ptrdiff_t" || name == "intptr_t" || name == "uintptr_t" ||
+        name == "intmax_t" || name == "uintmax_t") return true;
+    if (name.starts_with("uint")) name.erase(0,4);
+    else if (name.starts_with("int")) name.erase(0,3);
+    else return false;
+    if (name.starts_with("_least")) name.erase(0,6);
+    else if (name.starts_with("_fast")) name.erase(0,5);
+    if (!name.ends_with("_t")) return false;
+    name.resize(name.size()-2);
+    return !name.empty() && std::all_of(name.begin(),name.end(),[](char c) { return c >= '0' && c <= '9'; });
+  }
+  mutable std::set<const CXXRecordDecl*> trivialParameterRecords;
+  bool potentialParameterObject(QualType q, unsigned depth = 0) const {
+    if (depth > 50 || q.isNull()) return true;
+    const auto* t = q.getTypePtr();
+    NestedNameSpecifier qualifier = std::nullopt;
+    if (const auto* n = dyn_cast<TagType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<TypedefType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<UsingType>(t)) qualifier = n->getQualifier();
+    // A selected member can change kind on another target, even when it is an
+    // enum or scalar typedef here: Pick<sizeof(long)>::type may name a class
+    // in another specialization. Namespace qualifications are harmless.
+    if (qualifier.getKind() == NestedNameSpecifier::Kind::Type) return true;
+    // Unlike a static variable, an NTTP that is a pointer/reference (even to
+    // a dependent or nontrivially destructible class) creates no object of its
+    // pointee/referent type. Do not recurse into these types as inertType does.
+    if (isa<BuiltinType,EnumType,PointerType,ReferenceType,MemberPointerType>(t)) return false;
+    if (const auto* u = dyn_cast<UsingType>(t)) {
+      if (!e.user(u->getDecl()->getBeginLoc())) return !standardScalarAlias(u->getDecl(),q);
+      return potentialParameterObject(u->desugar(),depth+1);
+    }
+    if (const auto* a = dyn_cast<TypedefType>(t)) {
+      if (!e.user(a->getDecl()->getBeginLoc())) return !standardScalarAlias(a->getDecl(),q);
+      return potentialParameterObject(a->desugar(),depth+1);
+    }
+    if (const auto* p = dyn_cast<ParenType>(t)) return potentialParameterObject(p->getInnerType(),depth+1);
+    if (const auto* m = dyn_cast<MacroQualifiedType>(t)) return potentialParameterObject(m->getUnderlyingType(),depth+1);
+    if (const auto* s = dyn_cast<SubstTemplateTypeParmType>(t)) return potentialParameterObject(s->getReplacementType(),depth+1);
+    if (const auto* a = dyn_cast<ArrayType>(t)) return potentialParameterObject(a->getElementType(),depth+1);
+    if (const auto* s = dyn_cast<TemplateSpecializationType>(t)) {
+      const auto* d = s->getTemplateName().getAsTemplateDecl();
+      // Preserve the written system-template selection even if its canonical
+      // type here is scalar: another judge may select a class instead.
+      if (d && e.user(d->getBeginLoc()) && s->isTypeAlias())
+        return potentialParameterObject(s->getAliasedType(),depth+1);
+      return true;
+    }
+    if (const auto* r = dyn_cast<RecordType>(t)) {
+      const auto* d = dyn_cast<CXXRecordDecl>(r->getDecl());
+      if (!d || !(d = d->getDefinition()) || !e.user(d->getBeginLoc()) ||
+          d->isDependentContext() || isa<ClassTemplateSpecializationDecl>(d) ||
+          d->getDescribedClassTemplate() || d->hasAttrs() || !d->hasTrivialDestructor()) return true;
+      if (trivialParameterRecords.contains(d)) return false;
+      // A locally trivial destructor is insufficient if a base/member type
+      // was selected by the system library. Prove those types recursively,
+      // memoizing successes so shared member-type DAGs do not expand exponentially.
+      for (const auto& b : d->bases()) if (potentialParameterObject(b.getType(),depth+1)) return true;
+      for (const auto* f : d->fields()) if (potentialParameterObject(f->getType(),depth+1)) return true;
+      trivialParameterRecords.insert(d);
+      return false;
+    }
+    // Keep auto, decltype(auto) and unresolved dependent member types
+    // conservative. A target-dependent user branch can bind a class argument
+    // absent from all of the worker's known specializations; A1/A6/A9 do not
+    // prohibit that. See the review's unseen_argument.cpp counterexample.
+    return true;
   }
   bool safeSystemMacros(const VarDecl* v) {
     auto r = e.range(v->getSourceRange()); if (!r) return false;
@@ -668,6 +787,62 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     // that could have originated in a call, conversion or default arguments.
     return list->getNumInits() == 0;
   }
+  // These proofs are deliberately separate from rule 1's storage roots.
+  // A locally selected specialization or successful constant evaluation is
+  // not evidence about a different target. Inspect the pattern's written type.
+  const VarDecl* storagePattern(const VarDecl* v) const {
+    if (v->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
+      if (const auto* pattern = v->getTemplateInstantiationPattern()) return pattern;
+    return v;
+  }
+  bool trivialStorageType(QualType q, unsigned depth = 0, bool field = false) {
+    if (depth > 50 || q.isNull() || q->isDependentType()) return false;
+    const auto* t = q.getTypePtr();
+    NestedNameSpecifier qualifier = std::nullopt;
+    if (const auto* n = dyn_cast<TagType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<TypedefType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<UsingType>(t)) qualifier = n->getQualifier();
+    if (qualifier.getKind() == NestedNameSpecifier::Kind::Type) return false;
+    if (const auto* u = dyn_cast<UsingType>(t)) {
+      if (!e.user(u->getDecl()->getBeginLoc())) return standardScalarAlias(u->getDecl(),q);
+      return trivialStorageType(u->desugar(),depth+1,field);
+    }
+    if (const auto* a = dyn_cast<TypedefType>(t)) {
+      const auto* d = a->getDecl();
+      if (!e.user(d->getBeginLoc())) return standardScalarAlias(d,q);
+      const auto* info = d->getTypeSourceInfo();
+      return info && trivialStorageType(info->getTypeLoc().getType(),depth+1,field);
+    }
+    if (const auto* a = dyn_cast<ConstantArrayType>(t))
+      return trivialStorageType(a->getElementType(),depth+1,field);
+    if (isa<ReferenceType>(t)) return field; // Reference members have no destructor.
+    if (isa<BuiltinType,PointerType,MemberPointerType,EnumType>(t)) return true;
+    const auto* rt = dyn_cast<RecordType>(t);
+    const auto* r = rt ? dyn_cast<CXXRecordDecl>(rt->getDecl()) : nullptr;
+    if (!r || !(r = r->getDefinition()) || !e.user(r->getBeginLoc()) ||
+        r->isDependentType() || r->getDescribedClassTemplate() ||
+        isa<ClassTemplateSpecializationDecl>(r) || r->hasAttrs() ||
+        !r->hasTrivialDestructor()) return false;
+    for (const auto* context = r->getDeclContext(); context; context = context->getParent()) {
+      if (context->isDependentContext()) return false;
+      if (const auto* parent = dyn_cast<CXXRecordDecl>(context);
+          parent && (parent->getDescribedClassTemplate() || isa<ClassTemplateSpecializationDecl>(parent))) return false;
+    }
+    for (const auto& base : r->bases()) if (!trivialStorageType(base.getType(),depth+1)) return false;
+    for (const auto* f : r->fields()) if (!trivialStorageType(f->getType(),depth+1,true)) return false;
+    return true;
+  }
+  bool noStorageInstantiationEffect(const VarDecl* variable) {
+    const auto* v = storagePattern(variable);
+    if (!safeSystemMacros(v) || v->getType()->isDependentType()) return false;
+    const auto* init = v->getInit();
+    if (init && (init->isTypeDependent() || init->isValueDependent())) return false;
+    // This proof also applies without A11, at any scope. Use the
+    // syntactic constant-initializer proof, never local constant evaluation.
+    // inertExpr also rejects materialized temporaries and default expressions,
+    // so this cannot overlook lifetime extension through reference members.
+    return inertExpr(init) && trivialStorageType(v->getType());
+  }
   std::set<const VarDecl*> inertActive;
   bool inertExpr(const Expr* expr, unsigned depth = 0) {
     if (!expr) return true;
@@ -714,6 +889,7 @@ public:
     if (current != noFamily && e.user(d->getBeginLoc())) for (const auto* attr : d->attrs()) {
       if (isa<ConstructorAttr,DestructorAttr,UsedAttr,SectionAttr,WeakAttr,VisibilityAttr,AsmLabelAttr,AliasAttr>(attr)) {
         e.model.families[current].root = std::string("attribute: ") + attr->getSpelling();
+        if (templated(d)) e.model.families[current].instantiationEffect = "template attribute root";
         if (const auto* alias = dyn_cast<AliasAttr>(attr)) symbolRoot(alias->getAliasee().str(),"alias");
       } else if (!supportedAttribute(attr,d,e)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     }
@@ -764,6 +940,10 @@ public:
     if (current == noFamily) return true;
     auto& family = e.model.families[current];
     if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
+      bool carrier = false;
+      for (const auto* p : f->parameters()) carrier |= ownRecordParameter(p->getType());
+      if (callableCarriersSeen.insert(current).second) family.boundedSystemHooks = carrier;
+      else family.boundedSystemHooks &= carrier;
       const auto key = std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
       auto [it,fresh] = overloads.emplace(key,current); if (!fresh && it->second != current) e.model.unions.emplace_back(current,it->second);
       e.index(f,family,true); family.nonMemberOperator |= f->isOverloadedOperator() || f->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName;
@@ -788,6 +968,20 @@ public:
     }
     return true;
   }
+  bool VisitFriendDecl(FriendDecl* d) {
+    if (!e.model.assumeInstantiationEffects && current != noFamily && e.user(d->getBeginLoc()) && templated(d) &&
+        isa_and_nonnull<FunctionDecl,FunctionTemplateDecl>(d->getFriendDecl()))
+      e.model.families[current].instantiationEffect = "template friend declaration";
+    return true;
+  }
+  bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl* d) {
+    // Class-valued NTTPs introduce static template parameter objects, not
+    // VarDecls. Use a separate type proof: the static-variable whitelist both
+    // rejects safe scalar sugar and incorrectly examines pointer pointees.
+    if (!e.model.assumeInstantiationEffects && current != noFamily && e.user(d->getBeginLoc()) && potentialParameterObject(d->getType()))
+      e.model.families[current].instantiationEffect = "potential template parameter object storage";
+    return true;
+  }
   bool VisitVarDecl(VarDecl* v) {
     if (current == noFamily) return true;
     if (auto* s = dyn_cast<VarTemplateSpecializationDecl>(v)) {
@@ -797,7 +991,16 @@ public:
     }
     if (!v->hasGlobalStorage() || (v->isStaticDataMember() && !v->isThisDeclarationADefinition())) return true;
     const bool inert = (inertType(v->getType()) && safeSystemMacros(v) && inertExpr(v->getInit())) || inertConstexpr(v);
-    if (!inert) e.model.families[current].root = "not inert (static or thread storage)";
+    if (!inert) {
+      e.model.families[current].root = "not inert (static or thread storage)";
+      // A11 excludes constexpr destruction (including extended temporaries)
+      // and destruction of block storage whose declaration is never reached.
+      // Ordinary dependencies preserve reached declarations; rule 1 is unchanged.
+      if (templated(v) &&
+          !(e.model.assumeInstantiationEffects && (v->isConstexpr() || v->isLocalVarDecl())) &&
+          !noStorageInstantiationEffect(v))
+        e.model.families[current].instantiationEffect = "template static or thread storage not inert";
+    }
     return true;
   }
   void run() {
@@ -817,6 +1020,7 @@ public:
       else if (mangler->shouldMangleDeclName(named)) { llvm::raw_string_ostream out(symbol); mangler->mangleName(named,out); }
       else symbol = named->getNameAsString();
       symbols[symbol].insert(id);
+      if (templated(named)) templatedSymbols.insert(id);
     }
     for (auto [decl,id] : e.declarations) { current = id; TraverseDecl(const_cast<Decl*>(decl)); }
     current = noFamily;

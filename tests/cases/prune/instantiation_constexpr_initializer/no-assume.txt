@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+args | --no-assume=instantiation-effects
+report | policy: D3d-7, without instantiation-effects
+report | pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)
+report-absent | pruning assumption: A11
+kept Unused | instantiation effect:

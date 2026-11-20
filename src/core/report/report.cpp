@@ -75,7 +75,7 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
   } else out << "judge facts: unknown by design without --judge; target-dependent conditionals need a profile for pruning\n";
   out << "assumptions:";
   if (r.assumptions.empty()) out << " none";
-  for (const auto& a : r.assumptions) out << ' ' << a;
+  for (const auto& a : r.assumptions) out << ' ' << assumptionLabel(a);
   out << '\n';
   if (r.assumptions.contains("A9")) for (const auto& provenance : r.resolution.libraryProvenance)
     out << "library facts: " << provenance << '\n';

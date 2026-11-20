@@ -164,6 +164,7 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
         model.value().sourceDirectives != in.sourceDirectives || model.value().includes != in.includes ||
         model.value().keepNames != in.keepNames || model.value().keepOffsets != in.keepOffsets || model.value().dialect != in.dialect ||
         model.value().unknownInUserCode != in.unknownInUserCode ||
+        model.value().assumeInstantiationEffects != in.assumeInstantiationEffects ||
         !std::all_of(in.disabledReasons.begin(),in.disabledReasons.end(),[&](const auto& reason) {
           return std::find(model.value().disabledReasons.begin(),model.value().disabledReasons.end(),reason) != model.value().disabledReasons.end();
         }))

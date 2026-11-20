@@ -138,6 +138,7 @@ int run(const std::vector<std::string>& args) {
   DistillOptions options; options.profile = profile ? &*profile : nullptr;
   options.compilerExplicit = parsed.compilerExplicit; options.strict = parsed.strict;
   options.noPrune = parsed.noPrune; options.stripComments = parsed.stripComments; options.keep = parsed.keep;
+  options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;
   options.noLineMarkers = parsed.noLineMarkers;
   options.samples = take(collectRunSamples(parsed.verifyRun,cwd));
   if (parsed.verbose) options.progress = [](std::string_view step) { std::cerr << "distill: " << step << '\n'; };

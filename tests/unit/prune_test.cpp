@@ -25,7 +25,7 @@ TEST(prune_empty_and_unreachable_cycles) {
   Model b; CHECK(b.run().families.empty());
   b.add("a","int a(){return b();}"); b.add("b","int b(){return a();}");
   auto r = b.run(); CHECK(!r.families[0].kept); CHECK(!r.families[1].kept);
-  CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
+  CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
 }
 TEST(prune_roots_name_ast_association_fixpoint) {
   Model b; auto main = b.add("main","int main(){return invoke();}");
@@ -41,6 +41,7 @@ TEST(prune_roots_name_ast_association_fixpoint) {
   auto report = renderPruningReport(b.m,r); CHECK(report.ok());
   CHECK(report.value().find("pruning assumption: A6") != std::string::npos);
   CHECK(report.value().find("pruning assumption: A7\n") != std::string::npos);
+  CHECK(report.value().find("pruning assumption: A11 instantiation-effects\n") != std::string::npos);
   CHECK(report.value().find("transitive bytes") != std::string::npos);
   CHECK(report.value().find("does not certify an artifact") != std::string::npos);
   std::size_t sum = 0; for (const auto& [reason,bytes] : r.transitiveBytes) { (void)reason; sum += bytes; } CHECK_EQ(sum,r.keptBytes);
@@ -51,13 +52,37 @@ TEST(prune_union_closure_without_merging_ranges) {
   auto r = b.run(); for (const auto& f : r.families) CHECK(f.kept);
   CHECK_EQ(b.m.families[a].ranges.size(),1u); CHECK_EQ(r.families[a].initialCause,d);
 }
-TEST(prune_a7_applies_even_without_family_deletion) {
+TEST(prune_a7_a11_apply_even_without_family_deletion) {
   Model b; b.add("main","int main(){}");
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
-  CHECK(r.assumptions.contains("A7"));
+  CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3d-4");
+  CHECK(b.run().policy == "D3d-7");
 }
+TEST(prune_without_instantiation_effects_identity_and_report) {
+  Model b; b.add("main","int main(){}"); b.add("dead","int dead(){return 0;}");
+  const auto assumed = serializePruningModel(b.m).value();
+  b.m.assumeInstantiationEffects = false;
+  const auto encoded = serializePruningModel(b.m).value();
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-3 "));
+  CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
+  CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
+  CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
+  const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
+  CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
+  CHECK_EQ(r.policy,"D3d-7, without instantiation-effects");
+  const auto report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("pruning assumption: A11") == std::string::npos);
+  CHECK(report.find("pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)") != std::string::npos);
+  test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
+    ProcessResult response; response.exitCode = 0; response.stdoutText = assumed; return response;
+  };
+  const auto mixed = extractPruning(b.m,o).value();
+  CHECK(!mixed.assumeInstantiationEffects);
+  CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
 TEST(prune_never_removed_rules_and_nonroots) {
   for (int rule = 0; rule < 10; ++rule) {
     Model b; auto id = b.add("candidate","int candidate;",FamilyKind::variable); auto& f = b.m.families[id];
@@ -138,11 +163,80 @@ TEST(prune_system_edges_transitive_cycles_positive_only) {
   b.m.systemUses.clear(); CHECK(!b.run().families[hook].kept);
   b.m.systemUses = {{noFamily,0}}; CHECK(b.run().families[hook].kept);
 }
+TEST(prune_instantiation_effects_preserve_reverse_transitive_triggers) {
+  Model b;
+  auto effect = b.add("Inject","template<class T> struct Inject {};",FamilyKind::record);
+  b.m.families[effect].instantiationEffect = "template static or thread storage not inert";
+  auto alias = b.add("Alias","using Alias = Inject<int>;",FamilyKind::alias);
+  auto trigger = b.add("Unused","struct Unused { decltype(sizeof(Alias)) dormant(); };",FamilyKind::record);
+  auto pasted = b.add("Pasted","struct Pasted {};",FamilyKind::record);
+  b.m.families[pasted].edges = {effect}; // Expanded name, absent from raw text.
+  auto system = b.add("Default","struct Default {};",FamilyKind::record);
+  b.m.systemEntities = {{"library default",{}, {1}}, {"library alias",{effect}, {0}}};
+  b.m.systemUses = {{system,0}};
+  auto paired = b.add("Paired","struct Paired {};",FamilyKind::record);
+  b.m.unions = {{paired,trigger}};
+  auto dead = b.add("Dead","struct Dead {};",FamilyKind::record);
+  b.add("main","int main(){}");
+  auto r = b.run(); CHECK(r.disabledReasons.empty());
+  for (auto id : {effect,alias,trigger,pasted,system,paired}) CHECK(r.families[id].kept);
+  CHECK(!r.families[dead].kept);
+  CHECK(r.families[trigger].reason.starts_with("instantiation effect:"));
+  CHECK_EQ(r.families[trigger].cause,effect);
+  CHECK(renderPruningReport(b.m,r).value().find("instantiation effect:") != std::string::npos);
+  auto roundtrip = parsePruningModel(serializePruningModel(b.m).value()); CHECK(roundtrip.ok());
+  CHECK_EQ(roundtrip.value().families[effect].instantiationEffect,"template static or thread storage not inert");
+  CHECK_EQ(computeRetention(roundtrip.value()).value().families[trigger].reason,r.families[trigger].reason);
+}
+TEST(prune_instantiation_effects_reverse_dependent_lookup_and_associations) {
+  Model b;
+  auto effect = b.add("Inject","struct Inject {};",FamilyKind::record);
+  b.m.families[effect].instantiationEffect = "template static or thread storage not inert";
+  auto callback = b.add("customize","void customize() { Inject x; }");
+  auto key = b.add("Key","struct Key {};",FamilyKind::record);
+  b.m.families[callback].associatedTypes = {key};
+  auto adl = b.add("probe","template<class T> void probe() {} ");
+  b.m.families[adl].dependentNames.insert("customize");
+  auto trigger = b.add("Unused","struct Unused { Key x; };",FamilyKind::record);
+  const auto r = b.run(); CHECK(r.disabledReasons.empty());
+  for (auto id : {effect,callback,key,adl,trigger}) CHECK(r.families[id].kept);
+}
+TEST(prune_instantiation_effects_refuse_unbounded_system_dispatch) {
+  for (int form = 0; form < 3; ++form) {
+    Model b;
+    auto effect = b.add("Reg","struct Reg {};",FamilyKind::record);
+    b.m.families[effect].instantiationEffect = "template static or thread storage not inert";
+    auto hook = b.add("hook","void hook() { Reg x; }");
+    if (form == 0) b.m.families[hook].callableNames.insert("swap");
+    if (form == 1) b.m.families[hook].nonMemberOperator = true;
+    if (form == 2) b.m.families[hook].systemSpecialization = true;
+    b.add("dead","void dead(){}");
+    const auto r = b.run(); CHECK(!r.disabledReasons.empty());
+    CHECK(r.disabledReasons.back().starts_with("unbounded system instantiation effects through hook"));
+    for (const auto& f : r.families) CHECK(f.kept);
+  }
+}
+TEST(prune_instantiation_effects_hidden_hooks_need_verified_own_record_carriers) {
+  for (bool verified : {false,true}) {
+    Model b;
+    auto record = b.add("S","template<class T> struct S {};",FamilyKind::record);
+    auto unrelated = b.add("Other","struct Other {};",FamilyKind::record);
+    auto trigger = b.add("Unused","struct Unused { S<int> x; };",FamilyKind::record);
+    auto& f = b.m.families[record];
+    f.instantiationEffect = "template static or thread storage not inert"; f.nonMemberOperator = true;
+    f.associatedTypes = {record,unrelated}; // A nonempty list alone proves nothing.
+    f.boundedSystemHooks = verified;
+    const auto r = b.run(); CHECK_EQ(r.disabledReasons.empty(),verified);
+    CHECK(r.families[trigger].kept);
+    const auto decoded = parsePruningModel(serializePruningModel(b.m).value()).value();
+    CHECK_EQ(decoded.families[record].boundedSystemHooks,verified);
+  }
+}
 TEST(prune_all_disable_reasons_accumulate) {
   Model b; b.add("x","int x;"); b.m.unknownInUserCode = true; b.m.dialect = "c++98";
   b.m.includes = {"ext/rope","ext/pb_ds/assoc_container.hpp","bits/extc++.h","vendor.h"};
   b.m.disabledReasons = {"parse error","limit","parse error"};
-  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7"));
+  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
   CHECK(!staticNameInvariant(b.m,r,"").ok());
 }
 TEST(prune_predefined_macros_source_overrides_and_pasting) {
@@ -266,12 +360,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-1 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-3 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-1 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-3 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-1 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-3 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());
@@ -458,6 +552,28 @@ TEST(prune_exhaustive_three_family_graph_closure) {
     for (unsigned path = 0; path < 3; ++path) for (unsigned i = 0; i < 3; ++i) if (expected & (1u<<i))
       for (unsigned j = 0; j < 3; ++j) if (graph & (1u<<(3*i+j))) expected |= 1u<<j;
     auto r = b.run(); for (unsigned i = 0; i < 3; ++i) CHECK_EQ(r.families[i].kept,(expected & (1u<<i)) != 0);
+  }
+}
+TEST(prune_exhaustive_instantiation_trigger_closure) {
+  // Reachability oracle: retain reverse-reachable triggers, then everything
+  // needed by those triggers. Every directed three-family graph and seed set.
+  for (unsigned graph = 0; graph < 512; ++graph) for (unsigned seeds = 0; seeds < 8; ++seeds) {
+    Model b; bool reach[3][3]{};
+    for (unsigned i = 0; i < 3; ++i) {
+      b.add("f"+std::to_string(i),"void body(){}"); reach[i][i] = true;
+      if (seeds & (1u<<i)) b.m.families[i].instantiationEffect = "effect";
+    }
+    for (unsigned i = 0; i < 3; ++i) for (unsigned j = 0; j < 3; ++j) if (graph & (1u<<(3*i+j))) {
+      reach[i][j] = true; b.m.families[i].edges.push_back(j);
+    }
+    for (unsigned k = 0; k < 3; ++k) for (unsigned i = 0; i < 3; ++i) for (unsigned j = 0; j < 3; ++j)
+      reach[i][j] |= reach[i][k] && reach[k][j];
+    bool expected[3]{};
+    for (unsigned trigger = 0; trigger < 3; ++trigger) for (unsigned seed = 0; seed < 3; ++seed)
+      if ((seeds & (1u<<seed)) && reach[trigger][seed])
+        for (unsigned needed = 0; needed < 3; ++needed) expected[needed] |= reach[trigger][needed];
+    const auto r = b.run(); CHECK(r.disabledReasons.empty());
+    for (unsigned i = 0; i < 3; ++i) CHECK_EQ(r.families[i].kept,expected[i]);
   }
 }
 TEST(prune_kinds_association_and_report_attribution) {

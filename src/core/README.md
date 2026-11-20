@@ -819,6 +819,43 @@ as written, or structurally empty non-template user tags with empty list
 initialization. Aliases/deduced/dependent types receive no new exemption;
 explicit specializations are classified independently. Every pruned artifact
 reports A7, including deletions unrelated to variables (enum cache seeds).
+Policy D3d-7 reports the extended `A11 instantiation-effects` (user, 2026-11-20) by default for every enabled
+pruning result: friend-definition instantiation, template parameter object
+destruction, destruction of constexpr variables and the temporaries whose
+lifetimes they extend, and destruction of never-reached block static/thread
+storage are excluded. Constexpr variables of every scope/type
+and all block-scope static/thread variables cease to seed reverse retention;
+rule-1 roots and ordinary dependencies are unchanged. Non-constexpr storage
+outside blocks still seeds effects unless constant initialization, trivial
+destruction and absence of lifetime-extended temporaries are proven from the
+written pattern. Dynamic namespace storage and possible non-trivial destruction
+remain conservative. Templated attribute/symbol sources and unbounded incoming
+library-hook refusals are unchanged. See the
+[review](../../docs/reviews/2026-11-20-instantiation-effects.md) for the proof,
+A11 exclusions, compiler probes and measurements.
+`--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
+accepts repetition and comma lists; other names (including assumption IDs) are
+usage errors (exit 1) listing `instantiation-effects` as the only switchable
+name. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
+the worker. Pruning protocol **3** serializes it, and the parent rejects a worker
+response that changes it. No pruning-result cache exists; serialized model
+identity and `D3d-7, without instantiation-effects` distinguish the two modes.
+Both report formats print the readable A11 name; the flag mode lists it as
+disabled by the flag, never as a relied-on assumption.
+
+Without A11, D3d-5's template function friends and potential class-valued NTTP
+objects seed reverse retention again. The scalar/alias and recursively trivial
+user-class NTTP proofs from `ea28bd5` are independent of A11 and remain valid.
+Template-qualified or system-selected types and unknown bindings stay
+conservative. Non-inert constexpr and block static/thread storage also seed
+reverse retention, subject only to the existing positive constant-initializer,
+trivial written-type and no-extended-temporary proof. The optional
+necessarily-dynamic block-local proof is not used. Storage roots and ordinary
+closure are unchanged. Fixtures share sources between `expect.txt` (default)
+and optional `no-assume.txt` expectations, whose `args | ...` directive is
+parsed by the common CLI parser. Flag-mode runtime fixtures check original and
+rendered outputs under both available compilers.
+
 Constexpr resource-flag support remains deferred.
 
 Policy D3d-4 (`docs/reviews/2026-11-18-equal-literal-macros.md`) accepts a

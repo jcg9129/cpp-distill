@@ -18,11 +18,12 @@ PruningModel extracted(const PruningModel& input, const PruneWorkerOptions& o) {
   }
   return m;
 }
-PruningModel extract(std::string text, const PruneWorkerOptions& o) {
+PruningModel extract(std::string text, const PruneWorkerOptions& o, bool assumeInstantiationEffects = true) {
   Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
   ResolveResult flat; flat.text = std::move(text);
   for (std::size_t i = 0, line = 1; i < flat.text.size(); ++i) if (i == 0 || flat.text[i-1] == '\n') flat.lineMap.push_back(SourceLocation{"original.hpp",line++});
   auto m = take(preparePruning(c,{},flat));
+  m.assumeInstantiationEffects = assumeInstantiationEffects;
   return extracted(m,o);
 }
 
@@ -244,6 +245,330 @@ int main(int argc, char** argv) {
       check(family(m,"automatic").root.empty(),"automatic local rooted");
       check(!family(m,"stat").root.empty(),"static local not rooted");
     });
+    run("instantiation effect patterns include nested storage and attributes", [&] {
+      for (const auto& source : {
+          "int notify(); template<class T> struct Effect { static inline int x = notify(); };",
+          "int notify(); template<class T> inline int Effect = notify();",
+          "template<class T> __attribute__((used)) void Effect() {}"}) {
+        m = extract(std::string(source) + "\nstruct Dead {}; int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"effect pattern disabled");
+        check(std::any_of(m.families.begin(),m.families.end(),[](const auto& f) { return f.label.starts_with("Effect") && !f.instantiationEffect.empty(); }),"effect pattern not classified: " + std::string(source));
+        check(!kept("Dead"),"effect pattern disabled all deletion");
+      }
+    });
+    run("D3d-7 dynamic block storage keeps roots but releases unrelated triggers", [&] {
+      for (const auto* source : {
+          "int notify(); template<class T> int Effect() { static int x = notify(); return x; } int dormant(){ return Effect<int>(); }",
+          "int notify(); template<class T> struct Effect { int f() { static thread_local int x = notify(); return x; } }; int dormant(){ return Effect<int>{}.f(); }",
+          "int notify(); template<class T> struct Effect { int f(); }; template<class T> int Effect<T>::f() { static int x = notify(); return x; } int dormant(){ return Effect<int>{}.f(); }"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"dynamic local disabled");
+        check(!kept("dormant"),"unrelated trigger retained for dynamic block local");
+        check(std::any_of(m.families.begin(),m.families.end(),[](const auto& f) {
+          return f.label.starts_with("Effect") && !f.root.empty() && f.instantiationEffect.empty();
+        }),"dynamic local changed rule-1 root or remained a source");
+      }
+    });
+    run("D3d-7 non-constexpr constant storage releases triggers", [&] {
+      for (const auto* source : {
+          "using Scalar=unsigned; template<int> inline const Scalar value=3;",
+          "struct Plain { int x; }; template<int> inline const Plain value{3};",
+          "struct Base { int x; }; struct Plain:Base { int y; }; template<int> inline const Plain value{{3},4};",
+          "using Scalar=unsigned; template<int> inline const Scalar value[2]={3,4};",
+          "template<int> inline const int* value=nullptr;"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"constant storage disabled");
+        check(family(m,"value").instantiationEffect.empty(),"fixed constant storage remains a source");
+        check(!kept("dormant"),"constant storage retained unrelated trigger");
+      }
+    });
+    run("A11 retains non-constexpr uncertain non-block storage", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> inline int value=notify();",
+          "template<int N, class T=int> inline T value{};",
+          "struct Noisy { constexpr Noisy(){} ~Noisy(){} }; template<int> inline const Noisy value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; template<int> inline const Pick<(sizeof(long)==4)>::type value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; struct Plain { Pick<(sizeof(long)==4)>::type field; }; template<int> inline const Plain value{};",
+          "struct Noisy { constexpr ~Noisy(){} }; struct Holder { const Noisy& member; }; template<int> inline const Holder value{Noisy{}};",
+          "struct Noisy { constexpr ~Noisy(){} }; struct Holder { const Noisy& member=Noisy{}; }; template<int> inline const Holder value{};"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"conservative storage disabled");
+        check(!family(m,"value").instantiationEffect.empty(),"uncertain storage incorrectly exempted: " + std::string(source));
+        check(kept("dormant"),"possible storage trigger removed: " + std::string(source));
+      }
+    });
+    run("A11 excludes all block static and thread storage effects", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> void value(){ static int object=sizeof(long)==4 ? 0 : notify(); }",
+          "int notify(unsigned long); constexpr int notify(unsigned){return 0;} template<int> void value(){ static int object=notify(sizeof(long)); }",
+          "struct Noisy { constexpr Noisy(){} ~Noisy(){} }; template<int> void value(){ static Noisy const object; }",
+          "template<int N, class T=int> void value(){ static T const object{}; }",
+          "template<int N, class T=int> void value(){ thread_local T const object{}; }",
+          "struct Noisy { ~Noisy(){} }; template<int> void value(){ static const Noisy& object=Noisy{}; }",
+          "struct Noisy { ~Noisy(){} }; template<int> void value(){ thread_local const Noisy& object=Noisy{}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"block A11 disabled");
+        check(!family(m,"value").root.empty(),"block A11 lost rule-1 root");
+        check(family(m,"value").instantiationEffect.empty(),"block A11 remains a source");
+        check(!kept("dormant"),"block A11 retained unrelated trigger");
+        check(r.assumptions.contains("A11"),"block A11 not reported");
+      }
+    });
+    run("A11 excludes constexpr storage of any type and extended objects", [&] {
+      for (const auto* source : {
+          "struct Quiet { int x=0; }; template<int> constexpr const int& value=Quiet{}.x;",
+          "struct Quiet { int x=0; }; struct Holder { const Quiet& member; }; template<int> constexpr Holder value{Quiet{}};",
+          "struct Quiet { int x=0; }; struct Holder { const Quiet& member=Quiet{}; }; template<int> constexpr Holder value{};",
+          "template<bool> struct Pick { struct type { int x=0; }; }; template<> struct Pick<true> { struct type { int x=0; constexpr ~type(){} }; }; template<int> constexpr const int& value=Pick<(sizeof(long)==4)>::type{}.x;",
+          "struct Noisy { constexpr ~Noisy(){} }; template<int> void value(){ static constexpr Noisy object{}; }",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; template<int> constexpr Pick<(sizeof(long)==4)>::type value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; struct Plain { Pick<(sizeof(long)==4)>::type field; }; template<int> constexpr Plain value{};",
+          "template<int N, class T=int> constexpr T value{};",
+          "template<int> constexpr auto value=0;",
+          "template<int N, class T=int> void value(){ static thread_local constexpr T object{}; }",
+          "template<int N, class T=int> void value(){ static constexpr T object{}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"A11 storage disabled");
+        check(family(m,"value").instantiationEffect.empty(),"A11 constexpr storage remains a source");
+        check(!kept("dormant"),"A11 constexpr storage retained unrelated trigger");
+        check(r.assumptions.contains("A11"),"A11 not reported");
+      }
+    });
+    run("A11 exemptions preserve other effects in the same family", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> struct Effect { static inline int live=notify(); static constexpr int quiet=0; void local(){static int x=notify();} };",
+          "int notify(); template<int> struct Effect { void local(){static int x=notify();} static constexpr int quiet=0; static inline int live=notify(); };",
+          "template<int> __attribute__((used)) void Effect(){static constexpr int quiet=0;}"}) {
+        const bool function = std::string_view(source).find("__attribute__") != std::string_view::npos;
+        m = extract(std::string(source) + (function ? "\nvoid dormant(){ (void)&Effect<0>; } int main(){}\n" :
+            "\nvoid dormant(){ (void)sizeof(Effect<0>); } int main(){}\n"),o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"mixed effects disabled");
+        check(!family(m,"Effect").instantiationEffect.empty(),"A11 exemption cleared another effect");
+        check(kept("dormant"),"mixed effect lost its trigger");
+      }
+    });
+    run("A11 excludes friend-definition instantiation", [&] {
+      for (const auto* source : {
+          "template<class T> struct Effect { friend auto supplied(T) { return 7; } };",
+          "struct Effect { template<class T> struct Nested { friend auto supplied(T) { return 7; } }; };",
+          "template<class T> struct Effect {}; template<class T> struct Effect<T*> { friend auto supplied(T) { return 7; } };",
+          "template<class T> struct Effect { friend int supplied(T); };"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"friend exclusion disabled");
+        check(family(m,"Effect").instantiationEffect.empty(),"A11 friend remains an effect source");
+        check(!kept("Effect"),"A11 friend pattern retained");
+        check(r.assumptions.contains("A11"),"A11 not reported");
+      }
+    });
+    run("static storage scalar aliases preserve written type inspection", [&] {
+      const auto dir = temp.path / "scalar-system";
+      std::filesystem::create_directories(dir);
+      { std::ofstream h(dir / "cstdint"); h << "using uint32_t=unsigned; namespace std { using ::uint32_t; }\n"; }
+      Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
+      SearchDirectory d; d.path = dir; d.kind = IncludeKind::system; c.probe.searchLists.directories.push_back(d);
+      ResolveResult flat; flat.text =
+          "#include <cstdint>\nusing U=std::uint32_t; template<class T> struct Inert { static inline U x=0; };\n"
+          "template<bool B> struct Pick { using type=int; }; template<> struct Pick<false> { struct type {}; };\n"
+          "template<class T> struct Selected { static inline Pick<(sizeof(long)>4)>::type x={}; };\n"
+          "int main(){}\n";
+      for (std::size_t i = 0, line = 1; i < flat.text.size(); ++i) if (i == 0 || flat.text[i-1] == '\n') flat.lineMap.push_back(SourceLocation{"original.hpp",line++});
+      m = extracted(take(preparePruning(c,{},flat)),o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"scalar alias inspection disabled");
+      check(family(m,"Inert").instantiationEffect.empty(),"standard scalar UsingType incorrectly effectful");
+      check(!kept("Inert"),"inert scalar alias retained");
+      check(!family(m,"Selected").instantiationEffect.empty(),"target-selected member type incorrectly inert");
+      check(kept("Selected"),"potential class storage removed");
+    });
+    run("hidden hook carrier certificate uses written own record parameters", [&] {
+      m = extract("int notify(); template<class T> struct Reg { static inline int x=notify(); };\n"
+                  "template<class T> struct S { friend bool operator==(S,S) { return Reg<T>::x==0; } };\n"
+                  "struct Unused { decltype(sizeof(S<int>)) f(); }; int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"self-associated hidden friend refused");
+      check(family(m,"S").boundedSystemHooks,"direct self parameter not certified");
+      check(family(m,"S").instantiationEffect.empty(),"A11 friend seeded the reverse closure");
+      check(!family(m,"Reg").instantiationEffect.empty(),"storage source missing");
+      check(kept("Unused"),"conservative hidden friend trigger removed");
+      m = extract("int notify(); template<class T> struct Reg { static inline int x=notify(); };\n"
+                  "template<class T> struct S { using Self=S; friend bool operator==(Self,Self) { return Reg<T>::x==0; } };\n"
+                  "int main(){}\n",o);
+      r = take(computeRetention(m));
+      check(!family(m,"S").boundedSystemHooks,"alias incorrectly certified a carrier");
+      check(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why) {
+        return why.starts_with("unbounded system instantiation effects through");
+      }),"uncertified hidden hook did not refuse");
+    });
+    run("inert template storage and ordinary default initializers have no intrinsic effect", [&] {
+      m = extract("template<class T> struct Inert { static constexpr int x = sizeof(T); int y = 3; };\n"
+                  "template<class T> int ordinary() { static int x = 0; return x; }\n"
+                  "template<int N> struct Simple {};\n"
+                  "int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"inert controls disabled");
+      for (const auto* label : {"Inert","ordinary","Simple"}) {
+        check(family(m,label).instantiationEffect.empty(),"inert pattern classified effectful");
+        check(!kept(label),"inert pattern retained");
+      }
+    });
+    run("nonclass NTTPs and proven trivial parameter objects are not storage effects", [&] {
+      for (const auto* source : {
+          "using U=unsigned; template<U N> struct Candidate {};",
+          "template<class T> using Identity=T; template<Identity<unsigned> N> struct Candidate {};",
+          "using uint32_t=unsigned; namespace std { using ::uint32_t; } using U=std::uint32_t; template<U N> struct Candidate {};",
+          "enum class Mode { quick }; template<Mode M> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; template<V* P> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; template<V& P> struct Candidate {};",
+          "template<class T, T* P> struct Candidate {};",
+          "template<class T, T& P> struct Candidate {};",
+          "template<auto* P> struct Candidate {};",
+          "template<auto& P> struct Candidate {};",
+          "struct V { int x[2]; }; template<V P> struct Candidate {};",
+          "struct Base {}; struct V:Base { int x; }; template<V P> struct Candidate {};",
+          "template<unsigned N> void Candidate() { []<unsigned P>(){}; }"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP exemption disabled");
+        check(family(m,"Candidate").instantiationEffect.empty(),"nonclass/trivial NTTP classified effectful: " + std::string(source));
+        check(!kept("Candidate"),"inert NTTP retained: " + std::string(source));
+      }
+    });
+    run("A11 excludes unknown and nontrivial NTTP object destruction", [&] {
+      for (const auto* source : {
+          "template<auto P> struct Candidate {};",
+          "template<decltype(auto) P> struct Candidate {};",
+          "template<class T> concept Any=true; template<Any auto P> struct Candidate {};",
+          "template<class T, T P> struct Candidate {};",
+          "template<class T, typename T::type P> struct Candidate {};",
+          "template<bool B> struct Pick { using type=int; }; template<> struct Pick<false> { struct type { constexpr ~type(){} }; }; template<Pick<(sizeof(long)>4)>::type P> struct Candidate {};",
+          "template<bool B> struct Pick { enum class type { zero }; }; template<> struct Pick<false> { struct type { constexpr ~type(){} }; }; template<Pick<(sizeof(long)>4)>::type P> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; using Alias=V; template<Alias P> struct Candidate {};"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP control disabled");
+        check(family(m,"Candidate").instantiationEffect.empty(),"A11 NTTP still classified effectful: " + std::string(source));
+        check(!kept("Candidate"),"A11 NTTP retained");
+        check(r.assumptions.contains("A11"),"A11 not reported");
+      }
+    });
+    run("without instantiation-effects: instantiation effect patterns include nested storage and friends", [&] {
+      for (const auto& source : {
+          "template<class T> struct Effect { friend auto supplied(T) { return 7; } };",
+          "struct Effect { template<class T> struct Nested { friend auto supplied(T) { return 7; } }; };",
+          "template<class T> struct Effect {}; template<class T> struct Effect<T*> { friend auto supplied(T) { return 7; } };",
+          "int notify(); template<class T> struct Effect { static inline int x = notify(); };",
+          "int notify(); template<class T> inline int Effect = notify();",
+          "template<class T> __attribute__((used)) void Effect() {}",
+          "template<auto V> struct Effect {};",
+          "struct Value { constexpr ~Value(){} }; template<Value V> struct Effect {};",
+          "int notify(); template<class T> int Effect() { static int x = notify(); return x; }",
+          "int notify(); template<class T> struct Effect { int f() { static int x = notify(); return x; } };",
+          "int notify(); template<class T> struct Effect { int f(); }; template<class T> int Effect<T>::f() { static int x = notify(); return x; }"}) {
+        m = extract(std::string(source) + "\nstruct Dead {}; int main(){}\n",o,false);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"effect pattern disabled");
+        check(std::any_of(m.families.begin(),m.families.end(),[](const auto& f) { return f.label.starts_with("Effect") && !f.instantiationEffect.empty(); }),"effect pattern not classified: " + std::string(source));
+        check(!kept("Dead"),"effect pattern disabled all deletion");
+      }
+    });
+    run("without instantiation-effects: hidden hook carrier certificate uses written own record parameters", [&] {
+      m = extract("template<class T> struct S { friend bool operator==(S,S) { return true; } };\n"
+                  "struct Unused { decltype(sizeof(S<int>)) f(); }; int main(){}\n",o,false);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"self-associated hidden friend refused");
+      check(family(m,"S").boundedSystemHooks,"direct self parameter not certified");
+      check(kept("Unused"),"conservative hidden friend trigger removed");
+      m = extract("template<class T> struct S { using Self=S; friend bool operator==(Self,Self) { return true; } };\n"
+                  "int main(){}\n",o,false);
+      r = take(computeRetention(m));
+      check(!family(m,"S").boundedSystemHooks,"alias incorrectly certified a carrier");
+      check(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why) {
+        return why.starts_with("unbounded system instantiation effects through");
+      }),"uncertified hidden hook did not refuse");
+    });
+    run("without instantiation-effects: nonclass NTTPs and proven trivial parameter objects are not storage effects", [&] {
+      for (const auto* source : {
+          "using U=unsigned; template<U N> struct Candidate {};",
+          "template<class T> using Identity=T; template<Identity<unsigned> N> struct Candidate {};",
+          "using uint32_t=unsigned; namespace std { using ::uint32_t; } using U=std::uint32_t; template<U N> struct Candidate {};",
+          "enum class Mode { quick }; template<Mode M> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; template<V* P> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; template<V& P> struct Candidate {};",
+          "template<class T, T* P> struct Candidate {};",
+          "template<class T, T& P> struct Candidate {};",
+          "template<auto* P> struct Candidate {};",
+          "template<auto& P> struct Candidate {};",
+          "struct V { int x[2]; }; template<V P> struct Candidate {};",
+          "struct Base {}; struct V:Base { int x; }; template<V P> struct Candidate {};",
+          "template<unsigned N> void Candidate() { []<unsigned P>(){}; }"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o,false);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP exemption disabled");
+        check(family(m,"Candidate").instantiationEffect.empty(),"nonclass/trivial NTTP classified effectful: " + std::string(source));
+        check(!kept("Candidate"),"inert NTTP retained: " + std::string(source));
+      }
+    });
+    run("without instantiation-effects: unknown NTTP bindings remain conservative", [&] {
+      for (const auto* source : {
+          "template<auto P> struct Candidate {};",
+          "template<decltype(auto) P> struct Candidate {};",
+          "template<class T> concept Any=true; template<Any auto P> struct Candidate {};",
+          "template<class T, T P> struct Candidate {};",
+          "template<class T, typename T::type P> struct Candidate {};",
+          "template<bool B> struct Pick { using type=int; }; template<> struct Pick<false> { struct type { constexpr ~type(){} }; }; template<Pick<(sizeof(long)>4)>::type P> struct Candidate {};",
+          "template<bool B> struct Pick { enum class type { zero }; }; template<> struct Pick<false> { struct type { constexpr ~type(){} }; }; template<Pick<(sizeof(long)>4)>::type P> struct Candidate {};",
+          "struct V { constexpr ~V(){} }; using Alias=V; template<Alias P> struct Candidate {};"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o,false);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP control disabled");
+        check(!family(m,"Candidate").instantiationEffect.empty(),"possible class binding lost: " + std::string(source));
+        check(kept("Candidate"),"unknown NTTP removed");
+      }
+    });
+    run("without instantiation-effects: block storage sources return", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> void value(){ static int object=sizeof(long)==4 ? 0 : notify(); }",
+          "int notify(unsigned long); constexpr int notify(unsigned){return 0;} template<int> void value(){ static int object=notify(sizeof(long)); }",
+          "struct Noisy { constexpr Noisy(){} ~Noisy(){} }; template<int> void value(){ static Noisy const object; }",
+          "template<int N, class T=int> void value(){ static T const object{}; }",
+          "template<int N, class T=int> void value(){ thread_local T const object{}; }",
+          "struct Noisy { ~Noisy(){} }; template<int> void value(){ static const Noisy& object=Noisy{}; }",
+          "struct Noisy { ~Noisy(){} }; template<int> void value(){ thread_local const Noisy& object=Noisy{}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o,false);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"flag-mode block storage disabled");
+        check(!family(m,"value").root.empty(),"flag-mode block storage lost rule-1 root");
+        check(!family(m,"value").instantiationEffect.empty(),"block storage lost effect source");
+        check(kept("dormant"),"block storage lost potential trigger");
+        check(!r.assumptions.contains("A11"),"disabled A11 was reported");
+      }
+    });
+    run("without instantiation-effects: constexpr storage and extended objects return", [&] {
+      for (const auto* source : {
+          "struct Quiet { int x=0; }; template<int> constexpr const int& value=Quiet{}.x;",
+          "struct Quiet { int x=0; }; struct Holder { const Quiet& member; }; template<int> constexpr Holder value{Quiet{}};",
+          "struct Quiet { int x=0; }; struct Holder { const Quiet& member=Quiet{}; }; template<int> constexpr Holder value{};",
+          "template<bool> struct Pick { struct type { int x=0; }; }; template<> struct Pick<true> { struct type { int x=0; constexpr ~type(){} }; }; template<int> constexpr const int& value=Pick<(sizeof(long)==4)>::type{}.x;",
+          "struct Noisy { constexpr ~Noisy(){} }; template<int> void value(){ static constexpr Noisy object{}; }",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; template<int> constexpr Pick<(sizeof(long)==4)>::type value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; struct Plain { Pick<(sizeof(long)==4)>::type field; }; template<int> constexpr Plain value{};",
+          "template<int N, class T=int> constexpr T value{};",
+          "template<int> constexpr auto value=0;",
+          "template<int N, class T=int> void value(){ static thread_local constexpr T object{}; }",
+          "template<int N, class T=int> void value(){ static constexpr T object{}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o,false);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"flag-mode constexpr storage disabled");
+        check(!family(m,"value").instantiationEffect.empty(),"constexpr storage lost effect source");
+        check(kept("dormant"),"constexpr storage lost potential trigger");
+        check(!r.assumptions.contains("A11"),"disabled A11 was reported");
+      }
+    });
+    run("without instantiation-effects: lifetime-safe constant storage releases triggers", [&] {
+      for (const auto* source : {
+          "using Scalar=unsigned; template<int> inline const Scalar value=3;",
+          "struct Plain { int x; }; template<int> inline const Plain value{3};",
+          "struct Base { int x; }; struct Plain:Base { int y; }; template<int> inline const Plain value{{3},4};",
+          "using Scalar=unsigned; template<int> inline const Scalar value[2]={3,4};",
+          "template<int> inline const int* value=nullptr;",
+          "struct Plain { int x; }; template<int> constexpr Plain value{3};",
+          "struct Plain { int x; }; template<int> void value(){ static const Plain object{3}; }",
+          "struct Plain { int x; }; template<int> void value(){ thread_local const Plain object{3}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o,false);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"constant storage disabled");
+        check(family(m,"value").instantiationEffect.empty(),"fixed constant storage remains a source");
+        check(!kept("dormant"),"constant storage retained unrelated trigger");
+      }
+    });
     run("constexpr arithmetic template members", [&] {
       m = extract("template<class T> constexpr bool scalar = false;\n"
                   "template<class T> struct Unused { static constexpr bool x = !scalar<T>; };\n"
@@ -254,6 +579,7 @@ int main(int argc, char** argv) {
       check(kept("Used") && kept("scalar"),"used member or initializer dependency removed");
       check(family(m,"Unused").root.empty(),"unused pattern still a storage root");
       check(r.assumptions.contains("A7"),"A7 not reported");
+      check(r.assumptions.contains("A11"),"A11 not reported");
       const auto out = take(renderSource(m,&r)).provenance.text;
       take(renderingInvariant(m,&r,out)); take(staticNameInvariant(m,r,out));
       check(out.find("struct Unused") == out.npos && out.find("struct Used") != out.npos,"template removal/retention failed");

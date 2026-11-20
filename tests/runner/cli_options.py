@@ -41,6 +41,10 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     (root / 'main.cpp').write_text('// SPDX-License-Identifier: GPL-3.0-or-later\n#if 1\nint main(){}\n#endif\n')
     for args, code, message in [
         (['--help'], 0, 'Usage: distill'),
+        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
+        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
+        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
+        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
         (['g++', '-std=gnu++20', 'main.cpp'], 0, 'distill: wrote pruned (local)'),
         (['--no-prune'], 1, 'missing compile command'),
         (['--no-prune', '-o'], 1, 'missing value'),
@@ -60,6 +64,24 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(result.returncode == code, (args, result.returncode, result.stderr))
             check(message in result.stdout + result.stderr, (args, result.stdout, result.stderr))
             check(set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir()))
+    with case('instantiation-effects flag reaches the worker and modes do not mix'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('template<class T> struct Effect { friend int supplied(T); };\n'
+                                      'void dormant(){(void)sizeof(Effect<int>);}\nint main(){}\n')
+        selections = [[], ['--no-assume=instantiation-effects'],
+                      ['--no-assume=instantiation-effects,instantiation-effects', '--no-assume=instantiation-effects'], []]
+        for flags in selections:
+            result = subprocess.run([binary, *flags, '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            check(('void dormant' in result.stdout) == bool(flags), result.stdout)
+            check(('pruning assumption: A11 instantiation-effects\n' in report) == (not flags), report)
+            check(('policy: D3d-7, without instantiation-effects\n' in report) == bool(flags), report)
+            if flags:
+                check('pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
     with case('judge list, full names, aliases and collision diagnostics'):
         config = root / 'profile-config'
         judges = config / 'distill' / 'judges'

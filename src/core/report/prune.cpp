@@ -13,7 +13,9 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
   out << '\n';
   for (const auto& a : m.untranslatedOptions) out << "untranslated parse option: " << a << '\n';
   for (const auto& why : r.disabledReasons) out << "pruning disabled: " << why << '\n';
-  for (const auto& a : r.assumptions) out << "pruning assumption: " << a << '\n';
+  if (!m.assumeInstantiationEffects)
+    out << "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
+  for (const auto& a : r.assumptions) out << "pruning assumption: " << assumptionLabel(a) << '\n';
   out << "extension coverage:\n" << embeddedExtensionCoverage();
   for (FamilyId id = 0; id < m.families.size(); ++id) {
     const auto& f = m.families[id]; const auto& kept = r.families[id];

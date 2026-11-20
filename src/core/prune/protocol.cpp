@@ -86,6 +86,8 @@ struct Archive {
     field("kind",x.kind); field("label",x.label); field("names",x.names); field("callableNames",x.callableNames); field("dependentNames",x.dependentNames);
     field("ranges",x.ranges); field("edges",x.edges); field("associatedTypes",x.associatedTypes); field("original",x.original);
     field("pinned",x.pinned); field("neverRemoved",x.neverRemoved); field("root",x.root); field("nonMemberOperator",x.nonMemberOperator);
+    field("instantiationEffect",x.instantiationEffect);
+    field("boundedSystemHooks",x.boundedSystemHooks);
     field("namespaceUsing",x.namespaceUsing); field("externCDefinition",x.externCDefinition); field("systemSpecialization",x.systemSpecialization);
   }
   void field(PositionUse& x) { field("offset",x.offset); field("what",x.what); }
@@ -98,13 +100,14 @@ struct Archive {
     field("systemEntities",x.systemEntities); field("systemUses",x.systemUses); field("includes",x.includes); field("disabledReasons",x.disabledReasons);
     field("untranslatedOptions",x.untranslatedOptions); field("parseArgv",x.parseArgv); field("judgeInitial",x.judgeInitial); field("parseWidths",x.parseWidths); field("judgeProfile",x.judgeProfile);
     field("judgeComplete",x.judgeComplete); field("unknownInUserCode",x.unknownInUserCode); field("positionUses",x.positionUses);
+    field("assumeInstantiationEffects",x.assumeInstantiationEffects);
   }
 };
 }
 Result<std::string> serializePruningModel(const PruningModel& m) {
   auto v = validatePruningModel(m); if (!v.ok()) return v.error();
   try {
-    Archive a; a.stream << "DISTILL-PRUNE-1 "; auto copy = m; a.field(copy);
+    Archive a; a.stream << "DISTILL-PRUNE-3 "; auto copy = m; a.field(copy);
     auto s = a.stream.str(); if (s.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit"};
     return s;
   } catch (const Error& e) { return e; }
@@ -113,7 +116,7 @@ Result<PruningModel> parsePruningModel(std::string_view text) {
   if (text.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit at field model, line 1, byte 0"};
   try {
     Archive a; a.reading = true; a.input = text; a.stream.str(std::string(text)); std::string version; a.stream >> version;
-    if (version != "DISTILL-PRUNE-1") { a.path = "version"; a.fail("invalid pruning protocol version"); }
+    if (version != "DISTILL-PRUNE-3") { a.path = "version"; a.fail("invalid pruning protocol version"); }
     PruningModel m; a.field(m); a.stream >> std::ws;
     if (!a.stream.eof()) { a.path = "trailer"; a.fail("trailing pruning protocol bytes"); }
     std::string invalidField;

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# A11 permits deleting an unused friend-definition trigger; the call keeps S.
+kept S | operator
+removed Unused | outside the retention closure
+removed Dead | outside the retention closure
+report | pruning assumption: A11 instantiation-effects

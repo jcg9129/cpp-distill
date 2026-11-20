@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+a11-exclusion | removing the dormant trigger can change friend injection or compilation success
+report | pruning assumption: A11 instantiation-effects
+removed Unused | outside the retention closure

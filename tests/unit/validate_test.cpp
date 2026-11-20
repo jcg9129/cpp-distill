@@ -115,6 +115,26 @@ TEST(validate_cli_options) {
 #include "core/pipeline/pipeline.h"
 #include "evaluate.h"
 #include "profile.h"
+TEST(validate_no_assume_names) {
+  CHECK(parseDistillOptions({"main.cpp"}).value().assumeInstantiationEffects);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--no-assume=instantiation-effects","main.cpp"},
+      {"--no-assume","instantiation-effects","main.cpp"},
+      {"--no-assume=instantiation-effects","--no-assume=instantiation-effects","main.cpp"},
+      {"--no-assume=instantiation-effects,instantiation-effects","main.cpp"}}) {
+    auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(!r.value().assumeInstantiationEffects);
+    CHECK(!r.value().noPrune);
+  }
+  for (const auto* name : {"", "A11", "A7", "unknown", "instantiation-effects,", ",instantiation-effects",
+                           "instantiation-effects,unknown", "unknown,instantiation-effects"}) {
+    const auto r = parseDistillOptions({std::string("--no-assume=")+name,"main.cpp"});
+    CHECK(!r.ok()); CHECK(r.error().message.find("switchable names: instantiation-effects") != std::string::npos);
+  }
+  CHECK(!parseDistillOptions({"--no-assume"}).ok());
+  CHECK(!parseDistillOptions({"--no-assume=instantiation-effects","--judge-probe","cses"}).ok());
+  CHECK(distillHelp().find("--no-assume=<name>") != std::string::npos);
+}
+
 TEST(validate_capture_profile_crlf_compiler_output) {
   const auto gcc = testing::testGcc(); if (!gcc) throw test::Skip{"GCC unavailable"};
   test::TempDirectory temp;

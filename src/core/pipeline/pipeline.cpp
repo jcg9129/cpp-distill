@@ -150,6 +150,7 @@ struct Pipeline {
     step("pruning analysis");
     try {
       auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
+      m.assumeInstantiationEffects = options.assumeInstantiationEffects;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
@@ -419,6 +420,8 @@ struct Pipeline {
       result.diagnostic += e.message + '\n';
       result.resultLine = "distill: nothing written, runtime " + result.runtime;
     }
+    if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
     result.report = renderReport(result, command, options.profile);
     return std::move(result);
   }

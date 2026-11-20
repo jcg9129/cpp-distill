@@ -240,6 +240,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   auto valid = validatePruningModel(m); if (!valid.ok()) return valid.error();
   const auto& registry = embeddedAdlRegistry();
   PruningResult out; out.dialect = m.dialect; out.registryVersion = registry.version; out.registryDigest = registry.digest;
+  if (!m.assumeInstantiationEffects) out.policy += ", without instantiation-effects";
   auto disable = [&](std::string s) {
     if (std::find(out.disabledReasons.begin(), out.disabledReasons.end(), s) == out.disabledReasons.end()) out.disabledReasons.push_back(std::move(s));
   };
@@ -354,6 +355,58 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     if (u.family == noFamily) system(u.entity,noFamily);
     else systemUses[u.family].push_back(u.entity);
   }
+  // D3d-7: retaining a template does not retain its instantiation triggers.
+  // Reverse the *potential* dependency graph over all text, including dead
+  // declarations and patterns, rather than just Clang's seen instantiations.
+  // System nodes stay in the graph so aliases/defaults through library types
+  // do not break a path. Unseen system dispatch is handled by the refusal below.
+  if (std::any_of(m.families.begin(),m.families.end(),[](const auto& f) { return !f.instantiationEffect.empty(); })) {
+    const auto total = n + m.systemEntities.size();
+    std::vector<std::vector<std::size_t>> incoming(total);
+    std::size_t effectEdges = 0;
+    auto dependency = [&](std::size_t from, std::size_t to) {
+      if (effectEdges < 4000000) { incoming[to].push_back(from); ++effectEdges; }
+      else disable("instantiation effect dependency limit");
+    };
+    for (FamilyId id = 0; id < n; ++id) {
+      const auto& f = m.families[id];
+      for (auto target : f.edges) dependency(id,target);
+      for (const auto& name : lexical[id]) for (auto target : index[name]) dependency(id,target);
+      for (const auto& name : f.dependentNames) for (auto target : callables[name]) dependency(id,target);
+      for (auto target : associations[id]) dependency(id,target);
+      for (auto entity : systemUses[id]) dependency(id,n+entity);
+    }
+    for (auto [a,b] : m.unions) { dependency(a,b); dependency(b,a); }
+    for (std::size_t id = 0; id < m.systemEntities.size(); ++id) {
+      for (auto target : m.systemEntities[id].userEdges) dependency(n+id,target);
+      for (auto target : m.systemEntities[id].systemEdges) dependency(n+id,n+target);
+    }
+    std::vector<FamilyId> effectCause(total,noFamily);
+    std::queue<std::size_t> effects;
+    for (FamilyId id = 0; id < n; ++id) if (!m.families[id].instantiationEffect.empty()) {
+      effectCause[id] = id; effects.push(id);
+      keep(id,"instantiation effect: " + m.families[id].instantiationEffect,noFamily);
+    }
+    while (!effects.empty()) {
+      const auto id = effects.front(); effects.pop();
+      const auto cause = effectCause[id];
+      if (id < n) {
+        const auto& f = m.families[id];
+        // A6 bounds names, not which library instantiations dispatch to them.
+        // Type-associated hidden friends are covered by the carrier/association
+        // graph; free hooks and system specializations have no such bound.
+        const bool hook = f.nonMemberOperator || std::any_of(f.callableNames.begin(),f.callableNames.end(),
+            [&](const auto& name) { return adl.contains(name); });
+        if (f.systemSpecialization || (hook && (f.kind != FamilyKind::record || !f.boundedSystemHooks)))
+          disable("unbounded system instantiation effects through " + f.label);
+      }
+      for (auto from : incoming[id]) if (effectCause[from] == noFamily) {
+        effectCause[from] = cause; effects.push(from);
+        if (from < n) keep(from,"instantiation effect: possible trigger of " + m.families[cause].label,cause);
+      }
+    }
+  }
+  if (!out.disabledReasons.empty()) for (FamilyId id = 0; id < n; ++id) keep(id,"pruning disabled",noFamily);
   while (!work.empty()) {
     const auto id = work.front(); work.pop(); const auto& f = m.families[id];
     for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keep(target,"name: " + name,id);
@@ -374,7 +427,12 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   // Even an enum or unused template can seed constant-evaluation caches.
   // Every enabled pruning result relies on A7, including a pruned artifact
   // whose families all survived (rendering may still remove empty shells).
-  if (out.disabledReasons.empty()) out.assumptions.insert("A7");
+  // A11 excludes friend instantiation and parameter-object/constexpr destruction,
+  // plus destruction of never-reached block storage, even in empty-shell rendering.
+  if (out.disabledReasons.empty()) {
+    out.assumptions.insert("A7");
+    if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
+  }
   return out;
 }
 Result<bool> staticNameInvariant(const PruningModel& m, const PruningResult& r, std::string_view rendered) {
