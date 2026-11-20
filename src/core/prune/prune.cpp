@@ -247,8 +247,6 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   out.memberDisabledReasons = m.memberDisabledReasons;
   if (!m.assumeLibrarySpelledMembers) out.memberDisabledReasons.push_back("--no-assume=library-spelled-members");
   else if (!m.libraryMemberNamesComputed) out.memberDisabledReasons.push_back("library-spelled identifier set could not be computed");
-  for (const auto& header : m.systemPasteHeaders)
-    out.memberDisabledReasons.push_back("system header can form identifiers by token pasting (##): " + header);
   auto disable = [&](std::string s) {
     if (std::find(out.disabledReasons.begin(), out.disabledReasons.end(), s) == out.disabledReasons.end()) out.disabledReasons.push_back(std::move(s));
   };

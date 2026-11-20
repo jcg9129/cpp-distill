@@ -104,14 +104,14 @@ struct Archive {
     field("assumeInstantiationEffects",x.assumeInstantiationEffects);
     field("assumeLibrarySpelledMembers",x.assumeLibrarySpelledMembers);
     field("libraryMemberNamesComputed",x.libraryMemberNamesComputed); field("memberDisabledReasons",x.memberDisabledReasons);
-    field("libraryMemberNames",x.libraryMemberNames); field("systemPasteHeaders",x.systemPasteHeaders);
+    field("libraryMemberNames",x.libraryMemberNames);
   }
 };
 }
 Result<std::string> serializePruningModel(const PruningModel& m) {
   auto v = validatePruningModel(m); if (!v.ok()) return v.error();
   try {
-    Archive a; a.stream << "DISTILL-PRUNE-5 "; auto copy = m; a.field(copy);
+    Archive a; a.stream << "DISTILL-PRUNE-6 "; auto copy = m; a.field(copy);
     auto s = a.stream.str(); if (s.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit"};
     return s;
   } catch (const Error& e) { return e; }
@@ -120,7 +120,7 @@ Result<PruningModel> parsePruningModel(std::string_view text) {
   if (text.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit at field model, line 1, byte 0"};
   try {
     Archive a; a.reading = true; a.input = text; a.stream.str(std::string(text)); std::string version; a.stream >> version;
-    if (version != "DISTILL-PRUNE-5") { a.path = "version"; a.fail("invalid pruning protocol version"); }
+    if (version != "DISTILL-PRUNE-6") { a.path = "version"; a.fail("invalid pruning protocol version"); }
     PruningModel m; a.field(m); a.stream >> std::ws;
     if (!a.stream.eof()) { a.path = "trailer"; a.fail("trailing pruning protocol bytes"); }
     std::string invalidField;

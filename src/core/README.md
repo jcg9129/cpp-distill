@@ -830,7 +830,7 @@ A11 exclusions, compiler probes and measurements.
 accepts repetition and comma lists; `instantiation-effects` and
 `library-spelled-members` are the switchable names. Other names (including
 assumption IDs) are usage errors (exit 1) listing both names. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
-the worker. Pruning protocol **5** serializes both flags, and the parent rejects a worker
+the worker. Pruning protocol **6** serializes both flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.
 Both report formats print the readable A11 name; the flag mode lists it as
@@ -1351,10 +1351,11 @@ selection paths print the note next to `profileSelectionLine`. This diagnostic
 never changes facts, generated output or exit status.
 
 Member pruning (D3e) is enabled by default under A12 `library-spelled-members`.
-The worker scans raw included system headers after the include graph; token
-pasting or an incomplete inventory disables only member pruning.
+The worker inventories raw included system headers and identifiers emitted by
+the full TU's system macro expansions, including pasted results and user arguments.
+An incomplete inventory disables only member pruning.
 `--no-assume=library-spelled-members` also keeps records whole. Both flags are
-immutable protocol-v5 identity fields. Reports list A12 whenever members can be
+immutable protocol-v6 identity fields. Reports list A12 whenever members can be
 pruned, even without a deletion. The adopted rules, regression coverage and
 historical prototype measurements are in
 [`2026-11-20-member-pruning.md`](../../docs/reviews/2026-11-20-member-pruning.md).

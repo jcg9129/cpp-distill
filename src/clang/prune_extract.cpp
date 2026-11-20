@@ -212,7 +212,7 @@ struct Extraction {
   }
   bool memberUnitsEnabled() const {
     return model.assumeLibrarySpelledMembers && model.libraryMemberNamesComputed &&
-        model.memberDisabledReasons.empty() && model.systemPasteHeaders.empty();
+        model.memberDisabledReasons.empty();
   }
   void discover(Decl* d) {
     if (!d || d->isImplicit() || !user(d->getBeginLoc())) return;
@@ -466,6 +466,35 @@ bool positionToken(std::string_view name) {
 class Macros final : public PPCallbacks {
   Extraction& e;
   std::map<std::string,MacroFact,std::less<>> sourceBindings;
+  std::set<unsigned> systemMacroInvocations;
+  std::set<std::string,std::less<>> expandedLibraryMemberNames;
+  void libraryToken(const clang::Token& token) {
+    if (!e.model.assumeLibrarySpelledMembers || !token.is(tok::identifier) ||
+        !token.getLocation().isMacroID()) return;
+    // A pasted token's spelling is in scratch space, and an argument's spelling
+    // can be user text. Follow BOTH spelling and expansion ancestry. Recording
+    // system definitions at MacroExpands also covers a system macro pasted at a
+    // user invocation, where neither the scratch spelling nor the call is system.
+    std::vector<clang::SourceLocation> pending{token.getLocation()};
+    std::set<unsigned> seen;
+    while (!pending.empty()) {
+      const auto loc = pending.back(); pending.pop_back();
+      if (loc.isInvalid() || !seen.insert(loc.getRawEncoding()).second) continue;
+      if (systemMacroInvocations.contains(loc.getRawEncoding()) ||
+          (loc.isFileID() && e.sm.isInSystemHeader(loc))) {
+        expandedLibraryMemberNames.insert(token.getIdentifierInfo()->getName().str());
+        return;
+      }
+      if (seen.size() > 4096) {
+        e.model.memberDisabledReasons.push_back("system macro expansion ancestry limit");
+        return;
+      }
+      if (loc.isMacroID()) {
+        pending.push_back(e.sm.getImmediateSpellingLoc(loc));
+        pending.push_back(e.sm.getImmediateExpansionRange(loc).getBegin());
+      }
+    }
+  }
   enum class AttributeSyntax { none, standard, gnu, declspec };
   AttributeSyntax attributeSyntax = AttributeSyntax::none;
   std::vector<clang::Token> attributeTokens;
@@ -531,6 +560,7 @@ public:
     if (e.user(loc) && kind != PIK_HashPragma) e.disable("unsupported generated user pragma at " + loc.printToString(e.sm));
   }
   void finalToken(const clang::Token& token) {
+    libraryToken(token); // Full unpruned TU, before filtering to user expansions.
     if (!e.user(token.getLocation())) return;
     attributeToken(token);
     // Keywords carry identifier info too; annotation and literal tokens don't.
@@ -567,7 +597,7 @@ public:
   // inventory separate so later work can union other scanned library builds.
   void collectLibraryMemberNames() {
     if (!e.model.assumeLibrarySpelledMembers) return;
-    e.model.libraryMemberNames.clear();
+    e.model.libraryMemberNames = expandedLibraryMemberNames;
     for (const auto& [key,file] : headerFiles) {
       (void)key;
       bool invalid = false; const auto buffer = e.sm.getBufferData(file,&invalid);
@@ -578,7 +608,7 @@ public:
       }
       Lexer lexer(loc,e.compiler.getLangOpts(),buffer.begin(),buffer.begin(),buffer.end());
       clang::Token token;
-      bool pasted = false, done = false;
+      bool done = false;
       do {
         done = lexer.LexFromRawLexer(token);
         if (token.is(tok::raw_identifier)) {
@@ -588,12 +618,8 @@ public:
           else e.model.memberDisabledReasons.push_back("unreadable identifier in system header: " + e.sm.getFilename(loc).str());
         }
         if (token.is(tok::unknown)) e.model.memberDisabledReasons.push_back("unrecognized token in system header: " + e.sm.getFilename(loc).str());
-        if (token.is(tok::hashhash)) pasted = true;
       } while (!done);
-      if (pasted) e.model.systemPasteHeaders.push_back(e.sm.getFilename(loc).str());
     }
-    std::sort(e.model.systemPasteHeaders.begin(),e.model.systemPasteHeaders.end());
-    e.model.systemPasteHeaders.erase(std::unique(e.model.systemPasteHeaders.begin(),e.model.systemPasteHeaders.end()),e.model.systemPasteHeaders.end());
     e.model.libraryMemberNamesComputed = e.model.memberDisabledReasons.empty();
   }
   void MacroDefined(const clang::Token& name, const MacroDirective* md) override {
@@ -603,6 +629,14 @@ public:
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = {MacroState::undefined,{}, {}};
   }
   void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs*) override {
+    if (e.model.assumeLibrarySpelledMembers) {
+      if (const auto* mi = definition.getMacroInfo()) {
+        const auto def = e.sm.getSpellingLoc(mi->getDefinitionLoc());
+        if (def.isValid() && !e.sm.isWrittenInBuiltinFile(def) &&
+            !e.sm.isWrittenInCommandLineFile(def) && e.sm.isInSystemHeader(def))
+          systemMacroInvocations.insert(range.getBegin().getRawEncoding());
+      } else e.model.memberDisabledReasons.push_back("unavailable macro definition for library-spelled identifier set");
+    }
     if (!e.user(range.getBegin())) return;
     const auto* mi = definition.getMacroInfo(); if (!mi) { e.disable("missing macro expansion definition at " + range.getBegin().printToString(e.sm)); return; }
     const auto offset = e.offset(range.getBegin()); const auto name = token.getIdentifierInfo()->getName().str();

@@ -75,12 +75,12 @@ struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
-  // Worker inventory, computed after the include graph. Future scanned-library
-  // inventories can be unioned here without changing the retention rule.
+  // Raw system-header identifiers plus identifiers emitted through system macro
+  // expansion in the full unpruned TU. Future scanned-library inventories can be
+  // unioned here without changing the retention rule.
   bool libraryMemberNamesComputed = false;
   std::vector<std::string> memberDisabledReasons;
   std::set<std::string, std::less<>> libraryMemberNames;
-  std::vector<std::string> systemPasteHeaders;
   std::string text, dialect;
   std::vector<PruneFamily> families;
   std::vector<std::pair<FamilyId, FamilyId>> unions;

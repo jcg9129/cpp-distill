@@ -9,9 +9,9 @@ and its independent opt-out. See [design §4.7](../design.md#47-pruning).
 ## Assumption A12 (`library-spelled-members`)
 
 > The judge's standard library headers call, name or take the address of a member
-> of a user type only through an identifier spelled in the library headers the
-> translation unit includes on the worker, or as an operator function, conversion
-> function, constructor or destructor.
+> of a user type only through an identifier spelled in, or produced by macro
+> expansion of, the library headers the translation unit includes on the worker,
+> or as an operator function, conversion function, constructor or destructor.
 
 User, 2026-11-20. This replaces the proposed A10 member-name registry assumption;
 A10 was never adopted. The library-name index alone was insufficient (range
@@ -21,9 +21,13 @@ that this bounds the judge's library; it does not prove matching headers.
 After collecting the include graph, the worker raw-lexes every included system
 header, including transitive headers, inactive branches and macro definitions.
 Comments and string contents do not contribute identifiers. Identifier spelling
-is normalized by Clang. Any `##` preprocessing token (including `%:%:`), even in
-an inactive branch or unused macro, disables member pruning with a report reason.
-An unreadable or incomplete inventory also disables member pruning. Whole-family
+is normalized by Clang. The inventory also includes identifier tokens actually
+produced by preprocessing the full unpruned translation unit through system
+macros, including pasted results, user-supplied arguments and user macros invoked
+in system context. Expansion ancestry is followed through spelling and invocation
+locations, including scratch buffers. Under A12 the worker headers/configuration
+bound the judge's; unexpanded macros produce nothing in this TU. An unreadable or
+incomplete inventory disables member pruning with a report reason. Whole-family
 pruning and its existing safety gates continue. Language lookup names (`begin`,
 `end`, `get`, and coroutine protocol names) are protected independently of headers.
 The collection and retention code leave an explicit union point for inventories
@@ -34,8 +38,9 @@ same repeatable/comma-list parser as `instantiation-effects`. Every enabled memb
 analysis reports **A12 library-spelled-members**, including analyses that remove
 no member, following A11's convention. Disabled modes omit A12 and explain why.
 Both flags are immutable parent/worker identity fields, serialized in private
-protocol version **5**. There is no pruning-result cache; serialized model
-identity includes both flags and the collected inventory.
+protocol version **6** after removal of the obsolete paste-header list. There is
+no pruning-result cache; serialized model identity includes both flags and the
+collected inventory.
 
 ## Rule (policy D3e)
 
@@ -53,9 +58,9 @@ A unit of a kept record is removed unless one of these holds:
 2. **Virtual name clash:** any user record declares a virtual with this name.
 3. **Reserved names:** the name is a reserved identifier.
 4. **Library/language spelling:** the name is an identifier token in any included
-   system header's raw text, or a language member-lookup name. A12 bounds library
-   lookup; system-header pasting or an unavailable inventory disables member
-   pruning entirely, preserving members of retained records.
+   system header's raw text or produced through its macro expansions in this TU,
+   or a language member-lookup name. A12 bounds library lookup; an unavailable
+   inventory disables member pruning, preserving members of retained records.
 5. **Name rule:** the name is an identifier token in kept user text outside the
    unit: kept families/units, macro definitions and structural text. This covers
    calls, address-taking, qualified friends, using-declarations, requires and
@@ -97,9 +102,13 @@ with an entire record may share names with retained records.
 
 Review of the prototype found and fixed these production blockers:
 
-- System `##` was only reported, permitting member removal despite an unbounded
-  synthesized name. It now disables member pruning, including inactive/digraph
-  paste tokens, while whole-family removal remains available.
+- The first productization refused member pruning for any system `##`, including
+  inactive/digraph paste tokens. This disabled members with ordinary headers:
+  glibc `stdint.h` defines `__INT64_C(c) c ## L`, and `bits/floatn.h` and common
+  libstdc++ headers also paste tokens. The bounded inventory now unions raw header
+  identifiers with identifiers actually emitted through system macro expansion
+  in the full unpruned TU. Unexpanded paste macros no longer disable pruning;
+  pasted member names and user arguments remain protected under amended A12.
 - The raw-lexer loop discarded the final token of a header without a trailing
   newline. It now processes that token before stopping.
 - Raw identifier bytes bypassed Clang's identifier normalization, missing names
@@ -143,32 +152,95 @@ The previously downloaded, checksum-verified LLVM 23.1.5 SDK was reused through
 an ignored `spike-work/sdk` symlink; the original SDK was not modified. Builds
 used Clang 22.1.8, `-O1 -DNDEBUG`, LLD 22, at most `-j2`, and hard timeouts.
 
-The final stable build passes all **104 CTests**, including all 81 caide corpus
-cases, with a 900-second overall deadline and test deadlines of at most 120
-seconds. The **28 focused member cases** check extraction/rendering/invariants,
-GCC 15.2 and Clang 22.1.8 compilation/runtime, or the expected effect refusal.
+The full **104-test CTest suite** was exercised with a 900-second overall deadline
+and individual deadlines of at most 120 seconds. The initial run passed 102 tests;
+after refreshing whole-record expectations, both affected tests passed on rerun.
+This includes all 81 caide cases, **79 extraction cases**, and **33 focused member
+cases** covering extraction, rendering/invariants, GCC 15.2 and Clang 22.1.8
+compilation/runtime, and expected effect refusals. New regressions cover inactive
+and unused paste macros, pasted dependent names in uninstantiated system templates,
+system macros invoked with user arguments (including expanded arguments), system
+pasting at user call sites, and user macros invoked inside system templates.
+
+Existing instantiation-effect expectations now check the effect-bearing member
+and its retained owner separately. The namespace-constant fixture still refuses
+unbounded constructor/destructor effects under member pruning; its A12 opt-out
+variant preserves the whole-record runtime comparison. Refusal cases validate
+the original program's runtime oracle without trying to render a refused result.
+
 The nine Python suites pass **293 tests** (209 unittest and 84 pytest): extensions,
 profiles, drift, release, retry, matrix, LLVM tooling, measurement tooling and
 library tooling. Each suite has a 120-second timeout, except library pytest's
-300-second timeout. `git diff --check` also passes. No ATL sweep was run.
+300-second timeout. Missing pytest was installed only in ignored `.checks/python`.
+`git diff --check` passes.
 
 This AArch64 host's native GCC cannot represent the synthetic signed-`wchar_t`
 model in `resolver_differential`. Only that test's generated build-directory
-`ENVIRONMENT` selects a worktree-local x86_64-targeting GCC 15.2 oracle; its
-assertions and source are unchanged. The public Ubuntu cross-compiler package
-was downloaded into ignored `.checks/oracle`, checked against its package-index
-SHA-256, and extracted there; its version/hash are recorded in `package.json`.
-All other tests use native compilers. An initial native-oracle failure and old
-whole-record corpus expectations were superseded by the stable 104/104 run.
+`ENVIRONMENT` selects the worktree-local x86_64-targeting GCC 15.2 oracle; its
+assertions and source are unchanged. Public Ubuntu cross-toolchain/QEMU packages
+were downloaded, checked against package-index SHA-256 values, and extracted
+inside ignored `.checks/cross`; versions and hashes are in `packages.json` there.
+All other CTests use native compilers.
+
+The before/after `<cstdint>` check confirmed that system `##` originally disabled
+member pruning. With the fix, both `<cstdint>` and `<bits/stdc++.h>` leave it enabled
+and remove the unused method from a retained record.
+
+## Productized measurement
+
+Measured locally after the inventory fix on the same 16 ATL examples as the
+prototype V1 column, using the read-only ATL clone and CSES nlm conventions:
+`--strip-comments --no-line-markers --judge cses`, C++23, `-O2`, default A11/A12.
+Worker library headers came from GCC 15.2; no CSES header capture was used, as
+in the prototype. All 16 artifacts are pruned with member pruning enabled.
+
+Every generated source compiled standalone, without the ATL include directory,
+with both GCC 15.2 and Clang 22.1.8 targeting x86_64. All **32 runs** under QEMU
+matched the examples’ expected output byte for byte (using their `.in` files
+when present). Generation had a 300-second timeout per example, compilation
+180 seconds per compiler, execution 60 seconds, and the sweep 1,500 seconds;
+processes were limited to 2,500,000 KiB of virtual memory. These are local
+toolchain checks under A12, rather than validation on the CSES judge itself.
+
+| Example | Prototype V1 bytes | Productized bytes | Δ bytes |
+| --- | ---: | ---: | ---: |
+| euler-tour-tree/basic | 62,199 | 62,199 | 0 |
+| link-cut-tree/basic | 83,599 | 83,599 | 0 |
+| subtree-link-cut-tree/basic | 89,693 | 89,693 | 0 |
+| top-tree/basic | 123,610 | 123,610 | 0 |
+| splay-engine/quick-start | 12,809 | 12,809 | 0 |
+| splay-map/quick-start | 44,589 | 44,589 | 0 |
+| splay-sequence/quick-start | 42,780 | 42,780 | 0 |
+| treap-map/quick-start | 32,524 | 32,524 | 0 |
+| treap-sequence/quick-start | 30,887 | 30,887 | 0 |
+| dynamic-segment-tree/quick-start | 6,539 | 6,539 | 0 |
+| dynamic-lazy-segment-tree/quick-start | 10,444 | 10,444 | 0 |
+| meldable-heap-forest/basic | 12,244 | 12,244 | 0 |
+| convolution/quick | 69,770 | 69,770 | 0 |
+| coordinate-compression/move-only | 19,418 | 19,418 | 0 |
+| matrix/quick | 51,273 | 51,454 | +181 |
+| xor-basis/queries | 8,522 | 8,522 | 0 |
+| **Total** | **700,900** | **701,081** | **+181** |
+
+Fifteen byte counts match V1. `matrix/quick` is 181 bytes larger: comparison with
+the prototype source shows that productization preserves its structural friend
+`operator==` and adjacent whitespace. Both versions remove 32 member units; this
+difference does not come from retaining an additional macro-produced member name.
+
+Sources, per-case reports, compiler/run logs, captured outputs and the machine
+readable summary remain locally in ignored `measurements/member-productized/`
+(`summary.tsv` and `summary.json`). The local harness is
+`.checks/measure-productized.py`; public cross-toolchain package versions and
+SHA-256 values are recorded in `.checks/cross/packages.json`.
 
 ## Prototype measurement
 
 These tables are historical measurements of the unreviewed prototype, **not
-measurements of adopted D3e**. Prototype V1 did not disable members on system `##`;
-its gains must not be advertised as production gains. V2 is a historical comparison
-and no longer implemented. The obsolete variant harness
-`ci/atl-sweep/member-experiment.py` was removed. Productization does not run the
-ATL sweep; CI will measure the adopted policy.
+measurements of adopted D3e**. Prototype V1 did not collect expanded library
+identifiers; its gains must not be advertised as production gains. V2 is a
+historical comparison and no longer implemented. The obsolete variant harness
+`ci/atl-sweep/member-experiment.py` was removed. The local adopted-policy
+comparison is recorded under Productized measurement.
 
 The 16 examples passed standalone compilation and byte-exact output with GCC 15.2
 and Clang 22.1.8 on the prototype, using the sweep's nlm convention

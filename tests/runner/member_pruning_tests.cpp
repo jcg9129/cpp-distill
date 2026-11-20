@@ -230,8 +230,8 @@ int main(int argc, char** argv) {
           "int main(){S s;(void)s;}\n",true,true,{"dormant"});
       unit(m,r,"S::dep_probe",true,"dependent name:"); unit(m,r,"S::scope_probe",true,"dependent name:"); verify(out); ++cases;
     }
-    // Synthetic standard headers isolate library spelling from this host's
-    // libstdc++ paste macros and cover uninstantiated library-only callers.
+    // Synthetic system headers isolate raw/expanded library spelling and cover
+    // uninstantiated library-only callers.
     write("memory", "#include <utility>\n#define LIBRARY_PROTOCOL allocate\n#if 0\nvoid inactive_name();\n#endif\n"
                     "template<class T> int use_allocator(T t){return t.allocate();}\n");
     write("utility", "// Strings and comments must not protect no_hit.\nconst char* text=\"no_hit\";\n"
@@ -249,14 +249,55 @@ int main(int argc, char** argv) {
       auto [m,r,out] = analyze("#include <memory>\nstruct Alloc { int allocate(){return 0;} int no_hit(){return 0;} }; int main(){return use_allocator(Alloc{});}\n");
       unit(m,r,"Alloc::allocate",true); unit(m,r,"Alloc::no_hit",false); verify(out); ++cases;
     }
-    write("utility", "#if 0\n#define JOIN(a,b) a %:%: b\n#endif\n");
+    write("utility", "#define UNUSED_JOIN(a,b) a ## b\n#if 0\n#define JOIN(a,b) a %:%: b\n#endif\n");
     {
       auto [m,r,out] = analyze("#include <memory>\nstruct Alloc {int unused(){return 0;}}; int dead(){return 0;} int main(){Alloc a;(void)a;}\n");
-      require(out.find("unused") != out.npos,"paste fallback removed a member"); unit(m,r,"dead",false);
-      require(!r.memberDisabledReasons.empty(),"header ## must disable members");
-      require(!r.assumptions.contains("A12"),"disabled member pruning relies on A12");
-      require(take(renderPruningReport(m,r)).find("token pasting (##)") != std::string::npos,"missing paste reason");
+      unit(m,r,"Alloc::unused",false); unit(m,r,"dead",false);
+      require(r.memberDisabledReasons.empty(),"unexpanded header ## disabled members");
+      require(r.assumptions.contains("A12"),"missing A12 with unexpanded ##");
       verify(out); ++cases;
+    }
+    write("memory", "#define CALL(x) x.do_ ## thing()\n"
+                    "template<class T> int system_call(T x){return CALL(x);}\n");
+    {
+      // No instantiation/AST reference: the final preprocessor tokens alone
+      // must protect the pasted dependent name in the library template.
+      auto [m,r,out] = analyze("#include <memory>\nstruct S {int do_thing(){return 0;} int unused(){return 0;}}; int main(){S s;(void)s;}\n");
+      require(m.libraryMemberNames.contains("do_thing"),"missing system paste result");
+      unit(m,r,"S::do_thing",true,"rule 4"); unit(m,r,"S::unused",false); verify(out); ++cases;
+    }
+    {
+      auto [m,r,out] = analyze("#include <memory>\nstruct S {int do_thing(){return 0;} int unused(){return 0;}}; int main(){return system_call(S{});}\n");
+      unit(m,r,"S::do_thing",true); unit(m,r,"S::unused",false); verify(out); ++cases;
+    }
+    write("memory", "#define LIB_CALL(x, name) x.name()\n"
+                    "#define LIB_JOIN(a,b) a ## b\n");
+    {
+      // Arguments and the invocation are user-spelled. Argument expansion
+      // locations must still lead back to the system macro's definition.
+      auto [m,r,out] = analyze("#include <memory>\nstruct S {int arg_member(){return 0;} int user_paste(){return 0;} int unused(){return 0;}};\n"
+          "#define USER_NAME user_paste\n"
+          "template<class T> int dormant(T x){return LIB_CALL(x, arg_member)+LIB_CALL(x, USER_NAME);}\n"
+          "int main(){S s;(void)s;}\n");
+      require(m.libraryMemberNames.contains("arg_member"),"missing user argument of system macro");
+      require(m.libraryMemberNames.contains("user_paste"),"missing expanded user argument of system macro");
+      unit(m,r,"S::arg_member",true,"rule 4"); unit(m,r,"S::user_paste",true,"rule 4");
+      unit(m,r,"dormant",false); unit(m,r,"S::unused",false); verify(out); ++cases;
+    }
+    {
+      auto [m,r,out] = analyze("#include <memory>\nstruct S {int user_site(){return 0;} int unused(){return 0;}};\n"
+          "template<class T> int dormant(T x){return x.LIB_JOIN(user_,site)();}\n"
+          "int main(){S s;(void)s;}\n");
+      require(m.libraryMemberNames.contains("user_site"),"missing system paste at user invocation");
+      unit(m,r,"S::user_site",true,"rule 4"); unit(m,r,"dormant",false);
+      unit(m,r,"S::unused",false); verify(out); ++cases;
+    }
+    write("memory", "template<class T> int system_call(T x){return USER_CALL(x);}\n");
+    {
+      auto [m,r,out] = analyze("#define USER_CALL(x) x.context_ ## member()\n#include <memory>\n"
+          "struct S {int context_member(){return 0;} int unused(){return 0;}}; int main(){S s;(void)s;}\n");
+      require(m.libraryMemberNames.contains("context_member"),"missing user macro paste in system context");
+      unit(m,r,"S::context_member",true,"rule 4"); unit(m,r,"S::unused",false); verify(out); ++cases;
     }
     write("memory", "#define PROTOCOL sp\\\nlit_name\n");
     {

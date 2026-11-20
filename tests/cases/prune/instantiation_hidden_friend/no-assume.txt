@@ -5,5 +5,6 @@ report | pruning assumption disabled: A11 instantiation-effects (--no-assume=ins
 report-absent | pruning assumption: A11
 # Conservative: even self-associated hidden friends retain potential triggers.
 kept S | operator
-kept Unused | instantiation effect:
+kept Unused | AST: referenced by Unused::dormant
+kept Unused::dormant | instantiation effect:
 removed Dead | outside the retention closure

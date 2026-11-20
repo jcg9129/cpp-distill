@@ -160,12 +160,12 @@ these, and only these; the report lists each one an output depended on, and
   By default every pruned artifact relies on A11; reports print
   `A11 instantiation-effects` alongside A7. `--no-assume=instantiation-effects`
   disables this assumption while keeping pruning enabled (§4.7).
-- **A12 (`library-spelled-members`)** (user, 2026-11-20) The judge's standard library headers call, name or take the address of a member of a user type only through an identifier spelled in the library headers the translation unit includes on the worker, or as an operator function, conversion function, constructor or destructor.
+- **A12 (`library-spelled-members`)** (user, 2026-11-20) The judge's standard library headers call, name or take the address of a member of a user type only through an identifier spelled in, or produced by macro expansion of, the library headers the translation unit includes on the worker, or as an operator function, conversion function, constructor or destructor.
   Every enabled member-pruning analysis reports `A12 library-spelled-members`,
   even when it removes no unit, consistently with A11. The assumption is disabled
   by `--no-assume=library-spelled-members`; only whole-family pruning then remains.
-  System token pasting or an unavailable header inventory also disables member
-  pruning with a reason, without disabling whole-family pruning (§4.7).
+  An unavailable raw/expanded header inventory also disables member pruning
+  with a reason, without disabling whole-family pruning (§4.7).
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -1299,6 +1299,7 @@ A unit stays if any of these eight rules applies:
 3. The name is reserved.
 4. The name is an identifier token in the raw text of any included system header,
    including transitive includes, inactive branches and macro definitions, or is
+   produced by macro expansion of those headers in the full unpruned TU, or is
    a language lookup name (`begin`, `end`, `get`, coroutine protocol names).
 5. The name is an identifier token in kept user text outside its own unit,
    including other units, macros and structural text.
@@ -1309,9 +1310,12 @@ A unit stays if any of these eight rules applies:
 8. Its record or class template is explicitly instantiated (declaration or definition).
 
 Rule 4 uses the worker's include graph after parsing, then raw lexing with Clang
-identifier normalization, excluding comments/string contents. Any `##` token
-(including digraph spelling) in an included system header, or an inventory that
-cannot be computed, disables member pruning with a reason. Whole-family pruning
+identifier normalization, excluding comments/string contents. It unions this with
+identifiers from the full unpruned TU's preprocessor token stream whose expansion
+originates in a system macro definition or system context, including pasted names
+and user-supplied macro arguments. Under A12 the worker headers/configuration
+bound the judge's; unexpanded macros produce no names in this TU. Only an inventory
+that cannot be computed disables member pruning with a reason. Whole-family pruning
 continues under its existing gates. `--no-assume=library-spelled-members` likewise
 keeps records whole. Collection and retention leave a clear hook to widen the
 inventory to all scanned library builds later; that is not implemented.
@@ -1489,7 +1493,7 @@ sources and refusal gates still apply. This mode needs A1–A7 and A9 where
 applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 5 and checked as
+The setting is part of serialized worker protocol version 6 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
 model and policy identity distinguish both A11 and A12 flag combinations.
 

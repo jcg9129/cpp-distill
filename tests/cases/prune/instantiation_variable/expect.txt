@@ -1,2 +1,3 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-kept Unused | instantiation effect:
+kept Unused | AST: referenced by Unused::dormant
+kept Unused::dormant | instantiation effect:
