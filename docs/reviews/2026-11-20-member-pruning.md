@@ -85,8 +85,10 @@ its structural family; bind a member name to pin that member unit explicitly.
 Members participate as families in ordinary closure and the reverse potential
 instantiation-effect graph. The latter includes lexical/AST/dependent-name edges,
 family unions and system edges over **all** text, not just retained text or locally
-observed instantiations. Owner-to-member blocking edges model rules 1–4/8. A dormant
-member that may instantiate an effect source remains, along with its helpers.
+observed instantiations. Owner-to-member potential-effect edges include ordinary
+member declarations, whose signatures can instantiate dependencies when the
+record is instantiated. Forward owner-to-member blocking edges model rules 1–4/8.
+A dormant member that may instantiate an effect source remains, along with its helpers.
 Units retained with their owner by rules 1–4/8 share the owner's effect component
 and incoming system-dispatch analysis, as explained below. Free hooks,
 uncertified hidden friends and system specializations still use the existing
@@ -247,6 +249,65 @@ running. It passed alone in **82.25 seconds**, with a temporary build-directory
 described below for the native host's unsigned `wchar_t`. All 36 focused pruning
 unit tests pass, including real nonmember-hook preservation and protocol-6
 rejection. `git diff --check` passes.
+
+## Independent review (2026-11-20)
+
+Both P1 findings were reproduced at `8ff6ccb`: the worker pruned `hidden_hook`
+from the dependent using example, and pruned `trigger` from the declaration-effect
+example with `--no-assume=instantiation-effects`. Both rendered programs compiled
+on the eight-byte-long worker and passed the rendering/static-name invariants.
+Selecting the otherwise discarded branch in both originals succeeded with GCC 15
+and Clang; the baseline rendered programs respectively failed with a missing
+member and an undefined `probe`. This branch-selection oracle models the reported
+judge difference without claiming to emulate a complete four-byte-long ABI.
+An additional Clang i386 compile/link check uses an actual four-byte `long`:
+both originals and fixed CLI artifacts link with `-nostdlib -Wl,-e,main`, while
+both baseline artifacts fail with the same missing-member/undefined-symbol
+diagnostics. These freestanding link checks are not runtime checks.
+
+Extraction now records expanded `UnresolvedUsingValueDecl` and
+`UnresolvedUsingTypenameDecl` names in `dependentNames`, shared by forward
+retention and reverse potential effects. The audit also reproduced the omission
+for qualified dependent friends (`friend void T::JOIN(hidden_,hook)();`); qualified
+dependent function declarations now record their names too. Overloaded, packed
+and member-template using declarations have regressions. Typename using targets
+and enums remain structural; C++ using-enum cannot name a dependent enum type.
+The valid nondependent using-enum case is covered. Dependent bases and expressions
+in template-header decltype, requires-clauses and default template arguments are
+already reached by recursive AST traversal and pass pasted-name regressions.
+
+The reverse effect graph now has owner-to-every-member edges, restoring the
+whole-record potential path through ordinary declarations without adding forward
+retention edges. Parameter/return types, default arguments, noexcept-specifiers,
+trailing requires and member-template signatures/defaults have regressions with
+macro-pasted source names, with and without A11. These are conservative potential
+paths, including constructs whose actual substitution is deferred until use.
+Unrelated ordinary members still disappear. The exact friend-injection example
+remains an A11 exclusion in default mode and preserves its trigger with A11 off;
+static-storage effect variants exercise the edges in both modes.
+
+Remeasured all 16 examples in **Productized measurement** at the same pinned ATL
+revision and with the same CSES flags, C++23, `-O2` and default A11/A12. Every row
+has **Δ 0 bytes** against the productized column; the total remains **701,081
+bytes**. All artifacts are pruned with member pruning enabled and contain no
+`#line`. Standalone GCC 15.2 and Clang 22.1.8 x86_64 builds pass all **32**
+byte-exact output checks under QEMU. Per-example generation/compilation/execution
+caps were 300/180/60 seconds, with a 1,500-second sweep cap and 2,500,000 KiB
+virtual-memory limits. Evidence is in `measurements/independent-review/`
+(`summary.tsv`, `summary.json`, sources, reports and compiler/run logs).
+
+Validation reused the checksum-verified LLVM 23.1.5 SDK through a read-only
+symlink, with Clang 22, `-O1 -DNDEBUG`, LLD, `-j2` and hard deadlines. All **105
+CTest checks** pass across the full run and a targeted rerun: the full run passed
+104 checks; ten existing fixtures needed eleven owner-provenance assertions
+updated from forward ownership to reverse instantiation effects. The rerun passes
+all 84 extraction fixture runs. The new independent-review suite passes **40
+cases**, and all nine Python suites pass **293 tests** (209 unittest, 84 pytest).
+As before, only the generated `resolver_differential` test environment selects a
+worktree-local cross-GCC oracle for the host's unsigned `wchar_t`; source and
+assertions are unchanged. `git diff --check` passes. Build/test, baseline failure
+and i386 evidence remain in `.checks/`; downloaded compiler packages were
+SHA-256 checked against Ubuntu's package indexes and extracted inside this worktree.
 
 ## Original productization validation
 

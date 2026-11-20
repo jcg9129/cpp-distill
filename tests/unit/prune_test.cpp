@@ -234,6 +234,29 @@ TEST(prune_instantiation_effects_reverse_dependent_lookup_and_associations) {
   const auto r = b.run(); CHECK(r.disabledReasons.empty());
   for (auto id : {effect,callback,key,adl,trigger}) CHECK(r.families[id].kept);
 }
+TEST(prune_ordinary_member_declarations_reach_owner_effect_triggers) {
+  for (bool assume : {true,false}) {
+    Model b; b.m.libraryMemberNamesComputed = true; b.m.assumeInstantiationEffects = assume;
+    const auto source = b.add("Source","struct Source {};",FamilyKind::record);
+    b.m.families[source].instantiationEffect = "template static storage";
+    const auto owner = b.add("Carrier","struct Carrier {};",FamilyKind::record);
+    const auto member = b.add("dormant","void dormant();");
+    b.m.families[member].memberOf = owner;
+    b.m.families[member].memberName = "dormant";
+    b.m.families[member].edges = {source}; // Signature/default/constraint dependency.
+    const auto unrelated = b.add("unrelated","void unrelated();");
+    b.m.families[unrelated].memberOf = owner;
+    b.m.families[unrelated].memberName = "unrelated";
+    const auto trigger = b.add("trigger","void trigger(){}");
+    b.m.families[trigger].edges = {owner};
+    b.add("main","int main(){}");
+    const auto r = b.run(); CHECK(r.disabledReasons.empty());
+    for (auto id : {source,owner,member,trigger}) CHECK(r.families[id].kept);
+    CHECK(r.families[trigger].reason.starts_with("instantiation effect:"));
+    CHECK_EQ(r.families[trigger].cause,source);
+    CHECK(!r.families[unrelated].kept);
+  }
+}
 TEST(prune_instantiation_effects_refuse_unbounded_system_dispatch) {
   for (int form = 0; form < 3; ++form) {
     Model b;

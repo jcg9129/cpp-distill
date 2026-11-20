@@ -436,9 +436,12 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
       for (const auto& name : f.dependentNames) for (auto target : effectCallables[name]) dependency(id,target);
       for (auto target : associations[id]) dependency(id,target);
       for (auto entity : systemUses[id]) dependency(id,n+entity);
-      for (auto member : members[id]) if (!memberReasons[member].empty()) dependency(id,member);
-      // Owner-retained units form the owner's effect component, just as they
-      // did in a whole record. Other members only have real source dependencies.
+      // Record instantiation can instantiate ordinary member declarations too
+      // (for example dependent parameter/return types), even without a call.
+      // Restore the whole-record potential paths only in the effect graph;
+      // this does not force forward retention of unrelated ordinary members.
+      for (auto member : members[id]) dependency(id,member);
+      // Owner-retained units also reach their owner's effect component.
       if (ownerDispatch[id]) dependency(id,f.memberOf);
     }
     for (auto [a,b] : m.unions) { dependency(a,b); dependency(b,a); }

@@ -13,6 +13,6 @@ kept Placeholder | instantiation effect:
 kept DecltypePlaceholder | instantiation effect:
 kept Dependent | instantiation effect:
 kept ConstrainedPlaceholder | instantiation effect:
-kept Dormant | AST: referenced by Dormant::unused
+kept Dormant | instantiation effect: possible trigger of ClassObject
 kept Dormant::unused | instantiation effect:
 removed Dead | outside the retention closure

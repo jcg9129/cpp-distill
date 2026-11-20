@@ -1,0 +1,3 @@
+# A11 excludes friend injection; this fixture's worker branch does not observe it.
+removed trigger |
+removed Carrier::dormant |

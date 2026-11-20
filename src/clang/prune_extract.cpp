@@ -1140,8 +1140,15 @@ public:
     return memberName(x->getMemberName());
   }
   bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { return memberName(x->getDeclName()); }
+  // These names live on declarations, not expressions. In uninstantiated
+  // patterns a pasted identifier has neither a raw spelling nor a target edge.
+  bool VisitUnresolvedUsingValueDecl(UnresolvedUsingValueDecl* d) { return memberName(d->getDeclName()); }
+  bool VisitUnresolvedUsingTypenameDecl(UnresolvedUsingTypenameDecl* d) { return memberName(d->getDeclName()); }
   bool VisitFunctionDecl(FunctionDecl* f) {
     if (current == noFamily) return true;
+    // A qualified dependent friend likewise names a member without creating a
+    // member expression or a resolved CXXMethodDecl in the template pattern.
+    if (f->getQualifier() && f->getQualifier().isDependent()) memberName(f->getDeclName());
     auto& family = e.model.families[current];
     if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
       bool carrier = false;

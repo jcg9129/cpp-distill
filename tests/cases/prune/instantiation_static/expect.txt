@@ -1,4 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 kept Reg | not inert
-kept Unused | AST: referenced by Unused::dormant
+kept Unused | instantiation effect: possible trigger of Reg
 kept Unused::dormant | instantiation effect:

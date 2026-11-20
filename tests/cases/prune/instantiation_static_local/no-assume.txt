@@ -3,7 +3,7 @@ args | --no-assume=instantiation-effects
 report | policy: D3e, without instantiation-effects
 report | pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)
 report-absent | pruning assumption: A11
-kept Unused | AST: referenced by Unused::dormant
+kept Unused | instantiation effect: possible trigger of Effect::run
 kept Unused::dormant | instantiation effect:
-kept Effect | AST: referenced by Effect::run
+kept Effect | instantiation effect: possible trigger of Effect::run
 kept Effect::run | not inert (static or thread storage)
