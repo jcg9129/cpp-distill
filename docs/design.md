@@ -736,9 +736,11 @@ agreement, since compiler observations alone do not reproduce a named judge's
 library build. Reports include generator/schema, the baseline SHA-256 and the
 selected profile build or GCC major when a resolved decision uses a fact.
 Major agreement (including satisfaction reruns) requires a dialect scanned for
-that major and each profile/configuration flag to occur in a same-dialect scanned
-build or the explicit harmless warning/debug/diagnostic/constexpr-limit/pipe allowlist;
-optimization flags require a scanned match because they change predefines.
+that major and one scanned build of that major and dialect containing every
+profile/configuration flag outside the explicit harmless
+warning/debug/diagnostic/constexpr-limit/pipe allowlist. Flag order does not matter,
+and extra build flags are allowed; optimization flags require a scanned match
+because they change predefines.
 
 **Default library configuration.** Track a separate, monotone Boolean at every
 point. It holds iff on every path to that point there has been no user

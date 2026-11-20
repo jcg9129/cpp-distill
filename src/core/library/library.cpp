@@ -37,19 +37,26 @@ std::string LibraryData::selector(const Profile& p, bool agreementOnly, std::str
       if (reason) *reason = "profile dialect not covered by scanned builds: " + p.dialect.name;
       return {};
     }
-    std::string uncovered;
+    if (std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
+          return covered(b) && std::all_of(p.flags.begin(), p.flags.end(), [&](const auto& flag) {
+            return harmlessFlag(flag) || std::find(b.flags.begin(), b.flags.end(), flag) != b.flags.end();
+          });
+        })) return "gcc-" + major;
+    std::string required, uncovered;
     for (const auto& flag : p.flags) {
-      if (harmlessFlag(flag) || std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
+      if (harmlessFlag(flag)) continue;
+      if (!required.empty()) required += ' ';
+      required += flag;
+      if (std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
             return covered(b) && std::find(b.flags.begin(), b.flags.end(), flag) != b.flags.end();
           })) continue;
       if (!uncovered.empty()) uncovered += ' ';
       uncovered += flag;
     }
-    if (!uncovered.empty()) {
-      if (reason) *reason = "profile flags not covered by scanned builds: " + uncovered;
-      return {};
-    }
-    return "gcc-" + major;
+    if (reason) *reason = !uncovered.empty()
+        ? "profile flags not covered by scanned builds: " + uncovered
+        : "profile flag combination not covered by a single scanned build: " + required;
+    return {};
   }
   const auto key = "profile-" + p.name;
   // A renamed/edited user profile must not borrow another build's snapshots.
