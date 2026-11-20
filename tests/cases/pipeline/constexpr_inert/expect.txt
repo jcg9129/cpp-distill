@@ -17,4 +17,4 @@ absent.1=UnusedTag
 absent.2=struct Convert {
 absent.3=constexpr int converted
 absent.4=int unrelated()
-report.a11=pruning assumption: A11
+report.a11=pruning assumption: A11 instantiation-effects

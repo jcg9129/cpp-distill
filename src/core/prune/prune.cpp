@@ -240,6 +240,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   auto valid = validatePruningModel(m); if (!valid.ok()) return valid.error();
   const auto& registry = embeddedAdlRegistry();
   PruningResult out; out.dialect = m.dialect; out.registryVersion = registry.version; out.registryDigest = registry.digest;
+  if (!m.assumeInstantiationEffects) out.policy += ", without instantiation-effects";
   auto disable = [&](std::string s) {
     if (std::find(out.disabledReasons.begin(), out.disabledReasons.end(), s) == out.disabledReasons.end()) out.disabledReasons.push_back(std::move(s));
   };
@@ -430,7 +431,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   // plus destruction of never-reached block storage, even in empty-shell rendering.
   if (out.disabledReasons.empty()) {
     out.assumptions.insert("A7");
-    out.assumptions.insert("A11");
+    if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
   }
   return out;
 }

@@ -16,4 +16,4 @@ contains.5=sizeof(T) == sizeof(Value)
 contains.6=std::is_standard_layout_v<Record>
 absent=int unrelated
 absent.1=struct UnusedRecord
-report.a11=pruning assumption: A11
+report.a11=pruning assumption: A11 instantiation-effects

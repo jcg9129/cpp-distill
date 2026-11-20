@@ -8,6 +8,7 @@ Result<std::vector<RunSample>> collectRunSamples(const std::vector<std::string>&
                                                 const std::filesystem::path& cwd);
 struct DistillOptions {
   bool noPrune = false, stripComments = false;
+  bool assumeInstantiationEffects = true;
   // Opt-in: omit generated #line markers from a pruned result when the parse
   // proves no position is observed (docs/reviews/2026-11-18-no-line-markers.md).
   bool noLineMarkers = false;

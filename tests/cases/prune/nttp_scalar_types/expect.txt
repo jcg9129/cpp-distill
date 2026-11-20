@@ -9,4 +9,4 @@ removed DependentPointer | outside the retention closure
 removed AutoPointer | outside the retention closure
 removed TrivialObject | outside the retention closure
 removed Dormant | outside the retention closure
-report | pruning assumption: A11
+report | pruning assumption: A11 instantiation-effects

@@ -36,7 +36,7 @@ never-reached objects tested here. The standard does not establish that
 exemption for constant-initialized block storage; D3d-7 relies on A11.
 
 Pruning fixtures use `a11-exclusion | explanation` to assert allowed removal
-and `report | pruning assumption: A11`, while running the original oracle.
+and `report | pruning assumption: A11 instantiation-effects`, while running the original oracle.
 Non-constexpr namespace-scope template storage with dynamic initialization or
 possible non-trivial destruction remains a retention regression, including
 non-constexpr reference/aggregate lifetime extension. Those fixtures still

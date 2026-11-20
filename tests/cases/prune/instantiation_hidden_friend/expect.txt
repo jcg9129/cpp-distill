@@ -3,4 +3,4 @@
 kept S | operator
 removed Unused | outside the retention closure
 removed Dead | outside the retention closure
-report | pruning assumption: A11
+report | pruning assumption: A11 instantiation-effects

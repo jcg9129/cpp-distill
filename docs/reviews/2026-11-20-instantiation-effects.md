@@ -1,7 +1,9 @@
 # Implicit instantiation effects — 2026-11-20
 
-Current policy: **D3d-7**, under the extended A11 approved by the user on
-2026-11-20. The constexpr and block-storage exemptions are adopted.
+Current default policy: **D3d-7**, under the extended A11
+(`instantiation-effects`) approved by the user on 2026-11-20. The constexpr and
+block-storage exemptions are adopted. The assumption can now be disabled while
+keeping pruning; see "Turning instantiation-effects off" below.
 
 ## D3d-7 rule
 
@@ -110,7 +112,8 @@ for these const constexpr-destructor controls. No tested never-reached form
 has startup registration. The matrix has 144 configurations / 288 compile-run
 comparisons, plus assembly compilation. The other matrix has 64 combinations.
 
-A11 fixtures explicitly require the report line `pruning assumption: A11` and
+A11 fixtures explicitly require the report line
+`pruning assumption: A11 instantiation-effects` and
 allowed removal of `dormant`. `a11-exclusion | explanation` runs the original
 oracle and omits the equivalence assertion excluded by A11. Coverage includes
 Pick, constexpr destruction, constexpr aggregate lifetime extension and
@@ -121,6 +124,57 @@ retention and original/rendered equality. Dynamic namespace template storage
 and constant-initialized namespace storage with non-trivial destruction are
 also retention regressions. Extractor tests independently check dependent,
 thread-storage and target-selected cases and unchanged rule-1 roots.
+
+## Turning instantiation-effects off
+
+A11 now has the readable name `instantiation-effects`. The default stays
+D3d-7 under extended A11. `--no-assume=instantiation-effects` keeps pruning but
+restores template-context function friends, potential template parameter
+objects and non-inert constexpr/block static or thread storage as effect
+sources. The flag is repeatable and accepts comma lists; all other values
+(including `A11`) fail with usage exit 1 and list the switchable names.
+Reports print `A11 instantiation-effects` when relied on. With the flag they
+instead state that it was disabled by `--no-assume=instantiation-effects`, and
+label the policy `D3d-7, without instantiation-effects`.
+
+The `ea28bd5` scalar/alias and trivial-class NTTP refinements predate A11 and
+remain sound without it: pointers/references create no parameter object of the
+pointee/referent, and recursively target-stable trivial user classes have no
+parameter-object destruction effect. Placeholder/dependent bindings,
+system-selected classes and template-qualified member selections must stay
+conservative, even when locally scalar or trivial. The restored code uses
+LLVM 23's explicit `std::nullopt` qualifier sentinel fix.
+
+The existing positive storage proof is also independent of A11: syntactically
+constant initialization, trivial destruction of the written object type on all
+accepted targets, and rejection of materialized temporaries/default expressions.
+It applies to constexpr and block storage in this mode too. No exemption based
+on observed constant evaluation or never-reached constant-initialized block
+storage is used. The optional `db967a6` necessarily-dynamic block-local proof is
+not restored; those locals conservatively remain sources. Reverse and forward
+closure, rule-1 roots, attribute/symbol effects and refusal gates are unchanged.
+Thus the §4.7 argument uses A1–A7 and A9 where applicable, without A11.
+
+Worker protocol 3 includes the setting, and worker responses must preserve it.
+There is no pruning-result cache. Serialized model and reported policy identity
+differ across modes. Historical D3d-5 expectations run against shared fixture
+sources with the flag; default A11 cases keep their exclusions. Flag-mode
+runtime fixtures require original/rendered equality again.
+
+Validation for this change: checksum-verified LLVM 23.1.5 SDK, Clang 22.1.8
+Release build and final rebuild with `-j2` and hard outer timeouts (600/300
+seconds). The final full CTest run (`--timeout 120 -j2`, 1800-second outer
+limit) passed **102 of 103 suites** in 216.47 seconds, including all **78**
+pruning fixture runs (63 default plus 15 flag-mode variants), **115** extractor
+model cases and all 81 caide cases. The sole failure is the same pre-existing
+AArch64 `resolver_differential` signed-`wchar_t` model mismatch described below;
+resolver/oracle/evaluator files are unchanged. All **293 Python tests** passed
+across extensions, profiles, drift, release, retry, matrix, library, LLVM CI and
+measurement suites, each with a 120-second hard timeout (300 for library).
+The final unit suite also checks the disabled-assumption diagnostic when
+pruning is skipped, and extractor controls cover lifetime-safe constexpr,
+block-static and thread-storage exemptions without A11. `git diff --check`
+passed. SDK, build and `.checks` artifacts were deleted after validation.
 
 ## Measurements
 
@@ -144,6 +198,7 @@ timeout 180s build/distill --judge cses --strip-comments --no-line-markers \
 | PR #104 / D3d-6 (`1715f38`), historical | 149,050 | 157,713 |
 | Initial `db967a6` positive proofs, historical | 149,050 | 157,713 |
 | D3d-7, extended A11, freshly verified | 84,539 | 99,721 |
+| D3d-7, `--no-assume=instantiation-effects`, freshly verified | 149,050 | 157,713 |
 
 The prior constexpr-only and block-only comparisons individually saved zero
 bytes: each left sources that reached the same families. Together the exemptions
@@ -156,8 +211,17 @@ lines, including all three groups (`static_modulus`, `montgomery`, `scalar_ntt`)
 Counts report one attributed cause, not independently necessary declarations.
 The savings from PR #104 are 64,511 and 57,992 bytes, respectively.
 
-Both original and pruned artifacts compiled and matched their example's
-`quick.out` byte for byte under GCC 15.2.0 and Clang 22.1.8 (eight comparisons).
+The flag-mode change freshly reproduced both rows using the same pinned source,
+SDK and command above (adding `--no-assume=instantiation-effects` for the flag
+row). Original, default-pruned and flag-pruned artifacts compiled and matched
+`quick.out` byte for byte under GCC 15.2.0 and Clang 22.1.8: **12 output
+comparisons**. All four new reports selected `pruned (local)`, with the policy
+and assumption lines distinguishing the modes. No target-runtime claim follows
+from these local AArch64 checks.
+
+The earlier default-only validation compiled both original and pruned artifacts
+and matched their example's `quick.out` byte for byte under GCC 15.2.0 and
+Clang 22.1.8 (eight comparisons).
 Both distillation reports select `pruned (local)`, list policy D3d-7 and report
 A11. The pipeline did not request runtime checks; the independent bounded
 compile/run comparisons supply that evidence. These are local AArch64 checks,

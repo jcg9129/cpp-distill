@@ -12,4 +12,4 @@ removed ConstrainedPlaceholder | outside the retention closure
 removed Dormant | outside the retention closure
 removed Dead | outside the retention closure
 # A11 excludes template parameter object destruction, including unknown bindings.
-report | pruning assumption: A11
+report | pruning assumption: A11 instantiation-effects

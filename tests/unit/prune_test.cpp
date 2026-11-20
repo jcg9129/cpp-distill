@@ -41,7 +41,7 @@ TEST(prune_roots_name_ast_association_fixpoint) {
   auto report = renderPruningReport(b.m,r); CHECK(report.ok());
   CHECK(report.value().find("pruning assumption: A6") != std::string::npos);
   CHECK(report.value().find("pruning assumption: A7\n") != std::string::npos);
-  CHECK(report.value().find("pruning assumption: A11\n") != std::string::npos);
+  CHECK(report.value().find("pruning assumption: A11 instantiation-effects\n") != std::string::npos);
   CHECK(report.value().find("transitive bytes") != std::string::npos);
   CHECK(report.value().find("does not certify an artifact") != std::string::npos);
   std::size_t sum = 0; for (const auto& [reason,bytes] : r.transitiveBytes) { (void)reason; sum += bytes; } CHECK_EQ(sum,r.keptBytes);
@@ -59,6 +59,30 @@ TEST(prune_a7_a11_apply_even_without_family_deletion) {
   CHECK(!r.assumptions.contains("A6"));
   CHECK(b.run().policy == "D3d-7");
 }
+TEST(prune_without_instantiation_effects_identity_and_report) {
+  Model b; b.add("main","int main(){}"); b.add("dead","int dead(){return 0;}");
+  const auto assumed = serializePruningModel(b.m).value();
+  b.m.assumeInstantiationEffects = false;
+  const auto encoded = serializePruningModel(b.m).value();
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-3 "));
+  CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
+  CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
+  CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
+  const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
+  CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
+  CHECK_EQ(r.policy,"D3d-7, without instantiation-effects");
+  const auto report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("pruning assumption: A11") == std::string::npos);
+  CHECK(report.find("pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)") != std::string::npos);
+  test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
+    ProcessResult response; response.exitCode = 0; response.stdoutText = assumed; return response;
+  };
+  const auto mixed = extractPruning(b.m,o).value();
+  CHECK(!mixed.assumeInstantiationEffects);
+  CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
 TEST(prune_never_removed_rules_and_nonroots) {
   for (int rule = 0; rule < 10; ++rule) {
     Model b; auto id = b.add("candidate","int candidate;",FamilyKind::variable); auto& f = b.m.families[id];
@@ -336,12 +360,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-2 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-3 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-2 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-3 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-2 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-3 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

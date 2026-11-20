@@ -156,8 +156,10 @@ these, and only these; the report lists each one an output depended on, and
   Different values for a name make that name unknown. The report lists A9
   whenever a resolution relies on these header-derived facts.
 
-- **A11** (user, 2026-11-20) The program's observable behaviour and its compilation success do not depend on whether the definition of a function friend declared in a template has been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118), nor on the destruction of template parameter objects, of constexpr variables and the temporaries whose lifetime they extend, or of block-scope variables with static or thread storage duration whose declaration control never reached.
-  Every pruned artifact relies on A11; the report lists it alongside A7.
+- **A11 (`instantiation-effects`)** (user, 2026-11-20) The program's observable behaviour and its compilation success do not depend on whether the definition of a function friend declared in a template has been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118), nor on the destruction of template parameter objects, of constexpr variables and the temporaries whose lifetime they extend, or of block-scope variables with static or thread storage duration whose declaration control never reached.
+  By default every pruned artifact relies on A11; reports print
+  `A11 instantiation-effects` alongside A7. `--no-assume=instantiation-effects`
+  disables this assumption while keeping pruning enabled (§4.7).
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -186,6 +188,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
+| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; only `instantiation-effects` (A11) is switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
@@ -1410,7 +1413,30 @@ it remains a source unless positively proven harmless as above. Templated
 attribute/symbol roots also remain sources. Reverse closure preserves their
 potential triggers, including dormant patterns and target-dependent paths;
 unbounded incoming library hooks still refuse. Every enabled pruned artifact
-reports A11 alongside A7, even when no family is deleted.
+reports `A11 instantiation-effects` alongside A7, even when no family is deleted
+(unless disabled by the flag below).
+
+**Without `instantiation-effects` (user, 2026-11-20).**
+`--no-assume=instantiation-effects` keeps policy D3d-7 and pruning enabled but
+restores D3d-5's function-friend declarations in template contexts and potential
+template parameter objects as rule-6 effect sources. The pre-A11 NTTP proofs
+remain valid: written scalar/enum/pointer/reference/member-pointer types,
+recognized scalar aliases and recursively proven trivial non-template user
+classes do not introduce parameter-object destruction. Unknown placeholders,
+dependent bindings, system class selections and template-qualified member
+types remain conservative, including locally scalar or trivial selections.
+All non-inert template static/thread storage, including constexpr and block
+storage, is again a source unless the constant-initialization, trivial-type and
+no-extended-temporary proof above succeeds. Necessarily-dynamic block locals
+are conservatively retained as sources; the optional dynamic-initialization
+proof is not used. Rule-1 exemptions, forward/reverse closure, attribute/symbol
+sources and refusal gates still apply. This mode needs A1–A7 and A9 where
+applicable, but does not need A11. Reports say
+`policy: D3d-7, without instantiation-effects`, explicitly record that the flag
+disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
+The setting is part of serialized worker protocol version 3 and checked as
+immutable input on return. There is no pruning-result cache; the serialized
+model and policy identity distinguish the modes.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. It catches range and editing

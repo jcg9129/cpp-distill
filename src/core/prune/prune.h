@@ -8,6 +8,9 @@ namespace distill {
 using FamilyId = std::size_t;
 inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
 inline constexpr std::string_view pruningPolicyVersion = "D3d-7";
+inline std::string_view assumptionLabel(std::string_view id) {
+  return id == "A11" ? "A11 instantiation-effects" : id;
+}
 struct EditRange {
   std::size_t begin = 0, end = 0;
   bool operator==(const EditRange&) const = default;
@@ -63,6 +66,8 @@ struct PositionUse {
 };
 struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
 struct PruningModel {
+  // Part of the serialized worker input/result identity, not a parse-target fact.
+  bool assumeInstantiationEffects = true;
   std::string text, dialect;
   std::vector<PruneFamily> families;
   std::vector<std::pair<FamilyId, FamilyId>> unions;
