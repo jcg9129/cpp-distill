@@ -7,7 +7,7 @@
 namespace distill {
 using FamilyId = std::size_t;
 inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
-inline constexpr std::string_view pruningPolicyVersion = "D3d-4";
+inline constexpr std::string_view pruningPolicyVersion = "D3d-5";
 struct EditRange {
   std::size_t begin = 0, end = 0;
   bool operator==(const EditRange&) const = default;
@@ -22,6 +22,12 @@ struct PruneFamily {
   std::vector<FamilyId> edges, associatedTypes;
   std::optional<SourceLocation> original;
   std::string pinned, neverRemoved, root;
+  // A template pattern whose instantiation can affect other families/runtime.
+  // Reverse potential dependencies preserve its otherwise-unused triggers.
+  std::string instantiationEffect;
+  // Verified on every non-member callable in a record family: a parameter
+  // directly carries that record family, without target-selected aliases.
+  bool boundedSystemHooks = false;
   bool nonMemberOperator = false, namespaceUsing = false, externCDefinition = false;
   bool systemSpecialization = false;
 };

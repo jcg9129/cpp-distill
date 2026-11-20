@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Conservative: even self-associated hidden friends retain potential triggers.
+kept S | operator
+kept Unused | instantiation effect:
+removed Dead | outside the retention closure

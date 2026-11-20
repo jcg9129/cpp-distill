@@ -244,6 +244,50 @@ int main(int argc, char** argv) {
       check(family(m,"automatic").root.empty(),"automatic local rooted");
       check(!family(m,"stat").root.empty(),"static local not rooted");
     });
+    run("instantiation effect patterns include nested storage and friends", [&] {
+      for (const auto& source : {
+          "template<class T> struct Effect { friend auto supplied(T) { return 7; } };",
+          "struct Effect { template<class T> struct Nested { friend auto supplied(T) { return 7; } }; };",
+          "template<class T> struct Effect {}; template<class T> struct Effect<T*> { friend auto supplied(T) { return 7; } };",
+          "int notify(); template<class T> struct Effect { static inline int x = notify(); };",
+          "int notify(); template<class T> inline int Effect = notify();",
+          "template<class T> __attribute__((used)) void Effect() {}",
+          "template<auto V> struct Effect {};",
+          "struct Value { constexpr ~Value(){} }; template<Value V> struct Effect {};",
+          "int notify(); template<class T> int Effect() { static int x = notify(); return x; }",
+          "int notify(); template<class T> struct Effect { int f() { static int x = notify(); return x; } };",
+          "int notify(); template<class T> struct Effect { int f(); }; template<class T> int Effect<T>::f() { static int x = notify(); return x; }"}) {
+        m = extract(std::string(source) + "\nstruct Dead {}; int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"effect pattern disabled");
+        check(std::any_of(m.families.begin(),m.families.end(),[](const auto& f) { return f.label.starts_with("Effect") && !f.instantiationEffect.empty(); }),"effect pattern not classified: " + std::string(source));
+        check(!kept("Dead"),"effect pattern disabled all deletion");
+      }
+    });
+    run("hidden hook carrier certificate uses written own record parameters", [&] {
+      m = extract("template<class T> struct S { friend bool operator==(S,S) { return true; } };\n"
+                  "struct Unused { decltype(sizeof(S<int>)) f(); }; int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"self-associated hidden friend refused");
+      check(family(m,"S").boundedSystemHooks,"direct self parameter not certified");
+      check(kept("Unused"),"conservative hidden friend trigger removed");
+      m = extract("template<class T> struct S { using Self=S; friend bool operator==(Self,Self) { return true; } };\n"
+                  "int main(){}\n",o);
+      r = take(computeRetention(m));
+      check(!family(m,"S").boundedSystemHooks,"alias incorrectly certified a carrier");
+      check(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why) {
+        return why.starts_with("unbounded system instantiation effects through");
+      }),"uncertified hidden hook did not refuse");
+    });
+    run("inert template storage and ordinary default initializers have no intrinsic effect", [&] {
+      m = extract("template<class T> struct Inert { static constexpr int x = sizeof(T); int y = 3; };\n"
+                  "template<class T> int ordinary() { static int x = 0; return x; }\n"
+                  "template<int N> struct Simple {};\n"
+                  "int main(){}\n",o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"inert controls disabled");
+      for (const auto* label : {"Inert","ordinary","Simple"}) {
+        check(family(m,label).instantiationEffect.empty(),"inert pattern classified effectful");
+        check(!kept(label),"inert pattern retained");
+      }
+    });
     run("constexpr arithmetic template members", [&] {
       m = extract("template<class T> constexpr bool scalar = false;\n"
                   "template<class T> struct Unused { static constexpr bool x = !scalar<T>; };\n"

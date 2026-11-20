@@ -520,12 +520,51 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
   std::size_t visits = 0;
   std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
   std::map<std::string,std::set<FamilyId>,std::less<>> symbols;
+  std::set<FamilyId> templatedSymbols;
+  std::set<FamilyId> callableCarriersSeen;
+  bool ownRecordParameter(QualType q) const {
+    // Only direct written carriers. Desugaring a trait/alias here could certify
+    // a parameter that is an unrelated type on the judge. Pattern and instance
+    // checks are intersected, so substitution never improves the certificate.
+    const auto* t = q.getTypePtrOrNull();
+    while (t) {
+      if (const auto* p = dyn_cast<PointerType>(t)) t = p->getPointeeType().getTypePtr();
+      else if (const auto* r = dyn_cast<ReferenceType>(t)) t = r->getPointeeType().getTypePtr();
+      else if (const auto* r = dyn_cast<ElaboratedType>(t)) t = r->getNamedType().getTypePtr();
+      else if (const auto* r = dyn_cast<RecordType>(t)) return e.owner(r->getDecl()) == current;
+      else if (const auto* r = dyn_cast<InjectedClassNameType>(t)) return e.owner(r->getDecl()) == current;
+      else if (const auto* s = dyn_cast<TemplateSpecializationType>(t)) {
+        const auto* d = s->getTemplateName().getAsTemplateDecl();
+        return isa_and_nonnull<ClassTemplateDecl>(d) && e.owner(d) == current;
+      }
+      else return false;
+    }
+    return false;
+  }
+  // Include member/nested templates, partial specializations, instantiated
+  // contexts and out-of-line members. Classification never depends on which
+  // specializations the local Clang parse happened to instantiate.
+  bool templated(const Decl* d) const {
+    for (; d; d = d->getDeclContext() ? Decl::castFromDeclContext(d->getDeclContext()) : nullptr) {
+      if (const auto* r = dyn_cast<CXXRecordDecl>(d))
+        if (r->getDescribedClassTemplate() || isa<ClassTemplateSpecializationDecl>(r)) return true;
+      if (const auto* f = dyn_cast<FunctionDecl>(d))
+        if (f->getDescribedFunctionTemplate() || f->getPrimaryTemplate() || f->getInstantiatedFromMemberFunction()) return true;
+      if (const auto* v = dyn_cast<VarDecl>(d))
+        if (v->getDescribedVarTemplate() || isa<VarTemplateSpecializationDecl>(v)) return true;
+      if (const auto* c = dyn_cast<DeclContext>(d); c && c->isDependentContext()) return true;
+    }
+    return false;
+  }
   bool symbolRoot(std::string_view symbol, std::string_view form) {
     auto found = symbols.find(symbol);
     if (found == symbols.end()) {
       e.disable("unresolved " + std::string(form) + " symbol: " + std::string(symbol)); return false;
     }
-    for (auto id : found->second) e.model.families[id].root = std::string(form) + " symbol reference";
+    for (auto id : found->second) {
+      e.model.families[id].root = std::string(form) + " symbol reference";
+      if (templatedSymbols.contains(id)) e.model.families[id].instantiationEffect = "template symbol reference";
+    }
     return true;
   }
   void assembly(std::string_view text, clang::SourceLocation at) {
@@ -714,6 +753,7 @@ public:
     if (current != noFamily && e.user(d->getBeginLoc())) for (const auto* attr : d->attrs()) {
       if (isa<ConstructorAttr,DestructorAttr,UsedAttr,SectionAttr,WeakAttr,VisibilityAttr,AsmLabelAttr,AliasAttr>(attr)) {
         e.model.families[current].root = std::string("attribute: ") + attr->getSpelling();
+        if (templated(d)) e.model.families[current].instantiationEffect = "template attribute root";
         if (const auto* alias = dyn_cast<AliasAttr>(attr)) symbolRoot(alias->getAliasee().str(),"alias");
       } else if (!supportedAttribute(attr,d,e)) e.disable(std::string("unsupported attribute: ") + attr->getSpelling() + " at " + attr->getLocation().printToString(e.sm));
     }
@@ -764,6 +804,10 @@ public:
     if (current == noFamily) return true;
     auto& family = e.model.families[current];
     if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
+      bool carrier = false;
+      for (const auto* p : f->parameters()) carrier |= ownRecordParameter(p->getType());
+      if (callableCarriersSeen.insert(current).second) family.boundedSystemHooks = carrier;
+      else family.boundedSystemHooks &= carrier;
       const auto key = std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
       auto [it,fresh] = overloads.emplace(key,current); if (!fresh && it->second != current) e.model.unions.emplace_back(current,it->second);
       e.index(f,family,true); family.nonMemberOperator |= f->isOverloadedOperator() || f->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName;
@@ -788,6 +832,20 @@ public:
     }
     return true;
   }
+  bool VisitFriendDecl(FriendDecl* d) {
+    if (current != noFamily && e.user(d->getBeginLoc()) && templated(d) &&
+        isa_and_nonnull<FunctionDecl,FunctionTemplateDecl>(d->getFriendDecl()))
+      e.model.families[current].instantiationEffect = "template friend declaration";
+    return true;
+  }
+  bool VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl* d) {
+    // Class-valued NTTPs introduce static template parameter objects, not
+    // VarDecls. auto/dependent/target-selected types can become class-valued on
+    // the judge; exempt only the existing positive syntactic scalar subset.
+    if (current != noFamily && e.user(d->getBeginLoc()) && !inertType(d->getType()))
+      e.model.families[current].instantiationEffect = "potential template parameter object storage";
+    return true;
+  }
   bool VisitVarDecl(VarDecl* v) {
     if (current == noFamily) return true;
     if (auto* s = dyn_cast<VarTemplateSpecializationDecl>(v)) {
@@ -797,7 +855,10 @@ public:
     }
     if (!v->hasGlobalStorage() || (v->isStaticDataMember() && !v->isThisDeclarationADefinition())) return true;
     const bool inert = (inertType(v->getType()) && safeSystemMacros(v) && inertExpr(v->getInit())) || inertConstexpr(v);
-    if (!inert) e.model.families[current].root = "not inert (static or thread storage)";
+    if (!inert) {
+      e.model.families[current].root = "not inert (static or thread storage)";
+      if (templated(v)) e.model.families[current].instantiationEffect = "template static or thread storage not inert";
+    }
     return true;
   }
   void run() {
@@ -817,6 +878,7 @@ public:
       else if (mangler->shouldMangleDeclName(named)) { llvm::raw_string_ostream out(symbol); mangler->mangleName(named,out); }
       else symbol = named->getNameAsString();
       symbols[symbol].insert(id);
+      if (templated(named)) templatedSymbols.insert(id);
     }
     for (auto [decl,id] : e.declarations) { current = id; TraverseDecl(const_cast<Decl*>(decl)); }
     current = noFamily;

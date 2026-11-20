@@ -1340,6 +1340,41 @@ template parameter names and local names are not indexed.
    declarations included, without filtering by Clang's viability or the
    instantiations it saw. A construct the traversal doesn't support
    pins its family; if its dependencies can't be bounded, pruning is disabled.
+6. **Instantiation effects** (policy **D3d-5**): preserving a template's
+   definition does not preserve the code that instantiates it. Effect sources
+   are template-context function friend declarations (definitions included),
+   static/thread storage definitions outside rule 1's inert exemptions,
+   interpreted attribute roots in template contexts, and template entities
+   referenced by interpreted assembly/alias symbols (retaining their patterns
+   alone need not emit the referenced specializations). Non-type template
+   parameters outside the existing positive syntactic scalar type whitelist
+   also seed this rule: class-valued parameters create static template parameter
+   objects, including when an `auto` or dependent type becomes class-valued.
+   This includes member and nested templates, partial specializations,
+   variable and function templates,
+   generic lambdas, and out-of-line members. Keep effect sources and every
+   family that can reach one in the potential dependency graph of **all**
+   families, including otherwise unused declarations and template patterns.
+   Edges are identifier-token references to indexed names, AST references,
+   dependent-call name matches, type associations, family unions and positive
+   system-entity edges. Reverse transitive closure covers aliases, default
+   arguments, unevaluated operands, constraints, constant evaluation and
+   default member initializers; ordinary forward closure still runs afterward.
+   Report these as `instantiation effect: ...`, with the effect source as cause.
+   Clang's observed instantiations are positive evidence, never a filter on
+   possible triggers. If the reverse closure reaches a user specialization of
+   a system template or a free ADL/operator hook, pruning is disabled with
+   `unbounded system instantiation effects through ...`: A6 bounds hook names,
+   not their incoming library instantiations on another target. Hidden friends
+   in record families instead have bounded carrier/association paths only when
+   every non-member callable in the family has a direct parameter carrying that
+   same record family (optionally through pointers/references; aliases and type
+   substitutions do not certify this). All template function friends are
+   conservatively classified, including
+   the usual self-associated `operator==(S, S)` idiom: possible triggers stay,
+   but unrelated families can still be removed. The dependency graph has a
+   four-million-edge limit; exceeding it disables pruning. See the
+   [instantiation-effects review](reviews/2026-11-20-instantiation-effects.md).
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. It catches range and editing

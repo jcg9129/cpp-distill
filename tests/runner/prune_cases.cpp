@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/prune/extract.h"
 #include "core/path.h"
+#include "core/render/render.h"
 #include "core/temporary.h"
 #include "library_features.h"
 #include <algorithm>
@@ -88,6 +89,33 @@ int main(int argc, char** argv) {
         // Every deletion range is physical, complete and disjoint; the model
         // validator independently checks bounds/overlap before retention.
         for (const auto& f : model.families) for (auto r : f.ranges) if (r.end > flat.text.size()) fail("bad range");
+        // Optional runtime oracle: compare both compilers' original and pruned
+        // programs, and check the expected output so a vacuous comparison fails.
+        if (std::filesystem::exists(path / "stdout.txt")) {
+          const auto rendered = take(renderSource(model,&retained));
+          const auto pruned = rendered.provenance.text;
+          take(staticNameInvariant(model,retained,pruned));
+          take(renderingInvariant(model,&retained,pruned));
+          const auto expected = read(path / "stdout.txt");
+          for (const auto* compiler : {"g++","clang++"}) {
+            if (!resolveExecutable(compiler,work.path).ok()) {
+              std::cout << "SKIP runtime " << compiler << ": unavailable\n"; continue;
+            }
+            for (bool original : {true,false}) {
+              const auto source = work.path / "runtime.cpp", binary = work.path / "runtime-program";
+              { std::ofstream f(source); f << (original ? flat.text : pruned); }
+              ProcessSpec spec; spec.cwd = work.path; spec.timeout = std::chrono::seconds(20);
+              spec.argv = {compiler,"-std=gnu++20","-O0",pathToUtf8(source),"-o",pathToUtf8(binary)};
+              const auto built = take(runProcess(spec));
+              if (built.exitCode || built.timedOut || built.signal) { fail(std::string(compiler) + " runtime build: " + built.stderrText); continue; }
+              spec.argv = {pathToUtf8(binary)}; spec.timeout = std::chrono::seconds(5);
+              const auto ran = take(runProcess(spec));
+              if (ran.exitCode || ran.timedOut || ran.signal || ran.stdoutTruncated || ran.stderrTruncated ||
+                  ran.stdoutText != expected || !ran.stderrText.empty())
+                fail(std::string(compiler) + (original ? " original" : " pruned") + " runtime output: " + ran.stdoutText + ran.stderrText);
+            }
+          }
+        }
       } catch (const Error& e) { fail(e.message); }
       catch (const std::exception& e) { fail(e.what()); }
       if (caseFailed) {
