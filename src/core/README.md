@@ -819,6 +819,10 @@ as written, or structurally empty non-template user tags with empty list
 initialization. Aliases/deduced/dependent types receive no new exemption;
 explicit specializations are classified independently. Every pruned artifact
 reports A7, including deletions unrelated to variables (enum cache seeds).
+Policy D3d-6 also reports A11 for every enabled pruning result: friend-definition
+instantiation and template parameter object destruction are excluded. Non-inert
+template static/thread storage and templated attribute/symbol roots still seed
+reverse retention; unbounded incoming library hooks still disable pruning.
 Constexpr resource-flag support remains deferred.
 
 Policy D3d-4 (`docs/reviews/2026-11-18-equal-literal-macros.md`) accepts a

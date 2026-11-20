@@ -6,7 +6,7 @@ exit=0
 configuration=local
 api=yes
 milestone=D3d
-report=policy: D3d-5
+report=policy: D3d-6
 contains=struct Record {
 contains.1=[[no_unique_address]] Empty empty;
 contains.2=[[no_unique_address]] Value value;
@@ -16,3 +16,4 @@ contains.5=sizeof(T) == sizeof(Value)
 contains.6=std::is_standard_layout_v<Record>
 absent=int unrelated
 absent.1=struct UnusedRecord
+report.a11=pruning assumption: A11

@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# D3d-5: C7 names nested C, a possible lexical trigger of test14::C.
-# Its dependent NTTP type remains conservative across targets, so all C7
-# declarations/specializations and out-of-line members share retention.
+# same removal: the unused C7 primary/specializations and out-of-line member go; the used dependent/default/constraint paths remain (§4.7 rules 2/4).
 exit=0
 artifact=pruned
 contains=struct S1
@@ -13,5 +11,5 @@ contains.5=struct S6
 contains.6=test8::main()
 contains.7=test15::main()
 contains.8=concept C
-contains.9=class C7
-contains.10=void C7<int, int>::f<int>()
+absent=class C7
+absent.1=void C7<int, int>::f<int>()

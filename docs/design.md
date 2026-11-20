@@ -156,6 +156,13 @@ these, and only these; the report lists each one an output depended on, and
   Different values for a name make that name unknown. The report lists A9
   whenever a resolution relies on these header-derived facts.
 
+- **A11** (user, 2026-11-20) The program's observable behaviour and its
+  compilation success do not depend on whether the definition of a function
+  friend declared in a template has been instantiated (friend injection /
+  stateful metaprogramming, cf. CWG 2118), nor on the destruction of template
+  parameter objects. Every pruned artifact relies on A11; the report lists it
+  alongside A7.
+
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
 
@@ -1293,7 +1300,9 @@ template parameter names and local names are not indexed.
    link a user `typedef`/`using` whose right-hand side is spelled with builtin
    type keywords or names the next link directly — no templates, `decltype`,
    dependent or member types anywhere in the chain (R5-2) — or `std::size_t`,
-   `std::ptrdiff_t` or an `<cstdint>` type.
+   `std::ptrdiff_t` or a standard C/C++ integer/size typedef. Imported scalar
+   typedefs represented by `UsingType` are followed too; written type-qualified
+   member selections remain conservative even when locally scalar.
    Policy **D3d-3**, under A7, additionally exempts defining `constexpr`
    variables with static storage, no thread storage, volatile/reference type or
    variable attributes, when `safeSystemMacros` holds and either:
@@ -1340,21 +1349,12 @@ template parameter names and local names are not indexed.
    declarations included, without filtering by Clang's viability or the
    instantiations it saw. A construct the traversal doesn't support
    pins its family; if its dependencies can't be bounded, pruning is disabled.
-6. **Instantiation effects** (policy **D3d-5**): preserving a template's
+6. **Instantiation effects** (policy **D3d-6**): preserving a template's
    definition does not preserve the code that instantiates it. Effect sources
-   are template-context function friend declarations (definitions included),
-   static/thread storage definitions outside rule 1's inert exemptions,
-   interpreted attribute roots in template contexts, and template entities
-   referenced by interpreted assembly/alias symbols (retaining their patterns
-   alone need not emit the referenced specializations). Non-type template
-   parameters also seed this rule when they can introduce class-valued template
-   parameter objects with nontrivial destruction. Direct scalar, enum, pointer,
-   member-pointer and reference types (including proven aliases) are exempt, as
-   are non-template user class types with provably trivial destruction of every
-   base and member. Written system-template selections stay conservative even
-   when locally scalar. Placeholder and dependent types stay conservative unless
-   their written shape excludes a class object: a judge-selected user branch can
-   supply a class binding absent from all known worker specializations.
+   are static/thread storage definitions in template contexts outside rule 1's
+   inert exemptions, interpreted attribute roots in template contexts, and
+   template entities referenced by interpreted assembly/alias symbols
+   (retaining their patterns alone need not emit the referenced specializations).
    This includes member and nested templates, partial specializations,
    variable and function templates,
    generic lambdas, and out-of-line members. Keep effect sources and every
@@ -1374,12 +1374,24 @@ template parameter names and local names are not indexed.
    in record families instead have bounded carrier/association paths only when
    every non-member callable in the family has a direct parameter carrying that
    same record family (optionally through pointers/references; aliases and type
-   substitutions do not certify this). All template function friends are
-   conservatively classified, including
-   the usual self-associated `operator==(S, S)` idiom: possible triggers stay,
-   but unrelated families can still be removed. The dependency graph has a
+   substitutions do not certify this). This certificate remains necessary when
+   a hidden hook reaches a remaining storage or attribute effect, even though
+   the friend declaration itself is no longer an effect source. The graph has a
    four-million-edge limit; exceeding it disables pruning. See the
    [instantiation-effects review](reviews/2026-11-20-instantiation-effects.md).
+
+**Under A11 (user, 2026-11-20).** Function friend declarations in templates and
+potential class-valued non-type template parameter objects no longer seed
+rule 6. A11 excludes both behaviour and compilation-success dependencies on
+friend-definition instantiation, and runtime destruction of parameter objects.
+Their ordinary name, type, value and AST dependencies still participate in the
+forward closure. Static/thread variables and templated attribute/symbol roots
+remain effect sources: A11 does not exclude their initialization, destruction or
+emission. Reverse closure still preserves all potential triggers of those
+sources, including dormant patterns and target-dependent paths; unbounded
+incoming library hooks still refuse. Thus removing the two excluded sources
+does not weaken the argument for the remaining effects. Every enabled pruned
+artifact reports A11 alongside A7, even when no family is deleted.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. It catches range and editing
@@ -1538,7 +1550,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7, and A9 for L1c) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, A11, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

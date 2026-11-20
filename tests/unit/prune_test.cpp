@@ -25,7 +25,7 @@ TEST(prune_empty_and_unreachable_cycles) {
   Model b; CHECK(b.run().families.empty());
   b.add("a","int a(){return b();}"); b.add("b","int b(){return a();}");
   auto r = b.run(); CHECK(!r.families[0].kept); CHECK(!r.families[1].kept);
-  CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
+  CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11")); CHECK_EQ(r.keptBytes,0u); CHECK_EQ(r.removedBytes,b.m.text.size());
 }
 TEST(prune_roots_name_ast_association_fixpoint) {
   Model b; auto main = b.add("main","int main(){return invoke();}");
@@ -41,6 +41,7 @@ TEST(prune_roots_name_ast_association_fixpoint) {
   auto report = renderPruningReport(b.m,r); CHECK(report.ok());
   CHECK(report.value().find("pruning assumption: A6") != std::string::npos);
   CHECK(report.value().find("pruning assumption: A7\n") != std::string::npos);
+  CHECK(report.value().find("pruning assumption: A11\n") != std::string::npos);
   CHECK(report.value().find("transitive bytes") != std::string::npos);
   CHECK(report.value().find("does not certify an artifact") != std::string::npos);
   std::size_t sum = 0; for (const auto& [reason,bytes] : r.transitiveBytes) { (void)reason; sum += bytes; } CHECK_EQ(sum,r.keptBytes);
@@ -51,12 +52,12 @@ TEST(prune_union_closure_without_merging_ranges) {
   auto r = b.run(); for (const auto& f : r.families) CHECK(f.kept);
   CHECK_EQ(b.m.families[a].ranges.size(),1u); CHECK_EQ(r.families[a].initialCause,d);
 }
-TEST(prune_a7_applies_even_without_family_deletion) {
+TEST(prune_a7_a11_apply_even_without_family_deletion) {
   Model b; b.add("main","int main(){}");
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
-  CHECK(r.assumptions.contains("A7"));
+  CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3d-5");
+  CHECK(b.run().policy == "D3d-6");
 }
 TEST(prune_never_removed_rules_and_nonroots) {
   for (int rule = 0; rule < 10; ++rule) {
@@ -141,7 +142,7 @@ TEST(prune_system_edges_transitive_cycles_positive_only) {
 TEST(prune_instantiation_effects_preserve_reverse_transitive_triggers) {
   Model b;
   auto effect = b.add("Inject","template<class T> struct Inject {};",FamilyKind::record);
-  b.m.families[effect].instantiationEffect = "template friend declaration";
+  b.m.families[effect].instantiationEffect = "template static or thread storage not inert";
   auto alias = b.add("Alias","using Alias = Inject<int>;",FamilyKind::alias);
   auto trigger = b.add("Unused","struct Unused { decltype(sizeof(Alias)) dormant(); };",FamilyKind::record);
   auto pasted = b.add("Pasted","struct Pasted {};",FamilyKind::record);
@@ -160,13 +161,13 @@ TEST(prune_instantiation_effects_preserve_reverse_transitive_triggers) {
   CHECK_EQ(r.families[trigger].cause,effect);
   CHECK(renderPruningReport(b.m,r).value().find("instantiation effect:") != std::string::npos);
   auto roundtrip = parsePruningModel(serializePruningModel(b.m).value()); CHECK(roundtrip.ok());
-  CHECK_EQ(roundtrip.value().families[effect].instantiationEffect,"template friend declaration");
+  CHECK_EQ(roundtrip.value().families[effect].instantiationEffect,"template static or thread storage not inert");
   CHECK_EQ(computeRetention(roundtrip.value()).value().families[trigger].reason,r.families[trigger].reason);
 }
 TEST(prune_instantiation_effects_reverse_dependent_lookup_and_associations) {
   Model b;
   auto effect = b.add("Inject","struct Inject {};",FamilyKind::record);
-  b.m.families[effect].instantiationEffect = "template friend declaration";
+  b.m.families[effect].instantiationEffect = "template static or thread storage not inert";
   auto callback = b.add("customize","void customize() { Inject x; }");
   auto key = b.add("Key","struct Key {};",FamilyKind::record);
   b.m.families[callback].associatedTypes = {key};
@@ -198,7 +199,7 @@ TEST(prune_instantiation_effects_hidden_hooks_need_verified_own_record_carriers)
     auto unrelated = b.add("Other","struct Other {};",FamilyKind::record);
     auto trigger = b.add("Unused","struct Unused { S<int> x; };",FamilyKind::record);
     auto& f = b.m.families[record];
-    f.instantiationEffect = "template friend declaration"; f.nonMemberOperator = true;
+    f.instantiationEffect = "template static or thread storage not inert"; f.nonMemberOperator = true;
     f.associatedTypes = {record,unrelated}; // A nonempty list alone proves nothing.
     f.boundedSystemHooks = verified;
     const auto r = b.run(); CHECK_EQ(r.disabledReasons.empty(),verified);
@@ -211,7 +212,7 @@ TEST(prune_all_disable_reasons_accumulate) {
   Model b; b.add("x","int x;"); b.m.unknownInUserCode = true; b.m.dialect = "c++98";
   b.m.includes = {"ext/rope","ext/pb_ds/assoc_container.hpp","bits/extc++.h","vendor.h"};
   b.m.disabledReasons = {"parse error","limit","parse error"};
-  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7"));
+  auto r = b.run(); CHECK_EQ(r.disabledReasons.size(),8u); CHECK(r.families[0].kept); CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
   CHECK(!staticNameInvariant(b.m,r,"").ok());
 }
 TEST(prune_predefined_macros_source_overrides_and_pasting) {

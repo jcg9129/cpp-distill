@@ -244,16 +244,11 @@ int main(int argc, char** argv) {
       check(family(m,"automatic").root.empty(),"automatic local rooted");
       check(!family(m,"stat").root.empty(),"static local not rooted");
     });
-    run("instantiation effect patterns include nested storage and friends", [&] {
+    run("instantiation effect patterns include nested storage and attributes", [&] {
       for (const auto& source : {
-          "template<class T> struct Effect { friend auto supplied(T) { return 7; } };",
-          "struct Effect { template<class T> struct Nested { friend auto supplied(T) { return 7; } }; };",
-          "template<class T> struct Effect {}; template<class T> struct Effect<T*> { friend auto supplied(T) { return 7; } };",
           "int notify(); template<class T> struct Effect { static inline int x = notify(); };",
           "int notify(); template<class T> inline int Effect = notify();",
           "template<class T> __attribute__((used)) void Effect() {}",
-          "template<auto V> struct Effect {};",
-          "struct Value { constexpr ~Value(){} }; template<Value V> struct Effect {};",
           "int notify(); template<class T> int Effect() { static int x = notify(); return x; }",
           "int notify(); template<class T> struct Effect { int f() { static int x = notify(); return x; } };",
           "int notify(); template<class T> struct Effect { int f(); }; template<class T> int Effect<T>::f() { static int x = notify(); return x; }"}) {
@@ -263,13 +258,49 @@ int main(int argc, char** argv) {
         check(!kept("Dead"),"effect pattern disabled all deletion");
       }
     });
+    run("A11 excludes friend-definition instantiation", [&] {
+      for (const auto* source : {
+          "template<class T> struct Effect { friend auto supplied(T) { return 7; } };",
+          "struct Effect { template<class T> struct Nested { friend auto supplied(T) { return 7; } }; };",
+          "template<class T> struct Effect {}; template<class T> struct Effect<T*> { friend auto supplied(T) { return 7; } };",
+          "template<class T> struct Effect { friend int supplied(T); };"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"friend exclusion disabled");
+        check(family(m,"Effect").instantiationEffect.empty(),"A11 friend remains an effect source");
+        check(!kept("Effect"),"A11 friend pattern retained");
+        check(r.assumptions.contains("A11"),"A11 not reported");
+      }
+    });
+    run("static storage scalar aliases preserve written type inspection", [&] {
+      const auto dir = temp.path / "scalar-system";
+      std::filesystem::create_directories(dir);
+      { std::ofstream h(dir / "cstdint"); h << "using uint32_t=unsigned; namespace std { using ::uint32_t; }\n"; }
+      Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
+      SearchDirectory d; d.path = dir; d.kind = IncludeKind::system; c.probe.searchLists.directories.push_back(d);
+      ResolveResult flat; flat.text =
+          "#include <cstdint>\nusing U=std::uint32_t; template<class T> struct Inert { static inline U x=0; };\n"
+          "template<bool B> struct Pick { using type=int; }; template<> struct Pick<false> { struct type {}; };\n"
+          "template<class T> struct Selected { static inline Pick<(sizeof(long)>4)>::type x={}; };\n"
+          "int main(){}\n";
+      for (std::size_t i = 0, line = 1; i < flat.text.size(); ++i) if (i == 0 || flat.text[i-1] == '\n') flat.lineMap.push_back(SourceLocation{"original.hpp",line++});
+      m = extracted(take(preparePruning(c,{},flat)),o);
+      r = take(computeRetention(m)); check(r.disabledReasons.empty(),"scalar alias inspection disabled");
+      check(family(m,"Inert").instantiationEffect.empty(),"standard scalar UsingType incorrectly effectful");
+      check(!kept("Inert"),"inert scalar alias retained");
+      check(!family(m,"Selected").instantiationEffect.empty(),"target-selected member type incorrectly inert");
+      check(kept("Selected"),"potential class storage removed");
+    });
     run("hidden hook carrier certificate uses written own record parameters", [&] {
-      m = extract("template<class T> struct S { friend bool operator==(S,S) { return true; } };\n"
+      m = extract("int notify(); template<class T> struct Reg { static inline int x=notify(); };\n"
+                  "template<class T> struct S { friend bool operator==(S,S) { return Reg<T>::x==0; } };\n"
                   "struct Unused { decltype(sizeof(S<int>)) f(); }; int main(){}\n",o);
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"self-associated hidden friend refused");
       check(family(m,"S").boundedSystemHooks,"direct self parameter not certified");
+      check(family(m,"S").instantiationEffect.empty(),"A11 friend seeded the reverse closure");
+      check(!family(m,"Reg").instantiationEffect.empty(),"storage source missing");
       check(kept("Unused"),"conservative hidden friend trigger removed");
-      m = extract("template<class T> struct S { using Self=S; friend bool operator==(Self,Self) { return true; } };\n"
+      m = extract("int notify(); template<class T> struct Reg { static inline int x=notify(); };\n"
+                  "template<class T> struct S { using Self=S; friend bool operator==(Self,Self) { return Reg<T>::x==0; } };\n"
                   "int main(){}\n",o);
       r = take(computeRetention(m));
       check(!family(m,"S").boundedSystemHooks,"alias incorrectly certified a carrier");
@@ -309,7 +340,7 @@ int main(int argc, char** argv) {
         check(!kept("Candidate"),"inert NTTP retained: " + std::string(source));
       }
     });
-    run("unknown NTTP bindings remain conservative", [&] {
+    run("A11 excludes unknown and nontrivial NTTP object destruction", [&] {
       for (const auto* source : {
           "template<auto P> struct Candidate {};",
           "template<decltype(auto) P> struct Candidate {};",
@@ -321,8 +352,9 @@ int main(int argc, char** argv) {
           "struct V { constexpr ~V(){} }; using Alias=V; template<Alias P> struct Candidate {};"}) {
         m = extract(std::string(source) + "\nint main(){}\n",o);
         r = take(computeRetention(m)); check(r.disabledReasons.empty(),"NTTP control disabled");
-        check(!family(m,"Candidate").instantiationEffect.empty(),"possible class binding lost: " + std::string(source));
-        check(kept("Candidate"),"unknown NTTP removed");
+        check(family(m,"Candidate").instantiationEffect.empty(),"A11 NTTP still classified effectful: " + std::string(source));
+        check(!kept("Candidate"),"A11 NTTP retained");
+        check(r.assumptions.contains("A11"),"A11 not reported");
       }
     });
     run("constexpr arithmetic template members", [&] {
@@ -335,6 +367,7 @@ int main(int argc, char** argv) {
       check(kept("Used") && kept("scalar"),"used member or initializer dependency removed");
       check(family(m,"Unused").root.empty(),"unused pattern still a storage root");
       check(r.assumptions.contains("A7"),"A7 not reported");
+      check(r.assumptions.contains("A11"),"A11 not reported");
       const auto out = take(renderSource(m,&r)).provenance.text;
       take(renderingInvariant(m,&r,out)); take(staticNameInvariant(m,r,out));
       check(out.find("struct Unused") == out.npos && out.find("struct Used") != out.npos,"template removal/retention failed");

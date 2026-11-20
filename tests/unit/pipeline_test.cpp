@@ -156,8 +156,8 @@ TEST(pipeline_pruned_core_exact_checked_bytes_and_samples) {
   Fixture f("int unused(){return 7;}\nint main(){return 0;}\n");
   const auto r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
   CHECK_EQ(r.runtime,"compared 1 samples"); CHECK_EQ(r.bytes,f.built.at("pruned"));
-  CHECK(r.bytes.find("unused") == r.bytes.npos); CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7"));
-  CHECK(r.report.find("assumptions: A6 A7\n") != r.report.npos);
+  CHECK(r.bytes.find("unused") == r.bytes.npos); CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
+  CHECK(r.report.find("assumptions: A11 A6 A7\n") != r.report.npos);
   CHECK(r.report.find("parse configuration:") != r.report.npos);
   CHECK(r.report.find("primary structural bytes") != r.report.npos);
   // Default (R4-G): markers always, and no line-marker report lines.
@@ -215,8 +215,8 @@ TEST(pipeline_no_line_markers_kept_without_parse_or_pruned) {
 TEST(pipeline_pruned_without_deletions_still_reports_a7) {
   Fixture f("int main(){return 0;}\n");
   const auto r = f.run(); CHECK_EQ(r.artifact,"pruned");
-  CHECK(r.assumptions.contains("A7"));
-  CHECK(r.report.find("assumptions: A7\n") != r.report.npos);
+  CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
+  CHECK(r.report.find("assumptions: A11 A7\n") != r.report.npos);
 }
 TEST(pipeline_pruned_reproduced_diagnostic_separate_from_result_line) {
   Fixture f("int unused(){return 7;}\nint main(){return 0;}\n");
@@ -317,7 +317,7 @@ TEST(pipeline_pruned_core_disabled_and_render_fallback) {
     f.options.stripComments = true;
     auto r = f.run(fault); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"flat");
     CHECK_EQ(r.bytes,f.built.at("flat")); CHECK_EQ(r.runtime,"compared 1 samples");
-    CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7"));
+    CHECK(!r.assumptions.contains("A6")); CHECK(!r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
     if (std::string_view(fault) == "stdout") CHECK(r.diagnostic.find("differs on sample empty sample") != r.diagnostic.npos);
   }
 }

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Run from the worktree: python3 tests/probes/instantiation_effects/run.py.
 
-Compiler probes, not pruning tests. Every process is bounded; outputs stay in
+Compiler probes, not pruning tests. All probes document the A11 boundary;
+see README.md for which excluded effect each demonstrates. Every process is bounded; outputs stay in
 .checks/probes. Deduced-return redeclarations deliberately expose a GCC/Clang
 difference; report both outcomes rather than mistaking one for a portable proof.
 """

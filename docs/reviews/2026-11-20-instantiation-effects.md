@@ -1,5 +1,83 @@
 # Implicit instantiation effects — 2026-11-20
 
+## Under A11
+
+Policy **D3d-6** applies the user's assumption approved on 2026-11-20:
+
+> The program's observable behaviour and its compilation success do not depend
+> on whether the definition of a function friend declared in a template has
+> been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118),
+> nor on the destruction of template parameter objects.
+
+Function friends in template contexts and potential NTTP parameter-object
+storage therefore no longer seed instantiation effects. This covers the
+friend-address, lookup and deduction probes, the parameter-object destruction
+probe, and the unseen-argument probe's potential parameter objects. They remain
+reproducible demonstrations of the A11 boundary, rather than reasons to retain
+instantiation triggers. Ordinary type/value/name dependencies are unchanged.
+The dead parameter-object classifier and its trivial-record cache are removed;
+written scalar-alias inspection (`UsingType`, standard integer typedefs and
+qualified member selections) is preserved in the remaining static-storage proof.
+
+Non-inert static/thread storage in templates and templated attribute/symbol
+roots remain sources. Reverse potential dependency closure, the graph limit,
+and unbounded-system refusal remain unchanged. `boundedSystemHooks` and
+`ownRecordParameter` are still required: a hidden friend can reach a remaining
+storage effect, and an association with some unrelated record cannot bound its
+incoming library instantiations. Extractor regressions now exercise both direct
+self carriers and uncertified aliases with such a storage source. A11 does not
+exclude those effects. The original proof below applies to the remaining
+sources under A1–A7, A9 and A11; no absence of a locally observed specialization
+is used to infer absence on the judge.
+
+Every enabled pruning result, including one without family deletion, reports
+A11 alongside A7. Disabled results report neither. Friend-dependent fixtures use
+the runner's `a11-exclusion | explanation` form: they assert the allowed removal
+and the A11 report line and compile/run the original against its oracle, while
+omitting equivalence checks excluded by A11. NTTP fixtures assert removal and
+the A11 report line and still run both original and rendered programs. Static
+storage regressions keep their original equivalence oracles. `github-issue8`
+again removes C7 because its dependent NTTP no longer seeds reverse retention.
+
+### A11 measurement
+
+The same atl-cpp revision (`97d9e2365d265b293d430ad0b2d69dd5ebe684ab`),
+CSES profile and command shown below were used with D3d-6. The checksum-verified
+LLVM 23.1.5 revision-1 Linux ARM64 SDK was fetched inside the ignored worktree
+directory. The CLI/worker used a Release build with Clang 22.1.8 and `-j2`;
+the downloaded SDK was then deleted.
+
+| Example | Before D3d-5, bytes (previous measurement) | D3d-5, bytes (previous measurement) | D3d-6 under A11, bytes |
+| --- | ---: | ---: | ---: |
+| online-convolution quick | 84,539 | 149,050 | 149,050 |
+| polynomial-gcd quick | 99,721 | 157,713 | 157,713 |
+
+A11 removes the friend and parameter-object sources, but the remaining
+static-storage sources still reach the retained families. The reports now
+attribute reverse retention to `static_modulus`, `montgomery` and `scalar_ntt`,
+rather than the excluded friend/NTTP effects. No further storage exemption was
+introduced to recover the old sizes. Both reports select a locally checked
+pruned artifact and list D3d-6 and A11. Original and pruned outputs were compiled
+and run with GCC 15.2.0 and Clang 22.1.8: all eight comparisons matched the
+examples' `quick.out` byte for byte, with 120-second compilation and five-second
+execution limits. Distillation had a 180-second outer timeout per example.
+These remain local AArch64 checks; the profile's x86-64 GCC 13 judge is unavailable.
+
+### A11 validation
+
+The Release build succeeded with the pinned SDK and `-j2`. Full sequential
+CTest validation passed 102 of 103 checks with 120-second per-test timeouts:
+all 54 pruning fixtures, 102 extraction model cases (724 assertions), 81 caide
+cases, and every CLI/pipeline suite passed. The sole failure is the already
+recorded `resolver_differential` / `resolve_fake_external_model_and_errors`
+AArch64 mismatch: native GCC reports `__WCHAR_TYPE__` as `unsigned int`, while
+`IntegerModel{}` requests signed `wchar_t`. The GCC oracle refuses that model;
+the Clang evaluator accepts it. Those test/evaluator files are unchanged.
+All 33 targeted pruning unit tests and 44 standalone compiler probe combinations
+also passed. `git diff --check` passed. No commit or push was made.
+
+The sections below record the superseded D3d-5 investigation and measurements.
+
 Policy D3d-5 repairs a missing direction in the retention relation. A template
 being retained is insufficient: deleting an uncalled function, a class member
 body, or even a declaration can delete an implicit instantiation. This is a

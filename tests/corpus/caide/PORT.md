@@ -36,7 +36,7 @@ The caide runner shares `expect.txt` key=value syntax with pipeline cases. `cont
 - `gcc-int128` — same removal: unusedBig goes; square and __int128 remain (§4.7 rules 2/4).
 - `github-issue17` — same removal: none; function-type alias Func and value<int> stay reachable (§4.7 rules 2/4).
 - `github-issue4` — same removal: none; A forward declaration/definition and member template stay together (§4.7 whole records).
-- `github-issue8` — D3d-5 conservatively retains C7 and its specializations/out-of-line member: its nested `C` token can trigger `test14::C`, whose NTTP has a dependent member type. The used dependent/default/constraint paths also remain (§4.7 rules 2/4/6).
+- `github-issue8` — A11 permits removing C7 and its specializations/out-of-line member; dependent NTTPs no longer seed reverse retention. Used dependent/default/constraint paths remain (§4.7 rules 2/4/6).
 - `global-side-effect-ctor` — same removal: none; class-type boot is a root and retains Boot/state (§4.7 rule 1).
 - `global-side-effect-roots` — keeps more because §4.7 rule 1 roots non-inert static/thread/template variables and the enclosing unusedFunction; StaticOwner stays whole.
 - `ident-to-keep` — keeps more because §4.7 keeps C whole (method2 too); legacy member roots ns::C::C/method1 are explicitly mapped to indexed owner C.

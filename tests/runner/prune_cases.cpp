@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/prune/extract.h"
 #include "core/path.h"
+#include "core/report/prune.h"
 #include "core/render/render.h"
 #include "core/temporary.h"
 #include "library_features.h"
@@ -61,12 +62,20 @@ int main(int argc, char** argv) {
           return r;
         };
         model = take(extractPruning(model,options)); retained = take(computeRetention(model));
-        std::istringstream expect(read(path / "expect.txt")); std::string line; bool disabled = false;
+        std::istringstream expect(read(path / "expect.txt")); std::string line; bool disabled = false, a11Exclusion = false;
         while (std::getline(expect,line)) {
           if (line.empty() || line.starts_with('#')) continue;
           const auto bar = line.find('|'); if (bar == line.npos) { fail("invalid expectation: " + line); continue; }
           auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
-          if (assertion == "disabled") {
+          if (assertion == "report") {
+            matched = take(renderPruningReport(model,retained)).find(reason) != std::string::npos;
+          } else if (assertion == "a11-exclusion") {
+            // This fixture deliberately violates A11. Check the original's
+            // oracle and the allowed removal, without requiring equivalence.
+            a11Exclusion = true;
+            matched = !reason.empty() && retained.assumptions.contains("A11") &&
+                take(renderPruningReport(model,retained)).find("pruning assumption: A11\n") != std::string::npos;
+          } else if (assertion == "disabled") {
             disabled = true; for (const auto& why : retained.disabledReasons) matched |= why.find(reason) != why.npos;
           } else {
             auto space = assertion.find(' ');
@@ -91,6 +100,7 @@ int main(int argc, char** argv) {
         for (const auto& f : model.families) for (auto r : f.ranges) if (r.end > flat.text.size()) fail("bad range");
         // Optional runtime oracle: compare both compilers' original and pruned
         // programs, and check the expected output so a vacuous comparison fails.
+        // A11 exclusions retain only the original-program oracle.
         if (std::filesystem::exists(path / "stdout.txt")) {
           const auto rendered = take(renderSource(model,&retained));
           const auto pruned = rendered.provenance.text;
@@ -102,6 +112,7 @@ int main(int argc, char** argv) {
               std::cout << "SKIP runtime " << compiler << ": unavailable\n"; continue;
             }
             for (bool original : {true,false}) {
+              if (!original && a11Exclusion) continue;
               const auto source = work.path / "runtime.cpp", binary = work.path / "runtime-program";
               { std::ofstream f(source); f << (original ? flat.text : pruned); }
               ProcessSpec spec; spec.cwd = work.path; spec.timeout = std::chrono::seconds(20);

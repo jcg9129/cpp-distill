@@ -13,3 +13,4 @@ contains.1=struct LazySegTree
 contains.2=struct Fenwick
 contains.3=struct DSU
 requires=linux
+report.a11=pruning assumption: A11
