@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
       r = take(computeRetention(m)); check(r.disabledReasons.empty(),"ownership unexpectedly disabled");
       const auto& box = family(m,"Box"); check(!box.ranges.empty(),"missing template range");
       check(!box.ranges.empty() && m.text.substr(box.ranges[0].begin,8) == "template","template prefix missing");
-      check(!box.ranges.empty() && box.ranges[0].end > 0 && m.text[box.ranges[0].end-1] == ';',"record terminator missing");
+      check(!box.ranges.empty() && box.ranges.back().end > 0 && m.text[box.ranges.back().end-1] == ';',"record terminator missing");
       check(!box.names.contains("local") && !box.names.contains("f"),"member/local indexed");
       check(!m.unions.empty(),"out-of-line member not aggregated");
     });
@@ -178,8 +178,10 @@ int main(int argc, char** argv) {
           {"Live","Live::f","forwarded"},{"Dead","Dead::f"});
       check(out.find("template<class T> template<class U> int Live<T>::f") != out.npos,"outer header lost");
       check(out.find("Dead") == out.npos,"dead member template retained");
-      const auto& f = family(m,"Dead::f");
-      check(f.ranges.size() == 1 && std::string_view(m.text).substr(f.ranges[0].begin).starts_with("template<class T> template<class U>"),"outer header orphaned");
+      bool ownsOuter = false;
+      for (const auto& f : m.families) if (f.label == "Dead::f") for (auto range : f.ranges)
+        ownsOuter |= std::string_view(m.text).substr(range.begin).starts_with("template<class T> template<class U>");
+      check(ownsOuter,"outer header orphaned");
     });
     run("explicit specializations share template family", [&] {
       const auto out = templateCase(
@@ -256,7 +258,7 @@ int main(int argc, char** argv) {
         check(!kept("Dead"),"effect pattern disabled all deletion");
       }
     });
-    run("D3d-7 dynamic block storage keeps roots but releases unrelated triggers", [&] {
+    run("D3e dynamic block storage keeps roots but releases unrelated triggers", [&] {
       for (const auto* source : {
           "int notify(); template<class T> int Effect() { static int x = notify(); return x; } int dormant(){ return Effect<int>(); }",
           "int notify(); template<class T> struct Effect { int f() { static thread_local int x = notify(); return x; } }; int dormant(){ return Effect<int>{}.f(); }",
@@ -269,7 +271,7 @@ int main(int argc, char** argv) {
         }),"dynamic local changed rule-1 root or remained a source");
       }
     });
-    run("D3d-7 non-constexpr constant storage releases triggers", [&] {
+    run("D3e non-constexpr constant storage releases triggers", [&] {
       for (const auto* source : {
           "using Scalar=unsigned; template<int> inline const Scalar value=3;",
           "struct Plain { int x; }; template<int> inline const Plain value{3};",

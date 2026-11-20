@@ -24,7 +24,8 @@ bool supportedPragma(const Directive& d) {
 } // namespace
 Result<PruningModel> preparePruning(const Configuration& c, const InlineResult&, const ResolveResult& flat,
                                    const Profile* judge, const std::vector<std::string>& keep) {
-  PruningModel m; m.text = flat.text; m.lineMap = flat.lineMap; m.dialect = c.probe.dialect.name;
+  PruningModel m;
+  m.text = flat.text; m.lineMap = flat.lineMap; m.dialect = c.probe.dialect.name;
   m.disabledReasons = flat.disabledReasons; m.unknownInUserCode = flat.unknownInUserCode;
   if (flat.unknownInUserCode) for (const auto& d : flat.decisions) {
     if (d.decision != Decision::unknown || d.directive == "else" || d.directive == "endif") continue;
@@ -165,6 +166,7 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
         model.value().keepNames != in.keepNames || model.value().keepOffsets != in.keepOffsets || model.value().dialect != in.dialect ||
         model.value().unknownInUserCode != in.unknownInUserCode ||
         model.value().assumeInstantiationEffects != in.assumeInstantiationEffects ||
+        model.value().assumeLibrarySpelledMembers != in.assumeLibrarySpelledMembers ||
         !std::all_of(in.disabledReasons.begin(),in.disabledReasons.end(),[&](const auto& reason) {
           return std::find(model.value().disabledReasons.begin(),model.value().disabledReasons.end(),reason) != model.value().disabledReasons.end();
         }))

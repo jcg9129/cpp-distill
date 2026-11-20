@@ -61,6 +61,10 @@ struct Extraction {
   CompilerInstance& compiler;
   SourceManager& sm;
   std::map<const Decl*,FamilyId> owners;
+  std::map<std::pair<std::size_t,std::string>,FamilyId> memberSpellings;
+  std::map<std::pair<std::size_t,std::string>,FamilyId> memberGroups;
+  std::set<std::string> virtualMemberNames;
+  std::set<FamilyId> explicitlyInstantiatedRecords;
   std::vector<std::pair<const Decl*,FamilyId>> declarations;
   std::map<std::size_t,std::pair<bool,bool>> pasteGroups;
   std::set<std::size_t> hashOffsets; // Expansion offsets of macros defined with #, #@ or ##.
@@ -159,9 +163,15 @@ struct Extraction {
     if (parameters) for (const auto* p : *parameters) bind(p,id);
   }
   void bind(const Decl* d, FamilyId id) {
-    owners[d] = id;
+    // Read the old canonical binding before replacing d: d may itself be the
+    // canonical declaration of an already discovered out-of-line definition.
     auto [it,fresh] = owners.emplace(canonical(d),id);
-    if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
+    if (!fresh && it->second != id) {
+      if (model.families[id].memberOf != noFamily && model.families[it->second].memberOf == noFamily)
+        it->second = id; // Transfer a record-owned method to its own unit.
+      else model.unions.emplace_back(id,it->second);
+    }
+    owners[d] = id;
     // Template parameters are not DeclContext children, and often have a TU
     // semantic context. Out-of-line definitions own separate outer parameters.
     if (const auto* t = dyn_cast<TemplateDecl>(d)) {
@@ -192,6 +202,17 @@ struct Extraction {
       name = d->getDeclName().getCXXLiteralIdentifier()->getName().str();
     f.names.insert(name);
     if (callable) f.callableNames.insert(name);
+  }
+  std::string memberName(const CXXMethodDecl* method) const {
+    // Constructors in instances print template arguments; use the written
+    // class identifier so they share the pattern's spelling and unit.
+    if (isa<CXXConstructorDecl,CXXDestructorDecl>(method) && method->getParent()->getIdentifier())
+      return (isa<CXXDestructorDecl>(method) ? "~" : "") + method->getParent()->getIdentifier()->getName().str();
+    return method->getNameAsString();
+  }
+  bool memberUnitsEnabled() const {
+    return model.assumeLibrarySpelledMembers && model.libraryMemberNamesComputed &&
+        model.memberDisabledReasons.empty();
   }
   void discover(Decl* d) {
     if (!d || d->isImplicit() || !user(d->getBeginLoc())) return;
@@ -296,6 +317,28 @@ struct Extraction {
       }
       r->begin = std::min(r->begin,begin);
     }
+    if (memberUnitsEnabled()) if (const auto* method = dyn_cast<CXXMethodDecl>(base)) {
+      const auto parent = owner(method->getParent());
+      if (parent != noFamily) {
+        f.memberOf = parent; f.memberName = memberName(method);
+        // Keep the member spelling separate from namespace-scope names (e.g.
+        // a friend declaration). Retention indexes it through memberName.
+        // memberOf supplies forward ownership retention. It is not a source
+        // dependency: deleting a method cannot delete its containing class
+        // definition. Actual references to the owner still add AST/name edges.
+        if (isa<CXXConstructorDecl,CXXDestructorDecl,CXXConversionDecl>(method) || method->isOverloadedOperator() || method->isVirtual())
+          f.memberBlocker = "D3e rule 1: excluded kind or virtual";
+        else if (isReserved(f.memberName)) f.memberBlocker = "D3e rule 3: reserved name";
+        // The terminator scan can include shared declarators (int f(), data;)
+        // or a nested type introduced in a return type. Those non-function
+        // members must stay with the record; pin the indivisible declaration.
+        for (const auto* sibling : method->getParent()->decls())
+          if (isa<FieldDecl,VarDecl,TagDecl,TypedefNameDecl>(sibling) && user(sibling->getLocation())) {
+            const auto at = offset(sibling->getLocation());
+            if (r->begin <= at && at < r->end) f.pinned = "shared declaration with non-function member";
+          }
+      }
+    }
     f.ranges.push_back(*r);
     const auto physical = sm.getLineNumber(sm.getMainFileID(),r->begin);
     if (physical && physical <= model.lineMap.size()) f.original = model.lineMap[physical-1];
@@ -305,7 +348,79 @@ struct Extraction {
     // it, even when only the judge instantiates that specialization's class.
     if (const auto* record = dyn_cast<CXXRecordDecl>(d->getDeclContext())) {
       const auto enclosing = owner(record);
-      if (enclosing != noFamily && enclosing != id) model.unions.emplace_back(id,enclosing);
+      if (enclosing != noFamily && enclosing != id && model.families[id].memberOf == noFamily)
+        model.unions.emplace_back(id,enclosing);
+    }
+  }
+  void member(Decl* d, CXXMethodDecl* method) {
+    if (method->isImplicit() || !user(d->getBeginLoc())) return;
+    // A qualified friend declaration belongs to its lexical record's text.
+    // Its spelling must retain the referenced member by rule 5, not be
+    // carved out as another removable declaration of that member.
+    if (method->getFriendObjectKind() != Decl::FOK_None) return;
+    // RAV may visit a partial specialization's instances before its written
+    // pattern. Seed ownership/ranges from the complete pattern first; an unused
+    // lazy instance can lack the body's end location and look unterminated.
+    if (method->getTemplateSpecializationKind() != TSK_ExplicitSpecialization)
+      if (auto* pattern = dyn_cast_or_null<CXXMethodDecl>(method->getTemplateInstantiationPattern());
+          pattern && pattern != method && user(pattern->getBeginLoc())) {
+        if (auto* wrapper = pattern->getDescribedFunctionTemplate()) member(wrapper,pattern);
+        else member(pattern,pattern);
+      }
+    // A lazily instantiated method need not have the pattern's body/end loc.
+    // The written name token identifies its declaration independently of that
+    // local instantiation state; retain the pattern's complete edit range.
+    const auto key = std::pair{offset(method->getLocation()),memberName(method)};
+    FamilyId id = noFamily;
+    if (auto it = memberSpellings.find(key); it != memberSpellings.end()) {
+      id = it->second; bind(d,id);
+    } else {
+      auto declared = std::find_if(declarations.begin(),declarations.end(),[&](const auto& entry) {
+        return entry.first == d && model.families[entry.second].memberOf != noFamily;
+      });
+      if (declared != declarations.end()) id = declared->second;
+      else {
+        const auto count = model.families.size(); discover(d);
+        if (count == model.families.size()) return;
+        id = count;
+      }
+      memberSpellings.emplace(key,id);
+    }
+    auto& f = model.families[id];
+    if (f.memberOf == noFamily) return;
+    const auto* record = method->getParent();
+    const auto* pattern = record->getTemplateInstantiationPattern();
+    const auto at = offset((pattern ? pattern : record)->getBeginLoc());
+    auto [it,fresh] = memberGroups.emplace(std::pair{at,f.memberName},id);
+    if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
+    if (method->isVirtual() || method->hasAttr<OverrideAttr>() || method->hasAttr<FinalAttr>()) {
+      f.memberBlocker = "D3e rule 1: excluded kind or virtual";
+      virtualMemberNames.insert(f.memberName);
+    }
+  }
+  void partitionMembers() {
+    // Subtract member spellings before the existing shared-declarator union
+    // pass, so keeping a record no longer keeps every method in that record.
+    std::vector<EditRange> cuts;
+    for (const auto& f : model.families) if (f.memberOf != noFamily)
+      cuts.insert(cuts.end(),f.ranges.begin(),f.ranges.end());
+    std::sort(cuts.begin(),cuts.end(),[](auto a,auto b) { return a.begin < b.begin; });
+    for (auto& f : model.families) {
+      if (f.memberOf != noFamily) {
+        if (f.memberBlocker.empty() && virtualMemberNames.contains(f.memberName))
+          f.memberBlocker = "D3e rule 2: virtual name clash";
+        if (explicitlyInstantiatedRecords.contains(f.memberOf)) f.memberBlocker = "D3e rule 8: explicitly instantiated record";
+      }
+      std::vector<EditRange> remaining;
+      for (auto r : f.ranges) {
+        auto begin = r.begin;
+        for (auto c : cuts) if (r.begin <= c.begin && c.end <= r.end && (r.begin != c.begin || r.end != c.end)) {
+          if (begin < c.begin) remaining.push_back({begin,c.begin});
+          begin = std::max(begin,c.end);
+        }
+        if (begin < r.end) remaining.push_back({begin,r.end});
+      }
+      f.ranges = std::move(remaining);
     }
   }
   void normalizeRanges() {
@@ -314,9 +429,12 @@ struct Extraction {
     struct R { EditRange range; FamilyId id; }; std::vector<R> all;
     for (FamilyId id = 0; id < model.families.size(); ++id) for (auto r : model.families[id].ranges) all.push_back({r,id});
     std::sort(all.begin(),all.end(),[](auto a,auto b) { return a.range.begin < b.range.begin; });
+    // D3e records have several disjoint structural fragments. Clear each
+    // family once, retaining every fragment when rebuilding byte ownership.
+    for (auto& f : model.families) f.ranges.clear();
     std::size_t end = 0; FamilyId prior = noFamily;
     for (auto r : all) {
-      auto& f = model.families[r.id]; f.ranges.clear();
+      auto& f = model.families[r.id];
       if (r.range.begin < end) model.unions.emplace_back(prior,r.id);
       if (r.range.end > end) f.ranges.push_back({std::max(end,r.range.begin),r.range.end});
       if (r.range.end >= end) { end = r.range.end; prior = r.id; }
@@ -325,6 +443,7 @@ struct Extraction {
 };
 
 bool supportedAttribute(const Attr* a, const Decl* declaration, Extraction& e) {
+  if (isa<OverrideAttr,FinalAttr>(a)) return true;
   if (!isa<NoUniqueAddressAttr>(a)) return supportedAttribute(a);
   const auto* field = dyn_cast_or_null<FieldDecl>(declaration);
   if (!field || field->isBitField() || field->getLexicalDeclContext() != field->getParent()) return false;
@@ -350,6 +469,35 @@ bool positionToken(std::string_view name) {
 class Macros final : public PPCallbacks {
   Extraction& e;
   std::map<std::string,MacroFact,std::less<>> sourceBindings;
+  std::set<unsigned> systemMacroInvocations;
+  std::set<std::string,std::less<>> expandedLibraryMemberNames;
+  void libraryToken(const clang::Token& token) {
+    if (!e.model.assumeLibrarySpelledMembers || !token.is(tok::identifier) ||
+        !token.getLocation().isMacroID()) return;
+    // A pasted token's spelling is in scratch space, and an argument's spelling
+    // can be user text. Follow BOTH spelling and expansion ancestry. Recording
+    // system definitions at MacroExpands also covers a system macro pasted at a
+    // user invocation, where neither the scratch spelling nor the call is system.
+    std::vector<clang::SourceLocation> pending{token.getLocation()};
+    std::set<unsigned> seen;
+    while (!pending.empty()) {
+      const auto loc = pending.back(); pending.pop_back();
+      if (loc.isInvalid() || !seen.insert(loc.getRawEncoding()).second) continue;
+      if (systemMacroInvocations.contains(loc.getRawEncoding()) ||
+          (loc.isFileID() && e.sm.isInSystemHeader(loc))) {
+        expandedLibraryMemberNames.insert(token.getIdentifierInfo()->getName().str());
+        return;
+      }
+      if (seen.size() > 4096) {
+        e.model.memberDisabledReasons.push_back("system macro expansion ancestry limit");
+        return;
+      }
+      if (loc.isMacroID()) {
+        pending.push_back(e.sm.getImmediateSpellingLoc(loc));
+        pending.push_back(e.sm.getImmediateExpansionRange(loc).getBegin());
+      }
+    }
+  }
   enum class AttributeSyntax { none, standard, gnu, declspec };
   AttributeSyntax attributeSyntax = AttributeSyntax::none;
   std::vector<clang::Token> attributeTokens;
@@ -407,6 +555,7 @@ class Macros final : public PPCallbacks {
     return {MacroState::known,std::move(m),{}};
   }
 public:
+  std::map<unsigned,FileID> headerFiles;
   explicit Macros(Extraction& x) : e(x) {}
   void PragmaDirective(clang::SourceLocation loc, PragmaIntroducerKind kind) override {
     // The core audits literal #pragma directives. An operator-generated pragma
@@ -414,6 +563,7 @@ public:
     if (e.user(loc) && kind != PIK_HashPragma) e.disable("unsupported generated user pragma at " + loc.printToString(e.sm));
   }
   void finalToken(const clang::Token& token) {
+    libraryToken(token); // Full unpruned TU, before filtering to user expansions.
     if (!e.user(token.getLocation())) return;
     attributeToken(token);
     // Keywords carry identifier info too; annotation and literal tokens don't.
@@ -434,6 +584,47 @@ public:
     if (predefined) e.model.expansions.push_back({e.offset(token.getLocation()),name,true,false,true,
         {MacroState::undefined,{},{}},f,false,false,true});
   }
+  void FileChanged(clang::SourceLocation loc, FileChangeReason reason,
+                   SrcMgr::CharacteristicKind kind, FileID = FileID()) override {
+    if (!e.model.assumeLibrarySpelledMembers || kind == SrcMgr::C_User ||
+        (reason != EnterFile && reason != SystemHeaderPragma)) return;
+    const auto file = e.sm.getFileID(loc);
+    if (file.isInvalid()) {
+      e.model.memberDisabledReasons.push_back("unavailable system header for library-spelled identifier set");
+      return;
+    }
+    headerFiles.emplace(file.getHashValue(),file);
+  }
+  // After parsing, the include graph and system-header classifications are fixed.
+  // Raw lexing includes inactive branches and macro replacement lists. Keep this
+  // inventory separate so later work can union other scanned library builds.
+  void collectLibraryMemberNames() {
+    if (!e.model.assumeLibrarySpelledMembers) return;
+    e.model.libraryMemberNames = expandedLibraryMemberNames;
+    for (const auto& [key,file] : headerFiles) {
+      (void)key;
+      bool invalid = false; const auto buffer = e.sm.getBufferData(file,&invalid);
+      const auto loc = e.sm.getLocForStartOfFile(file);
+      if (invalid) {
+        e.model.memberDisabledReasons.push_back("unreadable system header: " + e.sm.getFilename(loc).str());
+        continue;
+      }
+      Lexer lexer(loc,e.compiler.getLangOpts(),buffer.begin(),buffer.begin(),buffer.end());
+      clang::Token token;
+      bool done = false;
+      do {
+        done = lexer.LexFromRawLexer(token);
+        if (token.is(tok::raw_identifier)) {
+          // Decode escaped identifiers and line splices just as the parser does.
+          const auto* info = e.compiler.getPreprocessor().LookUpIdentifierInfo(token);
+          if (info) e.model.libraryMemberNames.insert(info->getName().str());
+          else e.model.memberDisabledReasons.push_back("unreadable identifier in system header: " + e.sm.getFilename(loc).str());
+        }
+        if (token.is(tok::unknown)) e.model.memberDisabledReasons.push_back("unrecognized token in system header: " + e.sm.getFilename(loc).str());
+      } while (!done);
+    }
+    e.model.libraryMemberNamesComputed = e.model.memberDisabledReasons.empty();
+  }
   void MacroDefined(const clang::Token& name, const MacroDirective* md) override {
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = fact(md->getMacroInfo());
   }
@@ -441,6 +632,14 @@ public:
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = {MacroState::undefined,{}, {}};
   }
   void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs*) override {
+    if (e.model.assumeLibrarySpelledMembers) {
+      if (const auto* mi = definition.getMacroInfo()) {
+        const auto def = e.sm.getSpellingLoc(mi->getDefinitionLoc());
+        if (def.isValid() && !e.sm.isWrittenInBuiltinFile(def) &&
+            !e.sm.isWrittenInCommandLineFile(def) && e.sm.isInSystemHeader(def))
+          systemMacroInvocations.insert(range.getBegin().getRawEncoding());
+      } else e.model.memberDisabledReasons.push_back("unavailable macro definition for library-spelled identifier set");
+    }
     if (!e.user(range.getBegin())) return;
     const auto* mi = definition.getMacroInfo(); if (!mi) { e.disable("missing macro expansion definition at " + range.getBegin().printToString(e.sm)); return; }
     const auto offset = e.offset(range.getBegin()); const auto name = token.getIdentifierInfo()->getName().str();
@@ -930,14 +1129,26 @@ public:
     for (auto* d : x->decls()) edge(d);
     return true;
   }
-  // Dependent member/qualified lookup needs no global name fallback: records
-  // retain all members (including templates, conversions and operator->), and
-  // lexical/AST edges retain bases, nested-name carriers and template arguments.
-  // System traits select among those carriers; user specializations follow the
-  // association rule. This also covers user-pasted member names, since members
-  // are never individually pruned. See core/README.md for the closure argument.
+  bool memberName(DeclarationName name) {
+    if (e.memberUnitsEnabled() && current != noFamily)
+      e.model.families[current].dependentNames.insert(name.getAsString());
+    return true;
+  }
+  bool VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr* x) { return memberName(x->getMember()); }
+  bool VisitUnresolvedMemberExpr(UnresolvedMemberExpr* x) {
+    for (auto* d : x->decls()) edge(d);
+    return memberName(x->getMemberName());
+  }
+  bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { return memberName(x->getDeclName()); }
+  // These names live on declarations, not expressions. In uninstantiated
+  // patterns a pasted identifier has neither a raw spelling nor a target edge.
+  bool VisitUnresolvedUsingValueDecl(UnresolvedUsingValueDecl* d) { return memberName(d->getDeclName()); }
+  bool VisitUnresolvedUsingTypenameDecl(UnresolvedUsingTypenameDecl* d) { return memberName(d->getDeclName()); }
   bool VisitFunctionDecl(FunctionDecl* f) {
     if (current == noFamily) return true;
+    // A qualified dependent friend likewise names a member without creating a
+    // member expression or a resolved CXXMethodDecl in the template pattern.
+    if (f->getQualifier() && f->getQualifier().isDependent()) memberName(f->getDeclName());
     auto& family = e.model.families[current];
     if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
       bool carrier = false;
@@ -1179,13 +1390,46 @@ public:
     return true;
   }
 };
+// Visit patterns and known instantiations before byte ownership is finalized.
+// Semantic virtualness in an instance can exclude an otherwise nonvirtual pattern.
+class MemberUnits final : public RecursiveASTVisitor<MemberUnits> {
+  Extraction& e;
+public:
+  explicit MemberUnits(Extraction& x) : e(x) {}
+  bool shouldVisitTemplateInstantiations() const { return true; }
+  bool VisitFunctionDecl(FunctionDecl* f) {
+    auto* method = dyn_cast<CXXMethodDecl>(f);
+    if (!method) return true;
+    if (auto* wrapper = method->getDescribedFunctionTemplate()) e.member(wrapper,method);
+    else e.member(method,method);
+    return true;
+  }
+  bool VisitClassTemplateSpecializationDecl(ClassTemplateSpecializationDecl* r) {
+    if (!e.user(r->getBeginLoc())) return true;
+    const auto kind = r->getSpecializationKind();
+    if (kind == TSK_ExplicitInstantiationDeclaration || kind == TSK_ExplicitInstantiationDefinition) {
+      for (const Decl* d : {static_cast<const Decl*>(r),static_cast<const Decl*>(r->getSpecializedTemplate()),
+                            static_cast<const Decl*>(r->getTemplateInstantiationPattern())}) {
+        auto owner = e.owner(d);
+        if (owner != noFamily) e.explicitlyInstantiatedRecords.insert(owner);
+      }
+    }
+    return true;
+  }
+};
 class Consumer final : public ASTConsumer {
   Extraction& e;
 public:
-  explicit Consumer(Extraction& x) : e(x) {}
+  Macros& macros;
+  explicit Consumer(Extraction& x, Macros& m) : e(x), macros(m) {}
   void HandleTranslationUnit(ASTContext& context) override {
+    macros.collectLibraryMemberNames();
     if (e.compiler.getDiagnostics().hasErrorOccurred()) { e.disable("Clang parse error"); return; }
     for (auto* d : context.getTranslationUnitDecl()->decls()) e.discover(d);
+    if (e.memberUnitsEnabled()) {
+      MemberUnits(e).TraverseDecl(context.getTranslationUnitDecl());
+      e.partitionMembers();
+    }
     e.normalizeRanges();
     // Namespaces, redeclarations, overloads and template identities share retention.
     std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
@@ -1249,7 +1493,7 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   auto callbacks = std::make_unique<Macros>(extraction); auto* watcher = callbacks.get();
   compiler.getPreprocessor().setTokenWatcher([watcher](const clang::Token& token) { watcher->finalToken(token); });
   compiler.getPreprocessor().addPPCallbacks(std::move(callbacks));
-  Consumer consumer(extraction);
+  Consumer consumer(extraction,*watcher);
   diagnostics->getClient()->BeginSourceFile(compiler.getLangOpts(),&compiler.getPreprocessor());
   ParseAST(compiler.getPreprocessor(),&consumer,compiler.getASTContext());
   diagnostics->getClient()->EndSourceFile();

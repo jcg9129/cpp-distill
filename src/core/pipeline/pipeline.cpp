@@ -151,6 +151,7 @@ struct Pipeline {
     try {
       auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
+      m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
@@ -162,7 +163,9 @@ struct Pipeline {
       result.retention = take(computeRetention(*result.pruningModel));
       for (const auto& name : options.keep) {
         const auto& families = result.pruningModel->families;
-        if (std::none_of(families.begin(),families.end(),[&](const auto& f) { return f.names.contains(name); }))
+        if (std::none_of(families.begin(),families.end(),[&](const auto& f) {
+              return f.names.contains(name) || (f.memberOf != noFamily && f.memberName == name);
+            }))
           throw Error{"--keep " + name + ": no indexed declaration in checked flat source"};
       }
       if (Clock::now() >= deadline) throw Error{"pruning analysis deadline exceeded for flat.cpp"};
@@ -422,6 +425,8 @@ struct Pipeline {
     }
     if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
+    if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
     result.report = renderReport(result, command, options.profile);
     return std::move(result);
   }

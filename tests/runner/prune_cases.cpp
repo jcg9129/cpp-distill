@@ -59,6 +59,7 @@ int main(int argc, char** argv) {
         const auto cli = take(parseDistillOptions(args));
         model = take(preparePruning(configuration,{},flat,&configuration.facts,cli.keep));
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
+        model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
         if (*feature) {
           model.dialect = "gnu++23";
           for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";
@@ -117,19 +118,22 @@ int main(int argc, char** argv) {
         for (const auto& f : model.families) for (auto r : f.ranges) if (r.end > flat.text.size()) fail("bad range");
         // Optional runtime oracle: compare both compilers' original and pruned
         // programs, and check the expected output so a vacuous comparison fails.
-        // A11 exclusions retain only the original-program oracle.
+        // A11 exclusions and expected refusals retain the original-program
+        // oracle; refusals have no rendered artifact to validate.
         if (std::filesystem::exists(path / "stdout.txt")) {
-          const auto rendered = take(renderSource(model,&retained));
-          const auto pruned = rendered.provenance.text;
-          take(staticNameInvariant(model,retained,pruned));
-          take(renderingInvariant(model,&retained,pruned));
+          std::string pruned;
+          if (!disabled) {
+            pruned = take(renderSource(model,&retained)).provenance.text;
+            take(staticNameInvariant(model,retained,pruned));
+            take(renderingInvariant(model,&retained,pruned));
+          }
           const auto expected = read(path / "stdout.txt");
           for (const auto* compiler : {"g++","clang++"}) {
             if (!resolveExecutable(compiler,work.path).ok()) {
               std::cout << "SKIP runtime " << compiler << ": unavailable\n"; continue;
             }
             for (bool original : {true,false}) {
-              if (!original && a11Exclusion) continue;
+              if (!original && (a11Exclusion || disabled)) continue;
               const auto source = work.path / "runtime.cpp", binary = work.path / "runtime-program";
               { std::ofstream f(source); f << (original ? flat.text : pruned); }
               ProcessSpec spec; spec.cwd = work.path; spec.timeout = std::chrono::seconds(20);

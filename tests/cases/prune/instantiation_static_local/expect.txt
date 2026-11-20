@@ -2,4 +2,5 @@
 a11-exclusion | A11 excludes never-reached block-scope static/thread storage destruction
 report | pruning assumption: A11 instantiation-effects
 removed Unused | outside the retention closure
-kept Effect | not inert (static or thread storage)
+kept Effect | AST: referenced by Effect::run
+kept Effect::run | not inert (static or thread storage)

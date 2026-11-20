@@ -14,15 +14,16 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (a == "--no-assume" || a.starts_with("--no-assume=")) {
       std::string names;
       if (a == "--no-assume") {
-        if (++i == args.size()) return Error{"missing value for --no-assume; switchable names: instantiation-effects"};
+        if (++i == args.size()) return Error{"missing value for --no-assume; switchable names: instantiation-effects, library-spelled-members"};
         names = args[i];
       } else names = a.substr(12);
       for (std::size_t begin = 0;;) {
         const auto end = names.find(',',begin);
         const auto name = names.substr(begin,end == names.npos ? end : end-begin);
-        if (name != "instantiation-effects")
-          return Error{"unknown --no-assume name: " + name + "; switchable names: instantiation-effects"};
-        o.assumeInstantiationEffects = false;
+        if (name != "instantiation-effects" && name != "library-spelled-members")
+          return Error{"unknown --no-assume name: " + name + "; switchable names: instantiation-effects, library-spelled-members"};
+        if (name == "instantiation-effects") o.assumeInstantiationEffects = false;
+        else o.assumeLibrarySpelledMembers = false;
         if (end == names.npos) break;
         begin = end+1;
       }
@@ -50,7 +51,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || !o.assumeInstantiationEffects || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        o.noPrune || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
@@ -75,7 +76,7 @@ std::string distillHelp() {
       "  --report <file>    validation, conditional and pruning report\n"
       "  --no-prune         inline and resolve only\n"
       "  --no-assume=<name> disable an assumption (repeatable, comma lists accepted)\n"
-      "                     switchable names: instantiation-effects (A11)\n"
+      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
       "  --strip-comments   remove comments during checked rendering\n"
       "  --no-line-markers  omit #line markers from a pruned result when no user code\n"

@@ -57,20 +57,20 @@ TEST(prune_a7_a11_apply_even_without_family_deletion) {
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
   CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3d-7");
+  CHECK(b.run().policy == "D3e");
 }
 TEST(prune_without_instantiation_effects_identity_and_report) {
   Model b; b.add("main","int main(){}"); b.add("dead","int dead(){return 0;}");
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-3 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-7 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
   const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
   CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
-  CHECK_EQ(r.policy,"D3d-7, without instantiation-effects");
+  CHECK_EQ(r.policy,"D3e, without instantiation-effects");
   const auto report = renderPruningReport(b.m,r).value();
   CHECK(report.find("pruning assumption: A11") == std::string::npos);
   CHECK(report.find("pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)") != std::string::npos);
@@ -81,6 +81,39 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto mixed = extractPruning(b.m,o).value();
   CHECK(!mixed.assumeInstantiationEffects);
   CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
+TEST(prune_library_spelled_members_identity_fallback_and_report) {
+  Model b; const auto owner = b.add("S","struct S {};",FamilyKind::record);
+  const auto member = b.add("unused","int unused(){return 0;}");
+  b.m.families[member].memberOf = owner; b.m.families[member].memberName = "unused";
+  b.m.families[member].edges = {owner};
+  b.add("main","int main(){S s;}"); const auto dead = b.add("dead","int dead(){return 0;}");
+  // An incomplete inventory must keep members while still pruning whole families.
+  auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.memberDisabledReasons.empty());
+  CHECK(r.families[member].kept); CHECK(!r.families[dead].kept); CHECK(!r.assumptions.contains("A12"));
+  b.m.libraryMemberNamesComputed = true;
+  r = b.run(); CHECK(!r.families[member].kept); CHECK(r.assumptions.contains("A12"));
+  auto report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("pruning assumption: A12 library-spelled-members\n") != report.npos);
+  CHECK(report.find("member units kept=0 removed=1\n") != report.npos);
+  b.m.libraryMemberNames.insert("unused"); r = b.run(); CHECK(r.families[member].kept);
+  CHECK(r.assumptions.contains("A12")); // Consistent with A11 even without a member deletion.
+  b.m.libraryMemberNames.clear();
+  const auto enabled = serializePruningModel(b.m).value();
+  b.m.assumeLibrarySpelledMembers = false;
+  const auto disabled = serializePruningModel(b.m).value(); CHECK(enabled != disabled);
+  CHECK(!parsePruningModel(disabled).value().assumeLibrarySpelledMembers);
+  CHECK(parsePruningModel(enabled).value().assumeLibrarySpelledMembers);
+  r = b.run(); CHECK(r.families[member].kept); CHECK(!r.families[dead].kept);
+  CHECK(!r.assumptions.contains("A12")); CHECK(r.assumptions.contains("A11"));
+  report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)") != report.npos);
+  test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
+    ProcessResult response; response.exitCode = 0; response.stdoutText = enabled; return response;
+  };
+  CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
 }
 
 TEST(prune_never_removed_rules_and_nonroots) {
@@ -201,6 +234,29 @@ TEST(prune_instantiation_effects_reverse_dependent_lookup_and_associations) {
   const auto r = b.run(); CHECK(r.disabledReasons.empty());
   for (auto id : {effect,callback,key,adl,trigger}) CHECK(r.families[id].kept);
 }
+TEST(prune_ordinary_member_declarations_reach_owner_effect_triggers) {
+  for (bool assume : {true,false}) {
+    Model b; b.m.libraryMemberNamesComputed = true; b.m.assumeInstantiationEffects = assume;
+    const auto source = b.add("Source","struct Source {};",FamilyKind::record);
+    b.m.families[source].instantiationEffect = "template static storage";
+    const auto owner = b.add("Carrier","struct Carrier {};",FamilyKind::record);
+    const auto member = b.add("dormant","void dormant();");
+    b.m.families[member].memberOf = owner;
+    b.m.families[member].memberName = "dormant";
+    b.m.families[member].edges = {source}; // Signature/default/constraint dependency.
+    const auto unrelated = b.add("unrelated","void unrelated();");
+    b.m.families[unrelated].memberOf = owner;
+    b.m.families[unrelated].memberName = "unrelated";
+    const auto trigger = b.add("trigger","void trigger(){}");
+    b.m.families[trigger].edges = {owner};
+    b.add("main","int main(){}");
+    const auto r = b.run(); CHECK(r.disabledReasons.empty());
+    for (auto id : {source,owner,member,trigger}) CHECK(r.families[id].kept);
+    CHECK(r.families[trigger].reason.starts_with("instantiation effect:"));
+    CHECK_EQ(r.families[trigger].cause,source);
+    CHECK(!r.families[unrelated].kept);
+  }
+}
 TEST(prune_instantiation_effects_refuse_unbounded_system_dispatch) {
   for (int form = 0; form < 3; ++form) {
     Model b;
@@ -215,6 +271,31 @@ TEST(prune_instantiation_effects_refuse_unbounded_system_dispatch) {
     CHECK(r.disabledReasons.back().starts_with("unbounded system instantiation effects through hook"));
     for (const auto& f : r.families) CHECK(f.kept);
   }
+}
+TEST(prune_owner_dispatch_preserves_nonmember_name_effect_paths) {
+  Model b;
+  b.m.libraryMemberNamesComputed = true;
+  const auto owner = b.add("Owner","struct Owner {};",FamilyKind::record);
+  const auto effect = b.add("Effect","struct Effect {};",FamilyKind::record);
+  b.m.families[effect].instantiationEffect = "template static storage";
+  const auto unit = b.add("unit","void free_hook() {}");
+  auto& f = b.m.families[unit];
+  f.memberOf = owner; f.memberName = "mandatory";
+  f.memberBlocker = "D3e rule 1: excluded kind or virtual";
+  f.names = {"free_hook"}; f.callableNames = {"free_hook"}; f.edges = {effect};
+  const auto caller = b.add("dormant","void dormant() { free_hook(); }");
+  const auto dead = b.add("dead","void dead() {}");
+  b.add("main","int main() {}");
+  auto r = b.run(); CHECK(r.disabledReasons.empty());
+  for (auto id : {owner,effect,unit,caller}) CHECK(r.families[id].kept);
+  CHECK(r.families[caller].reason.starts_with("instantiation effect:"));
+  CHECK(!r.families[dead].kept);
+  // Owner dispatch does not exempt a real free/system hook in the same unit.
+  b.m.families[unit].callableNames.insert("swap");
+  CHECK(!b.run().disabledReasons.empty());
+  b.m.families[unit].callableNames.erase("swap");
+  b.m.families[unit].systemSpecialization = true;
+  CHECK(!b.run().disabledReasons.empty());
 }
 TEST(prune_instantiation_effects_hidden_hooks_need_verified_own_record_carriers) {
   for (bool verified : {false,true}) {
@@ -352,6 +433,9 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   b.m.judgeInitial["__GNUC__"] = known("15"); b.m.expansions.push_back({0,"X",true,false,true,known("1"),known("2"),false,false,true});
   auto encoded = serializePruningModel(b.m); CHECK(encoded.ok()); auto decoded = parsePruningModel(encoded.value()); CHECK(decoded.ok());
   CHECK_EQ(serializePruningModel(decoded.value()).value(),encoded.value());
+  auto previous = encoded.value(); previous.replace(0,15,"DISTILL-PRUNE-6");
+  auto rejected = parsePruningModel(previous); CHECK(!rejected.ok());
+  CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
   CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
   CHECK(!parsePruningModel("DISTILL-PRUNE-9").ok());
@@ -360,12 +444,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-3 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-7 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-3 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-7 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-3 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-7 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

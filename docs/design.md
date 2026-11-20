@@ -160,6 +160,12 @@ these, and only these; the report lists each one an output depended on, and
   By default every pruned artifact relies on A11; reports print
   `A11 instantiation-effects` alongside A7. `--no-assume=instantiation-effects`
   disables this assumption while keeping pruning enabled (§4.7).
+- **A12 (`library-spelled-members`)** (user, 2026-11-20) The judge's standard library headers call, name or take the address of a member of a user type only through an identifier spelled in, or produced by macro expansion of, the library headers the translation unit includes on the worker, or as an operator function, conversion function, constructor or destructor.
+  Every enabled member-pruning analysis reports `A12 library-spelled-members`,
+  even when it removes no unit, consistently with A11. The assumption is disabled
+  by `--no-assume=library-spelled-members`; only whole-family pruning then remains.
+  An unavailable raw/expanded header inventory also disables member pruning
+  with a reason, without disabling whole-family pruning (§4.7).
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -188,7 +194,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
-| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; only `instantiation-effects` (A11) is switchable; any other name is a usage error (exit 1) listing switchable names |
+| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11) and `library-spelled-members` (A12) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
@@ -1192,7 +1198,8 @@ library's declarations, layouts, overload resolution or template selection in
 Clang's parse the judge's (the parse may use another target, §4.2, and other
 headers). So the keep rules never treat a missing AST edge *from system code
 into user code* as evidence that a user declaration is unused: such calls
-are covered by A6 and the never-removed ADL names, and user specializations
+are covered by A6 and the never-removed ADL names, member calls by A12 and
+D3e's library/language inventory or whole-record fallback, and user specializations
 of system templates by rule 3 and the roots. AST edges from system code are
 positive evidence only.
 
@@ -1232,10 +1239,11 @@ family or to a structural shell; an unrecognized declaration is pinned with
 its dependencies.
 
 - a top-level declaration group (`int a, b;`, `struct S {…} s;`);
-- a record with all its lexical contents: members, friends (including hidden
-  friend definitions), nested declarations, and its out-of-line member
-  definitions; a non-inert static data member definition is a root (rule 1)
-  and so keeps its record;
+- a structural record family: non-function members, friends (including hidden
+  friend definitions), nested declarations and out-of-line static data definitions;
+  D3e function-member units below own their own declarations/definitions. Without
+  member pruning the original whole-record family includes functions too. A
+  non-inert static data member definition is a root (rule 1), keeping its record;
 - an overload set: all non-member functions and function templates with the
   same name in the same namespace, with their redeclarations;
 - a template family: primary, partial and explicit specializations,
@@ -1247,7 +1255,8 @@ its dependencies.
 - roots by kind: a namespace-scope `static_assert`, an explicit instantiation
   declaration or definition.
 
-Local declarations belong to their enclosing family. Namespaces and linkage
+Local declarations belong to their enclosing family, except separately extracted
+function-member units of local records under D3e. Namespaces and linkage
 specifications (`extern "C" { … }`) are *shells*: they don't root their
 contents; an emptied shell goes only if its name no longer appears.
 
@@ -1259,8 +1268,8 @@ removed; a family whose range crosses one is pinned (a function containing a
 spelling) are rendering metadata, not directives: they don't pin, and §4.8
 recomputes them (D3-1-8).
 
-Never removed in the first version: macro definitions, the members of a kept
-record (a record goes only as a whole), declarations produced by a macro
+Never removed: macro definitions, non-function members of a kept record
+(function members use the D3e member-unit rules below), declarations produced by a macro
 invocation (the whole invocation and everything it declares is pinned), **every user
 non-member operator family** (R3-4), every namespace-scope
 `using`-directive and `using`-declaration (lookup depends on them without
@@ -1273,8 +1282,64 @@ parameters.
 
 **Indexed names** (for the name rule): the names a family declares at
 namespace scope: record, enum, typedef/alias, function, variable, template,
-concept and namespace-alias names, and unscoped enumerators. Member names,
-template parameter names and local names are not indexed.
+concept and namespace-alias names, and unscoped enumerators. D3e also indexes
+function-member names in their own units; template parameter names and other
+local/member names are not indexed.
+
+**Member units (policy D3e, A12).** Functions and function templates with one
+name in one record form a unit, including overloads, in-class declarations,
+out-of-line definitions and specializations. Nested records have separate units.
+Data/static data members, nested types, aliases, enums and friends stay with the
+structural record family. A kept record no longer automatically keeps all methods.
+A unit stays if any of these eight rules applies:
+
+1. Constructors, destructors, conversions, operators, deduction guides, or any
+   virtual member (including virtualness in known instantiations) are excluded.
+2. Any user virtual member anywhere has the same name.
+3. The name is reserved.
+4. The name is an identifier token in the raw text of any included system header,
+   including transitive includes, inactive branches and macro definitions, or is
+   produced by macro expansion of those headers in the full unpruned TU, or is
+   a language lookup name (`begin`, `end`, `get`, coroutine protocol names).
+5. The name is an identifier token in kept user text outside its own unit,
+   including other units, macros and structural text.
+6. Kept AST code references the member, or a kept template pattern has a matching
+   dependent member/scope-reference name; this includes user-only pasted names.
+7. It has a root/pin: non-inert local static/thread storage, interpreted
+   attribute/assembly, keep annotation/flag, source directive or macro invocation.
+8. Its record or class template is explicitly instantiated (declaration or definition).
+
+Rule 4 uses the worker's include graph after parsing, then raw lexing with Clang
+identifier normalization, excluding comments/string contents. It unions this with
+identifiers from the full unpruned TU's preprocessor token stream whose expansion
+originates in a system macro definition or system context, including pasted names
+and user-supplied macro arguments. Under A12 the worker headers/configuration
+bound the judge's; unexpanded macros produce no names in this TU. Only an inventory
+that cannot be computed disables member pruning with a reason. Whole-family pruning
+continues under its existing gates. `--no-assume=library-spelled-members` likewise
+keeps records whole. Collection and retention leave a clear hook to widen the
+inventory to all scanned library builds later; that is not implemented.
+
+Member units join the ordinary fixpoint and rule 6's reverse potential dependency
+graph below as families. Forward member-to-owner retention keeps records; owner-to-blocked-member
+edges model rules 1–4/8. Name-only matches wait for an owner to survive, so unrelated
+spelling cannot resurrect a dead record. Roots, AST references and effect triggers
+may retain it. Units statically retained with their owner (rules 1–4/8, including
+every declaration of an aggregated unit) share the owner's effect component and
+incoming system-dispatch analysis. D3d-7 already accounted for those members in
+the whole record; splitting their edit/report rows adds no new library hook.
+The synthetic ownership relationship is forward retention only for other units;
+actual AST, lexical and dependent-name references remain potential effect edges.
+Free hooks, uncertified hidden friends and system specializations still use the
+existing unbounded-system-instantiation refusal. Missing inventories select whole-record
+extraction and its existing effect rules. A11 and its opt-out apply to units too.
+
+Edits own template headers, attributes, default arguments and terminators, leaving
+access labels and record braces intact. Mixed function/data declarations are
+pinned. Reports give one row per member unit and kept/removed counts. A12 is
+reported whenever member pruning is enabled, even without a deletion, like A11.
+See the [adopted member review](reviews/2026-11-20-member-pruning.md) for the
+critical review and historical prototype measurements.
 
 **Keep rules**, to a fixpoint:
 
@@ -1417,7 +1482,7 @@ reports `A11 instantiation-effects` alongside A7, even when no family is deleted
 (unless disabled by the flag below).
 
 **Without `instantiation-effects` (user, 2026-11-20).**
-`--no-assume=instantiation-effects` keeps policy D3d-7 and pruning enabled but
+`--no-assume=instantiation-effects` keeps policy D3e and pruning enabled but
 restores D3d-5's function-friend declarations in template contexts and potential
 template parameter objects as rule-6 effect sources. The pre-A11 NTTP proofs
 remain valid: written scalar/enum/pointer/reference/member-pointer types,
@@ -1431,15 +1496,17 @@ no-extended-temporary proof above succeeds. Necessarily-dynamic block locals
 are conservatively retained as sources; the optional dynamic-initialization
 proof is not used. Rule-1 exemptions, forward/reverse closure, attribute/symbol
 sources and refusal gates still apply. This mode needs A1–A7 and A9 where
-applicable, but does not need A11. Reports say
-`policy: D3d-7, without instantiation-effects`, explicitly record that the flag
+applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
+`policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 3 and checked as
+The setting is part of serialized worker protocol version 7 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
-model and policy identity distinguish the modes.
+model and policy identity distinguish both A11 and A12 flag combinations.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
-indexed name appears as an identifier token. It catches range and editing
+indexed name appears as an identifier token. For member units this additional
+check applies to individually removed units of kept owners; members removed
+with a whole record may share names with retained records. It catches range and editing
 bugs without a compiler; it is not an equivalence proof, and it can't see
 pasted names.
 
@@ -1454,12 +1521,13 @@ acceptable first result; rules are weakened only with a soundness argument.
 Clarifications from D3a (implementation, reviewed):
 
 - **Dependent member and qualified lookup** (`x.f()`, `x.template f<T>()`,
-  `M::op`, `T::value`, `typename Tr::type`) need no extra rule and don't
-  disable pruning: members go only with their whole record (out-of-line
-  members and member specializations included), and the record or enum that
-  carries the lookup is reached through the type carriers (template arguments
-  spelled in kept text, AST edges of seen instantiations, return and alias
-  chains, kept bases). A selection between user types by a system trait
+  `M::op`, `T::value`, `typename Tr::type`) don't disable pruning. D3e's
+  lexical/AST/dependent member-name rules preserve function units, including
+  out-of-line definitions and specializations; non-function members remain
+  with their record. The record or enum carrying lookup is reached through
+  type carriers (template arguments spelled in kept text, AST edges of seen
+  instantiations, return and alias chains, kept bases). With member pruning
+  disabled, the prior whole-record closure applies. A system trait's selection
   (`std::conditional_t<sizeof(long) == 4, A, B>`) names every candidate in
   kept text. Template arguments can't name a namespace.
 - **Pragmas:** source pragmas stay and pin a family they cross; only the
@@ -1476,17 +1544,18 @@ Clarifications from D3a (implementation, reviewed):
   `[[no_unique_address]]` spelling is supported, on a non-static, non-bit-field
   `FieldDecl` with verified ownership by its enclosing record. Both empty and
   nonempty member types are allowed, including template and nested records and
-  macro-produced attributes. Records retain their complete lexical contents;
-  members are never removed individually, and the attribute does not root an
-  unused record. Ordinary traversal still retains dependencies of member types,
+  macro-produced attributes. D3e preserves the structural record, all data
+  members and excluded special members; the attribute does not root an unused
+  record. Ordinary traversal still retains dependencies of member types,
   initializers, constructors and destructors. Expanded tokens and the parsed
   attribute class/context must agree: discarded attributes, arguments (even
   `()`), other declaration/statement contexts, `msvc::no_unique_address` and
   other scoped/vendor spellings disable pruning with `unsupported attribute`.
   The pinned frontend headers/AttrDocs are absent from this source tree, so the
   unaudited `__no_unique_address__` spelling remains unsupported. Safety follows
-  from preserving whole records and their dependency closure, without assuming
-  equal Clang/GCC layouts or selecting a particular `sizeof`/trait branch.
+  from preserving layout-relevant declarations and their dependency closure,
+  without assuming equal Clang/GCC layouts or selecting a particular
+  `sizeof`/trait branch. Removable nonvirtual function members cannot affect layout.
 - **Paste provenance** may be over-approximated by the whole enclosing macro
   invocation; uncertainty disables pruning.
 - **Inertness:** the whitelist is an upper bound; the implementation
@@ -1595,7 +1664,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7, A11, and A9 for L1c) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, A11, A12 for member pruning, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

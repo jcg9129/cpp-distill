@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Preserve the whole-record namespace-storage runtime oracle independently of A12.
+args | --no-assume=library-spelled-members
+kept dormant | instantiation effect:
+report | pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)

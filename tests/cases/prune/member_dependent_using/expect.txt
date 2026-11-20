@@ -1,0 +1,2 @@
+kept Base::hidden_hook | dependent name: hidden_hook
+kept Derived |
