@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept Value | not inert
+kept Value::Value<T> |
+kept Value::~Value<T> |
+kept Value::operator int |
+kept Value::operator() |
+removed Value::discarded_ordinary_member | outside the retention closure
+report | pruning assumption: A12 library-spelled-members
+report-absent | unbounded system instantiation effects

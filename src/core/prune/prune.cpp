@@ -320,6 +320,18 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     if (memberReasons[i].empty() && memberRegistry.contains(f.memberName))
       memberReasons[i] = "D3e rule 4: library or language spelling: " + f.memberName;
   }
+  // Rules 1-4/8 never separate a unit from a kept owner. Their incoming member
+  // dispatch was already covered by D3d-7's whole-record analysis. Keep using
+  // that owner analysis rather than inventing an unbounded library hook at
+  // the reporting/edit boundary. Include every declaration in a same-name
+  // unit (e.g. an overload whose sibling is virtual).
+  std::vector<bool> ownerDispatch(n);
+  for (FamilyId i = 0; i < n; ++i) {
+    const auto& f = m.families[i];
+    if (f.memberOf != noFamily && !memberReasons[i].empty())
+      for (auto unit : groups[find(i)])
+        if (m.families[unit].memberOf == f.memberOf) ownerDispatch[unit] = true;
+  }
   for (FamilyId i = 0; i < n; ++i) {
     const auto& f = m.families[i];
     std::string why;
@@ -335,7 +347,8 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     else if (f.kind == FamilyKind::assertion) why = "root: namespace static_assert";
     else if (f.kind == FamilyKind::instantiation) why = "root: explicit instantiation";
     else if (f.memberOf == noFamily && f.names.contains("main")) why = "root: main";
-    else if (std::any_of(f.names.begin(), f.names.end(), [&](const auto& name) { return m.keepNames.contains(name); })) why = "root: --keep";
+    else if ((f.memberOf != noFamily && m.keepNames.contains(f.memberName)) ||
+             std::any_of(f.names.begin(), f.names.end(), [&](const auto& name) { return m.keepNames.contains(name); })) why = "root: --keep";
     else if (std::any_of(m.annotations.begin(), m.annotations.end(), [&](auto a) { return a.family == i; })) why = "root: distill: keep";
     else for (auto r : f.ranges) for (auto d : m.sourceDirectives) if (intersects(r,d)) why = "pinned: source directive";
     if (!why.empty()) keep(i, f.memberOf == noFamily ? why : "D3e rule 7: " + why, noFamily);
@@ -353,12 +366,21 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   };
   auto tokens = pruningIdentifiers(m.text); if (!tokens.ok()) return tokens.error();
   std::map<std::string, std::vector<FamilyId>, std::less<>> index, callables;
+  std::map<std::string, std::vector<FamilyId>, std::less<>> effectIndex, effectCallables;
   std::vector<std::vector<FamilyId>> associations(n);
   std::vector<std::vector<std::size_t>> systemUses(n);
   for (FamilyId i = 0; i < n; ++i) {
     for (const auto& name : m.families[i].names) index[name].push_back(i);
     for (const auto& name : m.families[i].callableNames) callables[name].push_back(i);
     const auto& f = m.families[i];
+    for (const auto& name : f.names) effectIndex[name].push_back(i);
+    for (const auto& name : f.callableNames) effectCallables[name].push_back(i);
+    if (f.memberOf != noFamily) {
+      index[f.memberName].push_back(i); callables[f.memberName].push_back(i);
+      if (!ownerDispatch[i]) {
+        effectIndex[f.memberName].push_back(i); effectCallables[f.memberName].push_back(i);
+      }
+    }
     // Type association retains nonmember ADL/system hooks. Member lookup is
     // bounded separately by D3e names; a kept argument type is not a caller.
     if (f.memberOf == noFamily && (!f.callableNames.empty() || f.kind == FamilyKind::function || f.kind == FamilyKind::specialization || f.systemSpecialization))
@@ -406,11 +428,18 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     for (FamilyId id = 0; id < n; ++id) {
       const auto& f = m.families[id];
       for (auto target : f.edges) dependency(id,target);
-      for (const auto& name : lexical[id]) for (auto target : index[name]) dependency(id,target);
-      for (const auto& name : f.dependentNames) for (auto target : callables[name]) dependency(id,target);
+      // A whole record did not globally index its non-removable member names.
+      // Keep that boundary for owner-dispatched units: their owner/type-carrier
+      // paths already cover dispatch, and all their outgoing edges remain here.
+      // Independently removable units still need potential member-name edges.
+      for (const auto& name : lexical[id]) for (auto target : effectIndex[name]) dependency(id,target);
+      for (const auto& name : f.dependentNames) for (auto target : effectCallables[name]) dependency(id,target);
       for (auto target : associations[id]) dependency(id,target);
       for (auto entity : systemUses[id]) dependency(id,n+entity);
       for (auto member : members[id]) if (!memberReasons[member].empty()) dependency(id,member);
+      // Owner-retained units form the owner's effect component, just as they
+      // did in a whole record. Other members only have real source dependencies.
+      if (ownerDispatch[id]) dependency(id,f.memberOf);
     }
     for (auto [a,b] : m.unions) { dependency(a,b); dependency(b,a); }
     for (std::size_t id = 0; id < m.systemEntities.size(); ++id) {
@@ -432,9 +461,9 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
         // Type-associated hidden friends are covered by the carrier/association
         // graph; free hooks and system specializations have no such bound.
         const bool hook = f.nonMemberOperator ||
-            (f.memberOf != noFamily ? !out.memberDisabledReasons.empty() || m.libraryMemberNames.contains(f.memberName) ||
-              (!m.libraryMemberNames.empty() && f.memberBlocker.starts_with("D3e rule 1:")) :
-             std::any_of(f.callableNames.begin(),f.callableNames.end(),[&](const auto& name) { return adl.contains(name); }));
+            std::any_of(f.callableNames.begin(),f.callableNames.end(),[&](const auto& name) { return adl.contains(name); }) ||
+            (f.memberOf != noFamily && !ownerDispatch[id] &&
+             (!out.memberDisabledReasons.empty() || m.libraryMemberNames.contains(f.memberName)));
         if (f.systemSpecialization || (hook && (f.kind != FamilyKind::record || !f.boundedSystemHooks)))
           disable("unbounded system instantiation effects through " + f.label);
       }
@@ -447,6 +476,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   if (!out.disabledReasons.empty()) for (FamilyId id = 0; id < n; ++id) keep(id,"pruning disabled",noFamily);
   while (!work.empty()) {
     const auto id = work.front(); work.pop(); const auto& f = m.families[id];
+    if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
     for (auto member : members[id]) {
       if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
       if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
@@ -487,8 +517,10 @@ Result<bool> staticNameInvariant(const PruningModel& m, const PruningResult& r, 
     // same-named member elsewhere is allowed. D3e's additional invariant is
     // about individually removed units of records that remain in the output.
     const auto owner = m.families[i].memberOf;
-    if (owner == noFamily || r.families[owner].kept)
+    if (owner == noFamily || r.families[owner].kept) {
       removed.insert(m.families[i].names.begin(),m.families[i].names.end());
+      if (owner != noFamily) removed.insert(m.families[i].memberName);
+    }
   }
   for (const auto& t : tokens.value()) if (removed.contains(t.text)) return Error{"static name invariant: removed name " + t.text};
   return true;

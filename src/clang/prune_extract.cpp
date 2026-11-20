@@ -321,8 +321,11 @@ struct Extraction {
       const auto parent = owner(method->getParent());
       if (parent != noFamily) {
         f.memberOf = parent; f.memberName = memberName(method);
-        f.names.insert(f.memberName); f.callableNames.insert(f.memberName);
-        f.edges.push_back(parent);
+        // Keep the member spelling separate from namespace-scope names (e.g.
+        // a friend declaration). Retention indexes it through memberName.
+        // memberOf supplies forward ownership retention. It is not a source
+        // dependency: deleting a method cannot delete its containing class
+        // definition. Actual references to the owner still add AST/name edges.
         if (isa<CXXConstructorDecl,CXXDestructorDecl,CXXConversionDecl>(method) || method->isOverloadedOperator() || method->isVirtual())
           f.memberBlocker = "D3e rule 1: excluded kind or virtual";
         else if (isReserved(f.memberName)) f.memberBlocker = "D3e rule 3: reserved name";

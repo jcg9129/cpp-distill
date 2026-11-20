@@ -313,8 +313,26 @@ int main(int argc, char** argv) {
     config.probe.searchLists.directories.front().kind = IncludeKind::system;
     write("memory", "#define PROTOCOL allocate\n");
     {
-      auto [m,r,out] = analyze("#include <memory>\nint effect(){return 0;} template<int> struct Effect {static inline int x=effect();}; struct Alloc {int allocate(){return Effect<0>::x;}}; int dead(){return 0;} int main(){Alloc a;(void)a;}\n",true,true,{},true);
-      require(std::any_of(r.disabledReasons.begin(),r.disabledReasons.end(),[](const auto& why){return why.find("unbounded system instantiation effects through Alloc::allocate") != why.npos;}),"effectful library member must refuse"); ++cases;
+      auto [m,r,out] = analyze("#include <memory>\nint effect(){return 0;}\n"
+          "template<class T> struct Explicit {static inline int state=effect(); int allocate(){return state;} int spare(){return 0;}};\n"
+          "template struct Explicit<int>; int main(){Explicit<int> x;(void)x;}\n");
+      unit(m,r,"Explicit::allocate",true,"rule 8"); unit(m,r,"Explicit::spare",true,"rule 8");
+      verify(out); ++cases;
+    }
+    {
+      auto [m,r,out] = analyze("#include <memory>\nint effect(){return 0;}\n"
+          "template<class T> struct Virtual {static inline int state=effect(); virtual int allocate(){return state;} int allocate(int){return state;} int spare(){return 0;}};\n"
+          "int main(){Virtual<int> x;(void)x;}\n");
+      unit(m,r,"Virtual::allocate",true); unit(m,r,"Virtual::spare",false);
+      verify(out); ++cases;
+    }
+    {
+      auto [m,r,out] = analyze("#include <memory>\nint effect(){return 0;} template<int> struct Effect {static inline int x=effect();}; struct Alloc {int allocate(){return Effect<0>::x;} int spare(){return 0;}}; int dead(){return 0;} int main(){Alloc a;(void)a;}\n");
+      // Library-only dispatch still retains the entire effect path. The
+      // mandatory protocol unit uses its owner's D3d-7 dispatch analysis.
+      unit(m,r,"Alloc",true); unit(m,r,"Alloc::allocate",true);
+      unit(m,r,"Effect",true); unit(m,r,"effect",true);
+      unit(m,r,"Alloc::spare",false); unit(m,r,"dead",false); verify(out); ++cases;
     }
     write("memory", "#if 0\n@\n#endif\n");
     {

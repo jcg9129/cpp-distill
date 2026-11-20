@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 kept dormant | instantiation effect:
-# Member units expose potential constructor/destructor effects with library dispatch.
-disabled | unbounded system instantiation effects through Noisy::Noisy
-disabled | unbounded system instantiation effects through Noisy::~Noisy
+# Excluded members use the owner's whole-record dispatch analysis.
+report-absent | unbounded system instantiation effects

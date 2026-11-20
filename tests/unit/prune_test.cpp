@@ -64,7 +64,7 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-6 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-7 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
@@ -249,6 +249,31 @@ TEST(prune_instantiation_effects_refuse_unbounded_system_dispatch) {
     for (const auto& f : r.families) CHECK(f.kept);
   }
 }
+TEST(prune_owner_dispatch_preserves_nonmember_name_effect_paths) {
+  Model b;
+  b.m.libraryMemberNamesComputed = true;
+  const auto owner = b.add("Owner","struct Owner {};",FamilyKind::record);
+  const auto effect = b.add("Effect","struct Effect {};",FamilyKind::record);
+  b.m.families[effect].instantiationEffect = "template static storage";
+  const auto unit = b.add("unit","void free_hook() {}");
+  auto& f = b.m.families[unit];
+  f.memberOf = owner; f.memberName = "mandatory";
+  f.memberBlocker = "D3e rule 1: excluded kind or virtual";
+  f.names = {"free_hook"}; f.callableNames = {"free_hook"}; f.edges = {effect};
+  const auto caller = b.add("dormant","void dormant() { free_hook(); }");
+  const auto dead = b.add("dead","void dead() {}");
+  b.add("main","int main() {}");
+  auto r = b.run(); CHECK(r.disabledReasons.empty());
+  for (auto id : {owner,effect,unit,caller}) CHECK(r.families[id].kept);
+  CHECK(r.families[caller].reason.starts_with("instantiation effect:"));
+  CHECK(!r.families[dead].kept);
+  // Owner dispatch does not exempt a real free/system hook in the same unit.
+  b.m.families[unit].callableNames.insert("swap");
+  CHECK(!b.run().disabledReasons.empty());
+  b.m.families[unit].callableNames.erase("swap");
+  b.m.families[unit].systemSpecialization = true;
+  CHECK(!b.run().disabledReasons.empty());
+}
 TEST(prune_instantiation_effects_hidden_hooks_need_verified_own_record_carriers) {
   for (bool verified : {false,true}) {
     Model b;
@@ -385,6 +410,9 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   b.m.judgeInitial["__GNUC__"] = known("15"); b.m.expansions.push_back({0,"X",true,false,true,known("1"),known("2"),false,false,true});
   auto encoded = serializePruningModel(b.m); CHECK(encoded.ok()); auto decoded = parsePruningModel(encoded.value()); CHECK(decoded.ok());
   CHECK_EQ(serializePruningModel(decoded.value()).value(),encoded.value());
+  auto previous = encoded.value(); previous.replace(0,15,"DISTILL-PRUNE-6");
+  auto rejected = parsePruningModel(previous); CHECK(!rejected.ok());
+  CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
   CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
   CHECK(!parsePruningModel("DISTILL-PRUNE-9").ok());
@@ -393,12 +421,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-6 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-7 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-6 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-7 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-6 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-7 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

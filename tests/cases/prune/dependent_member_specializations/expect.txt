@@ -7,7 +7,7 @@ kept Box<8>::f |
 kept Box<4>::value |
 kept Box<8>::value |
 kept run |
-# D3e indexes member units in the reverse potential graph. The get name
-# collides with an effect-reaching Box unit, conservatively preserving its owner.
-kept Unused | instantiation effect:
+# Mandatory get units use their owners' whole-record dispatch analysis;
+# a same-name member of an unrelated unused record is not a type carrier.
+removed Unused | outside the retention closure
 kept main | root: main

@@ -22,6 +22,9 @@ enum class FamilyKind { declaration, function, record, enumeration, alias, varia
 struct PruneFamily {
   FamilyKind kind = FamilyKind::declaration;
   std::string label;
+  // Namespace-scope indexed names. A member unit's own spelling is separate
+  // in memberName, so effect indexing can use the whole-record boundary while
+  // preserving any nonmember names discovered in its text.
   std::set<std::string, std::less<>> names, callableNames, dependentNames;
   std::vector<EditRange> ranges;
   std::vector<FamilyId> edges, associatedTypes;

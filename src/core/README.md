@@ -830,7 +830,7 @@ A11 exclusions, compiler probes and measurements.
 accepts repetition and comma lists; `instantiation-effects` and
 `library-spelled-members` are the switchable names. Other names (including
 assumption IDs) are usage errors (exit 1) listing both names. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
-the worker. Pruning protocol **6** serializes both flags, and the parent rejects a worker
+the worker. Pruning protocol **7** serializes both flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.
 Both report formats print the readable A11 name; the flag mode lists it as
@@ -1355,8 +1355,13 @@ The worker inventories raw included system headers and identifiers emitted by
 the full TU's system macro expansions, including pasted results and user arguments.
 An incomplete inventory disables only member pruning.
 `--no-assume=library-spelled-members` also keeps records whole. Both flags are
-immutable protocol-v6 identity fields. Reports list A12 whenever members can be
-pruned, even without a deletion. The adopted rules, regression coverage and
+immutable protocol-v7 identity fields. Reports list A12 whenever members can be
+pruned, even without a deletion. Units retained with their owner by rules 1–4/8
+share its whole-record effect component and incoming system-dispatch analysis.
+Member spelling is stored separately from namespace-scope names; forward
+ownership retention is separate from actual effect dependencies. Protocol 7
+rejects older models with the previous interpretation of those fields.
+The adopted rules, regression coverage and
 historical prototype measurements are in
 [`2026-11-20-member-pruning.md`](../../docs/reviews/2026-11-20-member-pruning.md).
 The obsolete variant sweep script was removed; CI's normal ATL sweep measures D3e.

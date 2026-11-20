@@ -163,7 +163,9 @@ struct Pipeline {
       result.retention = take(computeRetention(*result.pruningModel));
       for (const auto& name : options.keep) {
         const auto& families = result.pruningModel->families;
-        if (std::none_of(families.begin(),families.end(),[&](const auto& f) { return f.names.contains(name); }))
+        if (std::none_of(families.begin(),families.end(),[&](const auto& f) {
+              return f.names.contains(name) || (f.memberOf != noFamily && f.memberName == name);
+            }))
           throw Error{"--keep " + name + ": no indexed declaration in checked flat source"};
       }
       if (Clock::now() >= deadline) throw Error{"pruning analysis deadline exceeded for flat.cpp"};

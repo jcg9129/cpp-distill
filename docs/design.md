@@ -1321,11 +1321,17 @@ keeps records whole. Collection and retention leave a clear hook to widen the
 inventory to all scanned library builds later; that is not implemented.
 
 Member units join the ordinary fixpoint and rule 6's reverse potential dependency
-graph below as families. Member-to-owner edges keep records; owner-to-blocked-member
+graph below as families. Forward member-to-owner retention keeps records; owner-to-blocked-member
 edges model rules 1–4/8. Name-only matches wait for an owner to survive, so unrelated
 spelling cannot resurrect a dead record. Roots, AST references and effect triggers
-may retain it. Effectful library-spelled or implicit-call members use the existing
-unbounded-system-instantiation refusal. Missing inventories select whole-record
+may retain it. Units statically retained with their owner (rules 1–4/8, including
+every declaration of an aggregated unit) share the owner's effect component and
+incoming system-dispatch analysis. D3d-7 already accounted for those members in
+the whole record; splitting their edit/report rows adds no new library hook.
+The synthetic ownership relationship is forward retention only for other units;
+actual AST, lexical and dependent-name references remain potential effect edges.
+Free hooks, uncertified hidden friends and system specializations still use the
+existing unbounded-system-instantiation refusal. Missing inventories select whole-record
 extraction and its existing effect rules. A11 and its opt-out apply to units too.
 
 Edits own template headers, attributes, default arguments and terminators, leaving
@@ -1493,7 +1499,7 @@ sources and refusal gates still apply. This mode needs A1–A7 and A9 where
 applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 6 and checked as
+The setting is part of serialized worker protocol version 7 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
 model and policy identity distinguish both A11 and A12 flag combinations.
 

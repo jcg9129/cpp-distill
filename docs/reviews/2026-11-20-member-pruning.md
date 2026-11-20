@@ -38,7 +38,7 @@ same repeatable/comma-list parser as `instantiation-effects`. Every enabled memb
 analysis reports **A12 library-spelled-members**, including analyses that remove
 no member, following A11's convention. Disabled modes omit A12 and explain why.
 Both flags are immutable parent/worker identity fields, serialized in private
-protocol version **6** after removal of the obsolete paste-header list. There is
+protocol version **7** after the owner-dispatch representation fix below. There is
 no pruning-result cache; serialized model identity includes both flags and the
 collected inventory.
 
@@ -87,9 +87,11 @@ instantiation-effect graph. The latter includes lexical/AST/dependent-name edges
 family unions and system edges over **all** text, not just retained text or locally
 observed instantiations. Owner-to-member blocking edges model rules 1–4/8. A dormant
 member that may instantiate an effect source remains, along with its helpers.
-An effectful library protocol member or implicit-call kind has unbounded incoming
-system dispatch and uses the existing `unbounded system instantiation effects`
-refusal. A11 exemptions and `--no-assume=instantiation-effects` apply independently.
+Units retained with their owner by rules 1–4/8 share the owner's effect component
+and incoming system-dispatch analysis, as explained below. Free hooks,
+uncertified hidden friends and system specializations still use the existing
+`unbounded system instantiation effects` refusal. A11 exemptions and
+`--no-assume=instantiation-effects` apply independently.
 On inventory failure extraction keeps records whole, using the existing
 whole-family instantiation-effect rules.
 
@@ -132,10 +134,11 @@ Review of the prototype found and fixed these production blockers:
   policy. D3e defaults, an A12 opt-out, refusal reasons, unit counts and protocol
   identity replace the experimental interface.
 
-Reverse potential-name collisions can conservatively retain an otherwise unused
-record: unlike forward name matching, this graph includes every member unit
-that might reach an effect source. The dependent-specialization regression records
-this intentional over-retention rather than weakening effect closure.
+Reverse potential-name collisions between independently removable units can
+conservatively retain an otherwise unused record. Owner-dispatched units instead
+use the whole-record name-index boundary described below; the dependent-member
+specialization regression now removes the unrelated `Unused::get` record while
+preserving every `Box` specialization and its real effect paths.
 
 The applied prototype already fixed structural-fragment loss in normalization,
 qualified-friend ownership, outer template-header ranges and member-template ADL
@@ -146,7 +149,106 @@ library protocols, flag independence, and A11-on/off instantiation effects.
 Reports emit one member-unit row per unit plus kept/removed counts, alongside
 ordinary family provenance and byte totals.
 
-## Productization validation
+## Owner dispatch regression
+
+The CSES ATL sweep exposed an extra refusal in `modular-arithmetic/residues`:
+splitting `dynamic_mod_int`'s constructors made them new unbounded library hooks
+in the reverse closure of the class template's static inline reducer. This
+was a partitioning artifact: rule 1 never removes a constructor while its owner
+survives, and D3d-7 already analyzed its text and dependencies in that owner.
+The same issue applies to destructors, conversions, operators, deduction guides,
+virtual units and explicitly instantiated records (rule 8). After removing the
+constructor refusal, the example also exposed `dynamic_mod_int::value` and
+`mod_int::value`: rule 4 always retains these library-spelled units with their
+owners. Rules 2 and 3 likewise never separate their units from a kept owner.
+
+The fix preserves separate edit/report rows but treats every unit statically
+retained by rules 1–4/8 as part of its owner's effect component. Owner-to-unit
+and unit-to-owner effect edges preserve all potential dependencies and triggers;
+incoming member dispatch uses the owner's D3d-7 analysis. A blocker on any
+declaration applies to the whole aggregated unit, including nonvirtual overloads
+of a virtual name. Deduction guides already union with their deduced template.
+The owner's free/hidden hooks and system specializations retain their original
+checks, including the written-own-record carrier certificate. The change does
+not certify an arbitrary free callback or a target-selected alias as bounded.
+The reverse name index likewise excludes these structural member names, matching
+D3d-7: indexing them globally would invent cross-record effect paths through
+coincidental names such as `value` and `get`. Real AST references still target
+their units, all outgoing lexical/dependent-name edges remain, and independently
+removable members still participate in reverse member-name matching. Forward
+name matching continues to index every member for rules 5 and 6. The model stores
+the member spelling separately from namespace-scope indexed names, so real
+nonmember names in a unit still participate in reverse effect matching. A unit
+test checks that distinction and verifies that a true system-specialization
+hook in a mandatory unit continues to refuse.
+Protocol 7 rejects older parent/worker models: although the field layout is
+unchanged, member spelling and ownership now have different semantics. A valid
+version-6 payload is explicitly rejected by the protocol regression test.
+
+This is sound because the owner and these units cannot be removed separately.
+Their combined text and real dependencies are the corresponding retained part
+of D3d-7's whole record. The members omitted from that component are precisely
+the independently removable units, which still undergo D3e's name/AST retention
+and potential-effect analysis, including conservative additional name edges.
+Every unseen library call to a mandatory member still has the same retained
+type carrier, definition and effect dependencies as in D3d-7. A12's inventory
+continues to protect all library-spelled members, including dormant protocols;
+the change avoids adding a second, unbounded hook solely at an edit boundary.
+
+Separately, `memberOf` now supplies forward ownership retention directly, instead
+of storing an artificial AST edge in `edges`. Ownership alone is not a source
+instantiation dependency: removing a method cannot remove its enclosing record
+definition. Leaving this artificial edge in the reverse graph retained *every*
+ordinary member of an effectful owner. Actual type, AST, lexical, dependent-name,
+union and system dependencies remain in that graph, including references to
+the owner's static storage from a member's signature or body.
+
+The `member_owner_dispatch` prune case has an effectful template static inline
+member, constructors used through `std::vector`, a destructor, conversion and
+operator, plus an unused ordinary function that must be removed. It reproduces
+the refusals on the pre-fix worker and compares original/pruned output with GCC
+and Clang. Focused cases also cover virtual/nonvirtual overload aggregation,
+rule 8 and a dormant library-only allocator protocol whose entire effect path
+must survive while its unrelated ordinary member is removed. The namespace
+constant fixture now exercises its original runtime oracle with A12 enabled,
+instead of expecting the spurious constructor/destructor refusal.
+
+The include-graph audit covered all **68 ATL examples** at `97d9e23`. Only
+`modular-arithmetic/residues` includes `dynamic_mod_int`; the other mutable static
+storage found in `counting_sort` and `splay_engine` is block-scope storage excluded
+from effect seeding by A11. A productized spot check of **27 other examples**
+found no unbounded-system-effect refusal. All **54 GCC/Clang runs** matched the
+examples' expected output. Twenty-six artifacts were pruned; `fast-io/roundtrip`
+fell back on an unresolved user conditional in `reader.hpp:88`.
+
+With the final worker, `modular-arithmetic/residues` is **pruned to 40,265 bytes**
+using `--strip-comments --no-line-markers --judge cses`, C++23, `-O2`, and default
+A11/A12. The marker-free validation passes and the artifact contains no `#line`.
+Standalone builds with GCC 15.2 and Clang 22.1.8 targeting x86_64 both run under
+QEMU and match `residues.out` byte for byte. The final generation, compilation and
+run deadlines were 120, 60 and 30 seconds respectively. Builds reused the same
+read-only LLVM 23.1.5 SDK through a symlink, with Clang 22, `-O1 -DNDEBUG`, LLD
+and at most `-j2`.
+
+The nine Python suites passed **293 tests** (209 unittest, 84 library pytest).
+The library tests ran as 83 tests plus the large fourteen-build fixture in
+isolation to fit the container's 3 GiB memory limit. Test assertions are unchanged.
+The compiler packages were extracted within the worktree after checking their
+SHA-256 values against Ubuntu's package indexes; the original SDK and ATL clone
+were read-only. Local evidence is in `measurements/owner-dispatch/` (including
+`sweep/summary.json` and `static-inline-consumers.json`) and `.checks/`.
+
+All **104 CTest checks** passed across the final full run and an isolated rerun,
+including all 81 caide cases. The full run passed 103 checks; the aggregate
+`pipeline_cli_d3c` exceeded its 120-second deadline while another CTest was
+running. It passed alone in **82.25 seconds**, with a temporary build-directory
+180-second hard cap. Repository test deadlines and assertions are unchanged.
+`resolver_differential` used the same generated-file cross-GCC oracle adjustment
+described below for the native host's unsigned `wchar_t`. All 36 focused pruning
+unit tests pass, including real nonmember-hook preservation and protocol-6
+rejection. `git diff --check` passes.
+
+## Original productization validation
 
 The previously downloaded, checksum-verified LLVM 23.1.5 SDK was reused through
 an ignored `spike-work/sdk` symlink; the original SDK was not modified. Builds
@@ -162,8 +264,9 @@ and unused paste macros, pasted dependent names in uninstantiated system templat
 system macros invoked with user arguments (including expanded arguments), system
 pasting at user call sites, and user macros invoked inside system templates.
 
-Existing instantiation-effect expectations now check the effect-bearing member
-and its retained owner separately. The namespace-constant fixture still refuses
+The original productization's instantiation-effect expectations checked the
+effect-bearing member and its retained owner separately. Before the owner-dispatch
+fix above, the namespace-constant fixture refused
 unbounded constructor/destructor effects under member pruning; its A12 opt-out
 variant preserves the whole-record runtime comparison. Refusal cases validate
 the original program's runtime oracle without trying to render a refused result.
