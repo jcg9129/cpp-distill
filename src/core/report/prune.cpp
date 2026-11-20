@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/report/prune.h"
 #include "core/names/adl.h"
+#include "core/library/library.h"
 #include <iomanip>
 #include <numeric>
 #include <sstream>
@@ -14,6 +15,7 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
   out << '\n';
   out << "member pruning: " << (r.memberDisabledReasons.empty() && r.disabledReasons.empty() ? "enabled" : "disabled") << '\n';
   out << "library-spelled identifier names: " << m.libraryMemberNames.size() << '\n';
+  out << "library member inventory: " << embeddedLibraryData().memberInventoryProvenance << '\n';
   for (const auto& why : r.memberDisabledReasons) out << "member pruning disabled: " << why << '\n';
   for (const auto& a : m.untranslatedOptions) out << "untranslated parse option: " << a << '\n';
   for (const auto& why : r.disabledReasons) out << "pruning disabled: " << why << '\n';

@@ -15,10 +15,12 @@ NAME = '__cpp_lib_test'
 
 
 def report(build='profile-test', value='1L', condition='', volatile=(), reproduced=True, status='ok'):
+    from member_inventory import inventory
     text = '#define ' + NAME + ' 1L'
     if condition:
         text = '#if ' + condition + '\n' + text + '\n#endif'
     return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
+                member_inventory=inventory({'0/charconv': text}),
                 std='c++23', triple='x86_64-pc-linux-gnu', flags=[], compiler='synthetic',
                 reproduced=reproduced, provenance=dict(build='recipe=https://example.test'),
                 volatile=list(volatile), observations={},

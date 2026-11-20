@@ -79,8 +79,7 @@ struct PruningModel {
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
   // Raw system-header identifiers plus identifiers emitted through system macro
-  // expansion in the full unpruned TU. Future scanned-library inventories can be
-  // unioned here without changing the retention rule.
+  // expansion in the full unpruned TU, unioned with all scanned-library names.
   bool libraryMemberNamesComputed = false;
   std::vector<std::string> memberDisabledReasons;
   std::set<std::string, std::less<>> libraryMemberNames;

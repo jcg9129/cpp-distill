@@ -128,6 +128,11 @@ TEST(resolve_fake_external_model_and_errors) {
   auto r = resolve("#if 1 + 2\nx\n#endif\n", e);
   CHECK_EQ(r.decisions[0].reason, "unknown integer model"); CHECK(e.inputs.empty());
   ResolveOptions o; o.requirements.integers = IntegerModel{};
+  if (const auto* mode = std::getenv("DISTILL_TEST_EVALUATOR"); mode && std::string_view(mode) == "differential") {
+    // This arithmetic fixture needs a known model, not an x86 wchar layout
+    // that the native ARM64 GCC oracle cannot represent.
+    test::TempDirectory temp; o.requirements.integers = localIntegerModel(temp.path);
+  }
   r = resolve("#if 1 + 2\nx\n#endif\n", e, o);
   CHECK(r.decisions[0].requirements.integers.has_value());
   e.answer = [](const auto&) -> Result<bool> { return Error{"bad expression"}; };

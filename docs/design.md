@@ -160,11 +160,11 @@ these, and only these; the report lists each one an output depended on, and
   By default every pruned artifact relies on A11; reports print
   `A11 instantiation-effects` alongside A7. `--no-assume=instantiation-effects`
   disables this assumption while keeping pruning enabled (§4.7).
-- **A12 (`library-spelled-members`)** (user, 2026-11-20) The judge's standard library headers call, name or take the address of a member of a user type only through an identifier spelled in, or produced by macro expansion of, the library headers the translation unit includes on the worker, or as an operator function, conversion function, constructor or destructor.
+- **A12 (`library-spelled-members`)** (user, 2026-11-20) The judge's standard library headers call, name or take the address of a member of a user type only through an identifier spelled in, or produced by macro expansion of, the library headers the translation unit includes on the worker, or spelled in the headers of a scanned library build, or as an operator function, conversion function, constructor or destructor.
   Every enabled member-pruning analysis reports `A12 library-spelled-members`,
   even when it removes no unit, consistently with A11. The assumption is disabled
   by `--no-assume=library-spelled-members`; only whole-family pruning then remains.
-  An unavailable raw/expanded header inventory also disables member pruning
+  An unavailable worker raw/expanded header inventory also disables member pruning
   with a reason, without disabling whole-family pruning (§4.7).
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
@@ -628,6 +628,23 @@ scans select a supported ISO dialect by GCC major; profile scans always retain
 the profile's exact dialect and flags. Adding a profile or eligible compatibility
 matrix row automatically adds a required input to the merger.
 
+**A12 member inventory.** Generator 4 additionally raw-tokenizes the complete
+reachable-header set already computed for each eligible build, including libc,
+inactive branches and macro definitions. Comments, character/string literals and
+pp-numbers contribute no identifier names; line splices and universal character
+names are decoded. The compact schema-2 file stores one sorted global
+`member_names` union, plus each build's name count/digest, reached-header count
+and `token_pasting` boolean. Full evidence retains per-build sorted names and
+the header keys containing `##` or `%:%:`. Pasting is report-only, since the
+worker already inventories actual expansions. The binary embeds the union and
+reports its build count and generator; this is independent of resolver fact
+selection and applies even for builds without reproduced profile snapshots.
+The old generator-3 baseline remains accepted with worker-only provenance.
+Regenerate using `library.yml` (manual dispatch, no inputs; it calls profiles
+with `profiles: all` and the complete eligible extension matrix), review
+`library-generated`, and import its `library.json` byte for byte as documented
+in `ci/library/README.md`.
+
 **Configuration audit.** Analyse actual installed headers, not `version.def`
 alone: lexical `#if`/`#ifdef`/`#ifndef` stacks, including nested inactive
 branches and previous `#elif` tests controlling `#else`. This handles GCC 13's
@@ -713,7 +730,7 @@ total times plus header-key and `-dM` probe counts. Each available requested
 header is preprocessed once.
 
 `ci/library/merge.py` requires reports from the complete profiles and extensions
-matrices and never unions old facts into fresh results. Schema 2/generator 3
+matrices and never unions old facts into fresh results. Schema 2/generator 4
 separates the compact baseline `data/library/library.json` from the uploaded
 `library-evidence.json`. The latter retains complete original build reports,
 including all definitions, conditions, include paths, compiler inputs and
@@ -1297,7 +1314,8 @@ A unit stays if any of these eight rules applies:
    virtual member (including virtualness in known instantiations) are excluded.
 2. Any user virtual member anywhere has the same name.
 3. The name is reserved.
-4. The name is an identifier token in the raw text of any included system header,
+4. The name is an identifier token in the raw text of any included system header
+   or any reachable header of a scanned library build (including libc),
    including transitive includes, inactive branches and macro definitions, or is
    produced by macro expansion of those headers in the full unpruned TU, or is
    a language lookup name (`begin`, `end`, `get`, coroutine protocol names).
@@ -1313,12 +1331,16 @@ Rule 4 uses the worker's include graph after parsing, then raw lexing with Clang
 identifier normalization, excluding comments/string contents. It unions this with
 identifiers from the full unpruned TU's preprocessor token stream whose expansion
 originates in a system macro definition or system context, including pasted names
-and user-supplied macro arguments. Under A12 the worker headers/configuration
-bound the judge's; unexpanded macros produce no names in this TU. Only an inventory
-that cannot be computed disables member pruning with a reason. Whole-family pruning
-continues under its existing gates. `--no-assume=library-spelled-members` likewise
-keeps records whole. Collection and retention leave a clear hook to widen the
-inventory to all scanned library builds later; that is not implemented.
+and user-supplied macro arguments. The worker unions the embedded global sorted
+identifier inventory from every eligible L1c build (§4.3.3). Scanned token pasting
+is report-only; actual worker expansion supplies pasted names for this TU.
+This widening only keeps more members. Under A12 these inventories bound the
+judge's; unexpanded worker macros produce no names in this TU. An unavailable
+worker inventory disables member pruning with a reason. The existing generator-3
+baseline has no scanned inventory: member pruning uses worker headers only and
+reports `scanned-build inventory unavailable` until the CI data import.
+Whole-family pruning continues under its existing gates.
+`--no-assume=library-spelled-members` likewise keeps records whole.
 
 Member units join the ordinary fixpoint and rule 6's reverse potential dependency
 graph below as families. Forward member-to-owner retention keeps records; owner-to-blocked-member

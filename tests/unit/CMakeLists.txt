@@ -14,6 +14,28 @@ target_compile_definitions(distill_unit_tests PRIVATE DISTILL_EXTENSION_DATA="${
 add_dependencies(distill_unit_tests distill_test_helper)
 add_test(NAME unit COMMAND distill_unit_tests)
 set_tests_properties(unit PROPERTIES TIMEOUT 120)
+# Replace the baseline object in these test binaries with a synthetic baseline
+# emitted by the real merger/embedder. The committed matrix data stays untouched.
+set(member_fixture "${CMAKE_CURRENT_BINARY_DIR}/embedded_members.cpp")
+execute_process(COMMAND "${Python3_EXECUTABLE}"
+  "${PROJECT_SOURCE_DIR}/ci/library/fixtures/embedded_members.py" "${member_fixture}"
+  RESULT_VARIABLE member_fixture_result)
+if(NOT member_fixture_result EQUAL 0)
+  message(FATAL_ERROR "Cannot generate embedded member inventory test fixture")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${PROJECT_SOURCE_DIR}/ci/library/fixtures/embedded_members.py")
+add_executable(distill_embedded_members_test embedded_members_test.cpp "${member_fixture}")
+target_link_libraries(distill_embedded_members_test PRIVATE distill_core)
+target_compile_definitions(distill_embedded_members_test PRIVATE DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
+if(TARGET distill_clang)
+  add_executable(distill_inventory_test_worker "${PROJECT_SOURCE_DIR}/src/clang/prune_worker.cpp" "${member_fixture}")
+  target_link_libraries(distill_inventory_test_worker PRIVATE distill_clang)
+  add_test(NAME embedded_members COMMAND distill_embedded_members_test "$<TARGET_FILE:distill_inventory_test_worker>")
+else()
+  add_test(NAME embedded_members COMMAND distill_embedded_members_test)
+endif()
+set_tests_properties(embedded_members PROPERTIES TIMEOUT 60)
 if(TARGET distill_clang)
   add_test(NAME resolver_clang COMMAND distill_unit_tests --filter resolve_)
   set_tests_properties(resolver_clang PROPERTIES TIMEOUT 120 ENVIRONMENT "DISTILL_TEST_EVALUATOR=clang")

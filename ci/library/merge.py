@@ -10,6 +10,7 @@ import sys
 from audit import ROOT, VERSION, apply_trust
 from capture import write
 from probe import trusted_build_inputs
+from member_inventory import validate_inventory
 
 
 def canonical(data):
@@ -26,6 +27,8 @@ def merge(reports, expected):
         if (report.get('schema') != 2 or report.get('generator') != VERSION or
                 report.get('audit', {}).get('generator') != VERSION):
             raise ValueError('unsupported library report version')
+        if not validate_inventory(report.get('member_inventory')):
+            raise ValueError('missing or malformed library member inventory')
         key = report['build']
         if key in builds:
             raise ValueError('duplicate library build: ' + key)
@@ -112,11 +115,16 @@ def merge(reports, expected):
         agreement[major] = intern('root_agreements', agreement[major])
     compact_builds = {}
     for key, build in sorted(builds.items()):
-        compact_builds[key] = {k: v for k, v in build.items() if k not in ('audit', 'headers')}
+        compact_builds[key] = {k: v for k, v in build.items() if k not in ('audit', 'headers', 'member_inventory')}
+        inv = build['member_inventory']
+        compact_builds[key]['member_inventory'] = dict(
+            names_sha256=digest(inv['names']), name_count=len(inv['names']),
+            reachable_headers=inv['reachable_headers'], token_pasting=inv['token_pasting'])
         compact_builds[key].update(evidence_sha256=digest(build),
                                   headers=intern('build_headers', {h: intern('snapshots', s) for h, s in sorted(build['headers'].items())}))
     tables['macro_sets'] = delta_sets(tables['macro_sets'])
-    return dict(schema=2, generator=VERSION, builds=compact_builds,
+    member_names = sorted(set().union(*(set(b['member_inventory']['names']) for b in builds.values())))
+    return dict(schema=2, generator=VERSION, builds=compact_builds, member_names=member_names,
                 versions=versions, agreement=agreement, **tables)
 
 
@@ -183,6 +191,14 @@ def baseline_text(data):
     return '{\n' + ',\n'.join(sections) + '\n}\n'
 
 
+def inventory_bytes(data):
+    """Exact compact JSON bytes attributable to the A12 fields."""
+    without = {k: v for k, v in data.items() if k != 'member_names'}
+    without['builds'] = {k: {f: v for f, v in b.items() if f != 'member_inventory'}
+                         for k, b in data['builds'].items()}
+    return len(baseline_text(data).encode()) - len(baseline_text(without).encode())
+
+
 def expected_builds():
     # Both matrices are the source of truth; adding any row is mandatory here.
     import yaml
@@ -217,6 +233,8 @@ if __name__ == '__main__':
     try:
         reports = [json.loads(p.read_text(encoding='utf-8')) for p in sorted(args.artifacts.rglob('*-library.json'))]
         data = merge(reports, expected_builds())
+        print(f'A12 member inventory: {len(data["member_names"])} names, '
+              f'{len(data["builds"])} scanned builds, {inventory_bytes(data)} added compact JSON bytes')
         full = dict(schema=2, generator=VERSION, builds={r['build']: r for r in reports})
         write(args.evidence_output or args.output.with_name('library-evidence.json'), full)
         args.output.parent.mkdir(parents=True, exist_ok=True)

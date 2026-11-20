@@ -26,7 +26,7 @@ PR and manual captures use the AtCoder compiler cache by default. Only the weekl
 scheduled L1c drift call passes `cold_start: true`; monthly reproduction retains
 its separate cold capture.
 
-The generated artifact contains two files (schema 2, generator 3):
+The generated artifact contains two files (schema 2, generator 4):
 
 - `library.json`: the compact, deterministic baseline to import into
   `data/library/`. It retains build metadata, per-header snapshot facts/status,
@@ -40,6 +40,31 @@ The generated artifact contains two files (schema 2, generator 3):
   `evidence_sha256`, the full SHA-256 of its complete report serialized as ASCII
   JSON with sorted keys and separators `(',', ':')`, without a trailing newline.
   Thus evidence-only changes still fail the byte comparison.
+
+For A12, each capture raw-tokenizes **every** file in its existing reachable
+header set, including libc, inactive branches and macro definitions. It skips
+comments, character/string literals (including raw literals and their suffixes)
+and pp-numbers, and decodes phase-2 splices and universal character names to
+the identifier spelling used by the worker. No configuration or snapshot-status
+filter narrows this inventory. Roots and textual include limitations are the
+same as the existing reachable-header scan, including `include_next` and PBDS.
+
+Full evidence adds `member_inventory`: sorted unique `names`,
+`reachable_headers` (the number of search-relative header keys), `token_pasting`
+and sorted `token_pasting_headers` keys. Only actual raw `##`/`%:%:` tokens count;
+comments/literals do not. This flag is report-only: the worker's own expansion
+inventory supplies local paste results, and scanning does not attempt to predict
+cross-build macro expansion.
+
+The compact file stores one global sorted `member_names` union across **all**
+eligible builds, including approximate profiles and extension scans. It does
+not repeat per-build sets or add a membership matrix. Each compact build stores
+`member_inventory` with `name_count`, `names_sha256` (the full SHA-256 of the
+canonical sorted name array), `reachable_headers` and `token_pasting`.
+Full evidence retains membership for review, and its digest still detects
+per-build changes even when the global union is unchanged. This widening can
+only retain more members. JSON size grows by the canonical name-array bytes
+plus one small summary per build; CI prints the exact added inventory bytes.
 
 The compact file shares repeated records using content-address tables (the first
 16 hexadecimal SHA-256 digits, with collision detection). Build `headers` refer
@@ -138,6 +163,14 @@ gh run watch <run-id>
 gh run download <run-id> --name library-generated --dir out/library-review
 ```
 
+Dispatch `.github/workflows/library.yml` ("L1c library data") on the branch
+containing these changes, with **no dispatch inputs**. It calls `profiles.yml`
+with `profiles: all`, `artifact_prefix: library-snapshot`, `cold_start: false`,
+and `extensions.yml` with its complete default matrix. Do not dispatch only a
+single profile or combine old generator-3 artifacts with new captures. The
+first comparison will fail because the committed generator-3 baseline has no
+inventory; `library-generated` is uploaded even on this expected difference.
+
 Review the failed check's compact diff and both files: per-build status,
 per-root independent pairs, dependencies, full evidence and unknown reasons.
 Review the GCC 13 CSES/Timus and GCC 14 Codeforces profiles, MinGW gthreads/ABI
@@ -195,10 +228,16 @@ execution is needed for these tests.
 
 CMake invokes `embed.py` with the reviewed baseline. It validates versions,
 content addresses and references, then emits interned dense header-state arrays
-with shared name/value pools. Only standard-list transitions and reproduced
-profile build identities enter the binary. Values dependent on volatile native
-inputs remain unknown, using conservative per-major dependency closures even
+with shared name/value pools, build identities and the global A12 member-name
+union. Feature transitions cover standard-list headers. Values dependent on
+volatile native inputs remain unknown, using conservative per-major dependency closures even
 for own-build snapshots. Missing/malformed data fails configuration; edits to
 the baseline or generator trigger regeneration. Runtime needs no data files.
-The embedded provenance records schema 2, generator 3, embedding format 1 and
-the SHA-256 of the exact baseline bytes.
+The embedded provenance records schema 2, generator 3 or 4, embedding format 1
+and the SHA-256 of the exact baseline bytes. Generator 4 also embeds the global
+member-name union, independently of resolver profile selection, and reports
+`library member inventory: worker headers + N scanned builds (generator 4)`.
+Generator 3 remains accepted without an inventory and reports
+`library member inventory: worker headers; scanned-build inventory unavailable`.
+The committed data is intentionally left at generator 3 until the full CI
+matrix is captured, reviewed and imported; do not regenerate it locally.

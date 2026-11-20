@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-name: L1c library feature macro data
+name: L1c library data
 on:
   workflow_call:
     inputs:
@@ -50,7 +50,7 @@ jobs:
         with:
           pattern: extensions-*
           path: out/library-input
-      - name: Regenerate and diff snapshots, dependencies, classification and agreement
+      - name: Regenerate and diff feature facts and A12 member inventory
         run: python3 ci/library/merge.py out/library-input --output out/library/library.json --check data/library/library.json
       - if: always() && !cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

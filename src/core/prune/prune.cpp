@@ -2,6 +2,7 @@
 #include "core/prune/prune.h"
 #include "core/names/adl.h"
 #include "core/names/names.h"
+#include "core/library/library.h"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -304,8 +305,11 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     }
   };
   const auto adl = registry.names(m.dialect);
-  // Hook: union inventories of all scanned library builds here in later work.
+  // Also cover models supplied without worker extraction (and offline tests).
   auto memberRegistry = m.libraryMemberNames;
+  const auto scannedMemberNames = embeddedLibraryData().memberNames;
+  if (m.assumeLibrarySpelledMembers)
+    for (auto name : scannedMemberNames) memberRegistry.emplace(name);
   // Language member lookup applies even with no system includes.
   for (const char* name : {
       "begin", "end", "get", "get_return_object", "initial_suspend", "final_suspend",
@@ -466,7 +470,8 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
         const bool hook = f.nonMemberOperator ||
             std::any_of(f.callableNames.begin(),f.callableNames.end(),[&](const auto& name) { return adl.contains(name); }) ||
             (f.memberOf != noFamily && !ownerDispatch[id] &&
-             (!out.memberDisabledReasons.empty() || m.libraryMemberNames.contains(f.memberName)));
+             (!out.memberDisabledReasons.empty() || m.libraryMemberNames.contains(f.memberName) ||
+              std::binary_search(scannedMemberNames.begin(),scannedMemberNames.end(),f.memberName)));
         if (f.systemSpecialization || (hook && (f.kind != FamilyKind::record || !f.boundedSystemHooks)))
           disable("unbounded system instantiation effects through " + f.label);
       }

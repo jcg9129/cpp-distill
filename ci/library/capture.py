@@ -10,6 +10,7 @@ from time import perf_counter
 
 from audit import ROOT, VERSION, classify, apply_trust
 from probe import build_inputs, trusted_build_inputs
+from member_inventory import inventory
 sys.path.append(str(ROOT / 'ci/extensions'))
 sys.path.append(str(ROOT / 'ci/profiles'))
 from generate import reachable
@@ -126,11 +127,15 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
                 triple=command(compiler, ['-dumpmachine']).stdout.strip(),
                 compiler=command(compiler, ['--version']).stdout.splitlines()[0],
                 provenance=provenance, reproduced=reproduced, observations=observations,
-                volatile=sorted(volatile), headers=headers, audit=audit)
+                volatile=sorted(volatile), headers=headers, audit=audit,
+                member_inventory=inventory(files))
     # A raw report describes its own build. The merger reapplies the rules over
     # the complete GCC-major matrix before licensing approximate-profile facts.
     apply_trust(audit, trusted_build_inputs(data, [data]))
     write(output, data)
+    print(f'A12 member inventory: {len(data["member_inventory"]["names"])} names, '
+          f'token pasting={data["member_inventory"]["token_pasting"]}',
+          file=sys.stderr, flush=True)
     finished = perf_counter()
     print(f'library capture: discovery={discovered - started:.2f}s '
           f'audit={audited - discovered:.2f}s '

@@ -17,6 +17,7 @@ from capture import capture, dump, header_names, write
 from merge import (merge, check, expected_builds, baseline_text, digest,
                    get_snapshot, get_agreement, get_classification)
 from probe import compare, source, build_inputs, trusted_build_inputs
+from member_inventory import inventory
 
 
 def audit(text, extra=None, predefines=()):
@@ -192,6 +193,7 @@ def report(build='a', value='1L', status='ok', independent=True):
     if not independent:
         text = '#if _GLIBCXX_HAS_GTHREADS\n' + text + '\n#endif'
     return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
+                member_inventory=inventory({'0/charconv': text}),
                 headers={'charconv': dict(status=status, macros={} if value is None else {'__cpp_lib_test': value})},
                 audit=classify({'0/charconv': text}, (), roots=['charconv']))
 
@@ -308,6 +310,8 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
         (search / name).write_text('')
     (search / 'charconv').write_text('#define __cpp_lib_test 1L')
     (search / 'ext/pb_ds/tree.hpp').write_text('#ifdef PB_DS_CLASS_C_DEC')
+    libc = '#if 0\nint libc_only_member;\n#define CAT(x,y) x %:%: y\n#endif\n"string_hidden" /* comment_hidden */'
+    (search / 'libc.h').write_text(libc)
     calls = []
     def compiler(executable, args, source='', check=True):
         calls.append((args, source, check))
@@ -327,8 +331,15 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
             return_value=['charconv', 'empty', 'missing', 'broken', 'ext/pb_ds/tree.hpp']):
         path = capture('/fixture/g++', 'c++23', flags, 'fixture', tmp_path / 'capture.json',
                        search=[search], reached={'0/charconv': search / 'charconv',
+                           '1/libc.h': search / 'libc.h',
                            '0/ext/pb_ds/tree.hpp': search / 'ext/pb_ds/tree.hpp'})
     data = json.loads(path.read_text())
+    assert data['member_inventory'] == inventory({'0/charconv': '#define __cpp_lib_test 1L',
+                                                '1/libc.h': libc,
+                                                '0/ext/pb_ds/tree.hpp': '#ifdef PB_DS_CLASS_C_DEC'})
+    assert 'libc_only_member' in data['member_inventory']['names']
+    assert 'string_hidden' not in data['member_inventory']['names']
+    assert data['member_inventory']['token_pasting_headers'] == ['1/libc.h']
     assert data['headers']['charconv']['macros'] == {'__cpp_lib_test': '1L'}
     assert data['headers']['empty'] == dict(status='ok', macros={})
     assert data['headers']['missing']['status'] == 'missing'
@@ -604,6 +615,7 @@ def trust_files():
 def trust_report(files, build='a', hosted='1', present=True):
     audit_ = classify(files, (), roots=['charconv', 'syncstream', 'thread'])
     data = dict(schema=2, generator=VERSION, build=build, major='15', gcc='15.2.0',
+                member_inventory=inventory(files),
                 headers={'charconv': dict(status='ok', macros={'__cpp_lib_to_chars': '201611L'})},
                 audit=audit_, observations=dict(hosted=hosted,
                     headers={k: present for k in audit_['header_tests']}))
@@ -760,16 +772,22 @@ def test_fourteen_build_compact_size_and_classifications_survive_sharing():
     for i in range(14):
         major = str(10 + i//2)
         values = {n: f'{202000 + 100*int(major) + j}L' for j, n in enumerate(names)}
-        roots = {}
+        roots, source_records = {}, {}
         for h, header in enumerate(headers):
             deps = [f'CONFIG_{h % 20}'] if h else ['__cplusplus']
-            macros = {n: dict(independent=not h, values=[v], dependencies=deps,
-                              unrecognised=deps if h else [],
-                              requirements=deps if h else [],
-                              pairs={v: dict(independent=not h, requirements=deps if h else [])})
-                      for n, v in values.items()}
-            roots[header] = dict(macros=macros, taint=[])
+            # Identical synthetic records can share storage without changing
+            # serialized evidence. Keep the full 14-build/397-root/242-name
+            # stress case within the memory budget of local verification.
+            key = (bool(h), tuple(deps))
+            if key not in source_records:
+                source_records[key] = {n: dict(independent=not h, values=[v], dependencies=deps,
+                                             unrecognised=deps if h else [],
+                                             requirements=deps if h else [],
+                                             pairs={v: dict(independent=not h, requirements=deps if h else [])})
+                                       for n, v in values.items()}
+            roots[header] = dict(macros=source_records[key], taint=[])
         reports.append(dict(schema=2, generator=VERSION, build=f'build-{i}', major=major,
+                            member_inventory=inventory({}),
                             headers={h: dict(status='ok', macros=values) for h in headers},
                             audit=dict(generator=VERSION, macros=dict.fromkeys(names, []), roots=roots)))
     data = merge(reports, [r['build'] for r in reports])
