@@ -7,7 +7,7 @@
 namespace distill {
 using FamilyId = std::size_t;
 inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
-inline constexpr std::string_view pruningPolicyVersion = "D3d-6";
+inline constexpr std::string_view pruningPolicyVersion = "D3d-7";
 struct EditRange {
   std::size_t begin = 0, end = 0;
   bool operator==(const EditRange&) const = default;

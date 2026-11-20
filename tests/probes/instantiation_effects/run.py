@@ -55,3 +55,13 @@ for compiler in ('g++', 'clang++'):
     for selected in range(2):
         for known in ((), ('-DNO_KNOWN',)):
             probe(compiler, 'unseen_argument', (f'-DCLASS_JUDGE={selected}', *known), output='')
+
+# Constexpr lifetime-extended temporary destruction is excluded by extended A11.
+for compiler in ('g++', 'clang++'):
+    for source in ('lifetime_reference', 'lifetime_aggregate'):
+        probe(compiler, source, accepted=compiler == 'g++', output='main\ndestroy\n')
+        probe(compiler, source, ('-DDROP_TRIGGER',), output='main\n')
+        probe(compiler, source, ('-DPICK', '-DNOISY_TARGET=0'), output='main\n')
+        probe(compiler, source, ('-DPICK', '-DNOISY_TARGET=1'),
+              accepted=compiler == 'g++', output='main\ndestroy\n')
+        probe(compiler, source, ('-DPICK', '-DNOISY_TARGET=1', '-DDROP_TRIGGER'), output='main\n')

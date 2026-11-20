@@ -1,546 +1,206 @@
 # Implicit instantiation effects — 2026-11-20
 
-## Under A11
+Current policy: **D3d-7**, under the extended A11 approved by the user on
+2026-11-20. The constexpr and block-storage exemptions are adopted.
 
-Policy **D3d-6** applies the user's assumption approved on 2026-11-20:
+## D3d-7 rule
 
-> The program's observable behaviour and its compilation success do not depend
-> on whether the definition of a function friend declared in a template has
-> been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118),
-> nor on the destruction of template parameter objects.
+Rule-1 storage roots are unchanged. The instantiation-effect classifier excludes
+constexpr variables of **any scope/type**, including dependent declarations and
+lifetime-extended temporaries, and **all block-scope static/thread variables**.
+This changes reverse retention of possible instantiation triggers. Ordinary
+name/type/value dependencies, whole-record retention, attribute/symbol effects,
+family unions and the unsupported-construct gates continue to apply.
 
-Function friends in template contexts and potential NTTP parameter-object
-storage therefore no longer seed instantiation effects. This covers the
-friend-address, lookup and deduction probes, the parameter-object destruction
-probe, and the unseen-argument probe's potential parameter objects. They remain
-reproducible demonstrations of the A11 boundary, rather than reasons to retain
-instantiation triggers. Ordinary type/value/name dependencies are unchanged.
-The dead parameter-object classifier and its trivial-record cache are removed;
-written scalar-alias inspection (`UsingType`, standard integer typedefs and
-qualified member selections) is preserved in the remaining static-storage proof.
+For non-constexpr template static/thread storage outside blocks, retain the
+small positive proof from `db967a6`: the written pattern must establish constant
+initialization, trivial destruction of the object's type on every accepted
+target, and absence of lifetime-extended temporaries. Initialization uses the
+existing syntactic `inertExpr` proof, never the local evaluator's answer.
+Types must be non-dependent written scalars, arrays or non-template user
+records with trivial destruction throughout their bases/fields. Written user
+aliases are followed; deduced and template-qualified selections are refused.
+Reference fields are harmless themselves, but `inertExpr` rejects materialized
+temporaries and default member/default argument expressions outright, so it
+cannot miss lifetime extension through them.
+Implicit specializations use their pattern; explicit specializations retain
+their own classification. Effects are accumulated and never cleared by a later
+exempt variable in the same family.
 
-Non-inert static/thread storage in templates and templated attribute/symbol
-roots remain sources. Reverse potential dependency closure, the graph limit,
-and unbounded-system refusal remain unchanged. `boundedSystemHooks` and
-`ownRecordParameter` are still required: a hidden friend can reach a remaining
-storage effect, and an association with some unrelated record cannot bound its
-incoming library instantiations. Extractor regressions now exercise both direct
-self carriers and uncertified aliases with such a storage source. A11 does not
-exclude those effects. The original proof below applies to the remaining
-sources under A1–A7, A9 and A11; no absence of a locally observed specialization
-is used to infer absence on the judge.
+Dropped from `db967a6`: `necessarilyDynamic` and its wrapper/operand analysis,
+the conditional block-local proof, constexpr/constinit alternatives inside
+the extra storage proof, and the separate extended-temporary walk (the remaining
+syntactic initializer proof already rejects those expressions). The blanket A11 block exemption subsumes the dynamic
+proof; constexpr variables bypass it entirely; the independent attribute gate
+already refuses `constinit`. No rule-1 exemption was widened.
 
-Every enabled pruning result, including one without family deletion, reports
-A11 alongside A7. Disabled results report neither. Friend-dependent fixtures use
-the runner's `a11-exclusion | explanation` form: they assert the allowed removal
-and the A11 report line and compile/run the original against its oracle, while
-omitting equivalence checks excluded by A11. NTTP fixtures assert removal and
-the A11 report line and still run both original and rendered programs. Static
-storage regressions keep their original equivalence oracles. `github-issue8`
-again removes C7 because its dependent NTTP no longer seeds reverse retention.
+Dynamic namespace-scope template storage and non-constexpr constant-initialized
+namespace storage with possible non-trivial destruction remain sources. So do
+uncertain dependent/type-selected namespace declarations. Non-constexpr
+reference/aggregate lifetime extension remains conservative. The A11 temporary
+exclusion applies to temporaries whose lifetime **constexpr variables** extend,
+not every extended temporary.
 
-### A11 measurement
+## Soundness under A1–A11
 
-The same atl-cpp revision (`97d9e2365d265b293d430ad0b2d69dd5ebe684ab`),
-CSES profile and command shown below were used with D3d-6. The checksum-verified
-LLVM 23.1.5 revision-1 Linux ARM64 SDK was fetched inside the ignored worktree
-directory. The CLI/worker used a Release build with Clang 22.1.8 and `-j2`;
-the downloaded SDK was then deleted.
+The existing §4.7 argument still applies under its assumptions (A1–A7, A9 and
+A11; no new A8/A10 assumptions). Reverse closure over **all** potential user
+families retains every possible path to a remaining effect source. It includes
+identifier-token/AST references, dependent call names, associations, system
+entity edges and unions. It does not treat locally observed specializations as
+an exhaustive list. Ordinary forward closure then preserves the surviving
+triggers' definitions and dependencies. The four-million-edge limit and
+unbounded incoming library-hook refusals remain in force. Hidden friends still
+need the same-record carrier certificate when they can reach a remaining
+storage/attribute effect: excluding friend injection does not exclude those
+effects. Unsupported ownership, attributes or unbounded traversal still refuse.
 
-| Example | Before D3d-5, bytes (previous measurement) | D3d-5, bytes (previous measurement) | D3d-6 under A11, bytes |
-| --- | ---: | ---: | ---: |
-| online-convolution quick | 84,539 | 149,050 | 149,050 |
-| polynomial-gcd quick | 99,721 | 157,713 | 157,713 |
+A1 bounds header-introduced names; A2 and macro/paste checks preserve identifier
+carriers; A3–A5 and A9 justify preprocessing facts. A6 bounds library hook names,
+not all incoming instantiations. A7 excludes implementation-limit/cache effects
+of constant evaluation. A11 excludes both compilation-success and observable
+behavior dependencies on friend-definition instantiation, and the specified
+destruction effects. The exact adopted text is in [design.md](../design.md).
 
-A11 removes the friend and parameter-object sources, but the remaining
-static-storage sources still reach the retained families. The reports now
-attribute reverse retention to `static_modulus`, `montgomery` and `scalar_ntt`,
-rather than the excluded friend/NTTP effects. No further storage exemption was
-introduced to recover the old sizes. Both reports select a locally checked
-pruned artifact and list D3d-6 and A11. Original and pruned outputs were compiled
-and run with GCC 15.2.0 and Clang 22.1.8: all eight comparisons matched the
-examples' `quick.out` byte for byte, with 120-second compilation and five-second
-execution limits. Distillation had a 180-second outer timeout per example.
-These remain local AArch64 checks; the profile's x86-64 GCC 13 judge is unavailable.
+Constant initialization has no independent runtime initialization effect.
+For the remaining namespace storage exemption, trivial destruction and absence
+of extended temporaries rule out independent termination effects across targets.
+For constexpr variables, A11 instead supplies the destruction exemption.
+Block-storage dynamic initialization requires control to reach the declaration;
+ordinary dependencies preserve executed functions and their declarations.
+A11 supplies the exemption for destruction of never-reached block storage,
+including its constant-initialized cases. Reached block storage retains its
+initialization/destruction through the unchanged forward traversal and roots.
 
-### A11 validation
+The compiler probes do **not** establish a language guarantee that a
+constant-initialized block object escapes destruction when never reached.
+[stmt.dcl] conditions dynamic initialization on the first passage through its
+declaration; [basic.start.static] separately requires constant initialization,
+and [basic.start.term] provides destruction and ordering requirements for
+constructed objects. Construction can complete without a runtime constructor
+call. See [N4861 stmt.dcl/4–5](https://timsong-cpp.github.io/cppwp/n4861/stmt.dcl#4),
+[basic.start.static/2](https://timsong-cpp.github.io/cppwp/n4861/basic.start.static#2),
+[basic.start.term/1–3](https://timsong-cpp.github.io/cppwp/n4861/basic.start.term#1)
+and [dcl.init/21](https://timsong-cpp.github.io/cppwp/n4861/dcl.init#21).
+The corresponding C++17/C++23 wording was examined in the prior investigation;
+CWG 2123 is not a resolved never-reached destruction guarantee.
 
-The Release build succeeded with the pinned SDK and `-j2`. Full sequential
-CTest validation passed 102 of 103 checks with 120-second per-test timeouts:
-all 54 pruning fixtures, 102 extraction model cases (724 assertions), 81 caide
-cases, and every CLI/pipeline suite passed. The sole failure is the already
-recorded `resolver_differential` / `resolve_fake_external_model_and_errors`
-AArch64 mismatch: native GCC reports `__WCHAR_TYPE__` as `unsigned int`, while
-`IntegerModel{}` requests signed `wchar_t`. The GCC oracle refuses that model;
-the Clang evaluator accepts it. Those test/evaluator files are unchanged.
-All 33 targeted pruning unit tests and 44 standalone compiler probe combinations
-also passed. `git diff --check` passed. No commit or push was made.
+## Probes and pruning regressions
 
-### D3d-6 CI repair
+The retained [probe README](../../tests/probes/instantiation_effects/README.md)
+maps each source to its A11 clause and supplies bounded commands. Observations
+are local AArch64 Linux, GCC 15.2.0 and Clang 22.1.8; GCC 13 is unavailable.
 
-LLVM 23's default `NestedNameSpecifier` constructor creates an **invalid**
-sentinel. The D3d-6 `inertType` change called `getKind()` on that sentinel
-for types other than tags, typedefs and using-types (including `decltype`,
-references and template specializations). That reaches `llvm_unreachable`;
-in the release SDK it is undefined behaviour and crashed the worker.
-Initialize the absent qualifier with `std::nullopt` instead. Written
-qualifiers still pass through the same conservative type-selection check.
-The existing constexpr negative cases exercise the crashing paths without
-changing their expected storage roots or allowing a worker failure.
-
-The caide `github-issue8` review entry again carries the required
-`same removal:` classification. Its A11 explanation and removal assertions
-are unchanged; the Python validator correctly requires that classification.
-
-The pinned LLVM 23.1.5 revision-1 ARM64 release SDK was checksum-verified
-inside `spike-work/`; Release compilation used Clang 22.1.8 with `-j2`.
-A minimal probe compiled against those headers with GCC UBSan reports
-`NestedNameSpecifier.h:32:7: runtime error: execution reached an unreachable
-program point` for the old default construction. The `std::nullopt` version
-exits successfully. The original extraction suite also passes on this ARM64
-host: the reported x86-64 segmentation fault is a manifestation of undefined
-behaviour, not a reliable cross-architecture failure oracle.
-
-With the repaired D3d-6 worker, the same atl revision, CSES profile and command
-as above still produce the following local measurements (180-second outer
-limits). Counts are `family ...` report lines containing
-`instantiation effect: possible trigger of X`, excluding primary-byte totals.
-
-| Example | Bytes | `atl::static_modulus` | `atl::montgomery` | `atl::scalar_ntt` |
-| --- | ---: | ---: | ---: | ---: |
-| online-convolution quick | 149,050 | 114 | 6 | 26 |
-| polynomial-gcd quick | 157,713 | 118 | 5 | 39 |
-
-Original and repaired-worker pruned outputs for both examples were compiled
-and run under GCC 15.2.0 and Clang 22.1.8: all eight comparisons matched
-`quick.out` byte for byte, with 120-second compilation and five-second execution
-limits. The profile's x86-64 GCC 13 judge remains unavailable on this ARM64 host.
-
-These remain the D3d-6 sizes, compared with 84,539 / 99,721 bytes before D3d-5;
-they are not measurements of an implemented D3d-7 refinement.
-
-The complete LLVM-free fork-mode CTest run passed all six suites with
-120-second per-test limits (142.93 seconds overall). The Python measurement
-suite passed all six tests; all 33 targeted pruning unit tests passed. All 81
-caide fixtures, including `github-issue8`, passed in the worker-enabled build.
-
-The clean sequential worker-enabled CTest run passed **102 of 103** checks
-with 120-second per-test limits (658.89 seconds overall), including all 54
-pruning fixtures and all 102 extraction model cases (724 checks). The sole
-failure is the already documented ARM64 `resolver_differential` /
-`resolve_fake_external_model_and_errors` signed-`wchar_t` model mismatch; the
-main unit suite, Clang resolver suite and every pipeline/CLI suite pass.
-The downloaded SDK was deleted after building. `git diff --check` passes.
-
-### D3d-7 — stopped pending lifetime-extended temporary handling
-
-The requested block-scope dynamic-initialization refinement has the intended
-basis: [stmt.dcl]/4 requires execution to reach the declaration, and /5 requires
-construction before destruction
-([C++20 text](https://timsong-cpp.github.io/cppwp/n4861/stmt.dcl#4)).
-Constant initialization is static initialization
-([C++20 basic.start.static/2](https://timsong-cpp.github.io/cppwp/n4861/basic.start.static#2));
-its possible destruction must remain conservative
-([C++20 basic.start.term/1–3](https://timsong-cpp.github.io/cppwp/n4861/basic.start.term#1)).
-
-However, the requested blanket exemption for constexpr references and
-trivially destructible classes is not sound without also accounting for
-**lifetime-extended temporaries**. For example (C++20):
-
-```cpp
-#include <cstdio>
-#include <type_traits>
-struct Noisy {
-  int member = 0;
-  constexpr ~Noisy() {
-    if (!std::is_constant_evaluated()) std::puts("destroy");
-  }
-};
-template<int> constexpr const int& value = Noisy{}.member;
-const int* dormant() { return &value<0>; }
-int main() { std::puts("main"); }
-```
-
-GCC 15.2 compiles this and prints `main` then `destroy`. Removing `dormant`
-leaves only `main`. The reference is constexpr, but binding it materializes a
-separate object whose lifetime extends to termination
-([C++20 class.temporary/6–7](https://timsong-cpp.github.io/cppwp/n4861/class.temporary#6)).
-Even the referent is scalar here; the complete temporary needs destruction.
-This is ordinary temporary destruction, outside A11's parameter-object exclusion.
-A trivially destructible `struct Holder { const Noisy& member; };` with
-`template<int> constexpr Holder value{Noisy{}};` has the same problem; a GCC
-`static_assert(std::is_trivially_destructible_v<Holder>)` passes.
-
-Clang 22 rejects the direct non-trivial-reference constant-expression example
-as unsupported. That parse gate does not justify a cross-target exemption:
-replace `Noisy` in the reference example with
-`Pick<(sizeof(long)==4)>::type`, where the false case is a trivial user
-class with `int member = 0;` and the true case is `Noisy`. The worker can parse
-the trivial case on LP64 while a judge selects the non-trivial temporary on
-LLP64/ILP32. A bounded
-local probe modeled the size selection: the trivial case passed Clang; the
-non-trivial case passed GCC and lost `destroy` when `dormant` was removed.
-The repaired D3d-6 worker accepts the trivial case and reports `dormant` as a
-possible trigger of `value`.
-
-Per the task's stop-if-unsound instruction, D3d-7 is **not implemented** and
-§4.7, rule 1 and the policy version remain D3d-6. A sound revision must preserve
-potential non-trivial destruction of lifetime-extended temporaries, including
-reference members of otherwise trivial aggregates, independently of the
-variable's own destructor/type. No extension of A11 is assumed.
-
-The sections below record the superseded D3d-5 investigation and measurements.
-
-Policy D3d-5 repairs a missing direction in the retention relation. A template
-being retained is insufficient: deleting an uncalled function, a class member
-body, or even a declaration can delete an implicit instantiation. This is a
-semantic effect, not the implementation-limit/cache sensitivity excluded by A7.
-
-## Effects and non-effects
-
-The supported C++ constructs with an effect that can escape their immediate
-instantiation are conservatively classified as follows:
-
-* **Function friends in template contexts.** Instantiating a class can supply a
-  definition for a function declared elsewhere, including a declaration in an
-  unrelated argument type. Return-type deduction can then change a later
-  requires-expression. This applies to primary, partial, member and nested
-  class templates, and classes nested in other template contexts. No reliance
-  is placed on the partial specialization selected by the worker. All function
-  friend declarations, including function templates and declarations without
-  definitions, are classified; the implementation does not attempt to prove
-  signature disjointness across compilers.
-* **Static/thread storage outside the existing inert exemptions.** Instantiating
-  a variable template or using a class-template static member can introduce
-  dynamic initialization or destruction. Rooting the pattern, as rule 1 already
-  did, does not preserve that use. Function-template static locals, member
-  function static locals, generic-lambda statics and out-of-line definitions
-  receive the same conservative treatment. A local static's initialization
-  normally runs only when control reaches it; treating all its possible
-  instantiation triggers as significant is safe over-retention.
-* **Interpreted attribute roots in template contexts.** Constructor/destructor
-  attributes and forced-emission or symbol attributes can give an instantiated
-  definition significance independent of a normal call. Every existing
-  interpreted attribute root is conservatively an effect source when templated.
-  Interpreted assembly or alias symbols referencing a known template entity also
-  seed the rule: a retained pattern alone need not emit the specialization that
-  an opaque linker-symbol reference needs. Symbol resolution records which
-  families contain template entities before processing those references.
-  Unknown attributes, assembly and other unsupported forms retain their refusal
-  gates; this change does not expand the accepted extension surface.
-
-Class-valued non-type template parameters introduce static template parameter
-objects, not `VarDecl`s ([C++20 temp.param/8](https://timsong-cpp.github.io/cppwp/n4861/temp.param#8)).
-Constant destruction is required, but the policy does not infer that this makes
-all emitted storage/destruction irrelevant; constant-expression eligibility is
-distinct from ordinary termination's storage-duration rules
-([basic.start.term](https://timsong-cpp.github.io/cppwp/n4861/basic.start.term)).
-The NTTP proof is separate from the static-variable whitelist. Direct scalar,
-enum, pointer, member-pointer and reference parameters cannot introduce parameter
-objects. In particular, a pointer/reference to a class does not create an object
-of that class. User aliases are followed without discarding their written
-system-template selections; C/C++ standard integer and size typedefs are known
-scalar by contract. `UsingType` must be handled as well as `TypedefType`: Clang
-represents `std::uint32_t` imported from `::uint32_t` by a `UsingType` under the
-user alias `atl::uint32`. The old whitelist rejected that node. This was a type
-inspection bug, not a class-valued `mod_int32` parameter.
-
-A non-template user class with a trivial destructor is also harmless when every
-base and field recursively has provably harmless destruction. Template arguments
-are converted constant expressions ([temp.arg.nontype]/2,
-https://timsong-cpp.github.io/cppwp/n4861/temp.arg.nontype#2); observable
-address/value uses are already
-ordinary dependencies. With trivial destruction there is no independent runtime
-initialization or termination code for reverse retention to preserve. Checking only
-Clang's `hasTrivialDestructor()` is insufficient: a field selected through a
-system template can have different destruction on the judge. System template
-selections remain conservative even when their local canonical type is scalar,
-including selections hidden under user aliases or in members. Type-qualified
-names also stay conservative: `Pick<sizeof(long)>::type` can select a scalar
-typedef or enum locally and a class in another user specialization on the judge.
-Clang 23 stores that qualifier on the named type node, so it must be checked
-before following a typedef or exempting an enum. Classes with
-nontrivial destruction remain sources. Constant destruction is **not** used as
-a blanket exemption: both compilers accept a constexpr destructor that calls
-`puts` outside constant evaluation, although neither probe executes that
-parameter object's destructor at termination. The standard's constant-evaluation
-requirement alone does not prove that runtime destruction is unobservable.
-
-**Dependent/placeholder exception remains conservative.** Neither a missing
-specialization nor only known scalar bindings proves absence of a class binding
-on another judge. `unseen_argument.cpp` in the probe directory below has
-`Object<1>` locally, plus an uninstantiated `Object<T{}>` inside a function
-pattern. A user `if constexpr` branch selects that function with `T=Value` on
-another target. The probe's `CLASS_JUDGE` switch models a user expression such
-as `sizeof(long)==4`; this does not require any header to introduce a user name,
-invoke a hook or change a feature macro. Clang's AST has no class-valued argument
-with the switch off and does with it on. Defining `NO_KNOWN` removes the known
-scalar bindings and gives the same counterexample with no known specialization
-at all. Both `auto` and a dependent `T` parameter are probed. A1 restricts header
-names, A6 restricts library hook names, and A9 restricts library feature macros;
-none forbids this user type/value selection or fixes target sizes. Library
-traits can also select different user branches. Thus the requested known-bindings
-exemption cannot be justified under the existing assumptions, and `auto`,
-constrained `auto`, `decltype(auto)` and dependent member types remain sources
-unless their written shape itself excludes an object (e.g. `T*` or `auto&`).
-Unknown ownership of a materialized parameter object still triggers the ordinary
-unowned-dependency refusal.
-
-A default member initializer is not itself a new global runtime effect: its
-runtime side effects require construction. Ordinary retained uses preserve that
-construction and its dependencies. However, compiling a default initializer,
-constructor, default argument, constraint or unevaluated operand can instantiate
-one of the effect sources above. Those paths must be preserved even when the
-surrounding function is never executed. The consteval/default-member-initializer
-case exercises this distinction. Calls used during constexpr/consteval evaluation
-are likewise dependency paths, including initializers exempted by D3d-3. No
-constant evaluator is used to decide whether a trigger is harmless.
-
-Ordinary non-static members, bases, virtual members, layouts and implicit special
-members have no independently running initialization merely because a class is
-instantiated. Their effects require an object, call or retained type operation,
-whose ordinary dependency closure already preserves them. An inert scalar static
-or whitelisted constexpr definition has no separate dynamic initialization or
-nontrivial destruction; its initializer can still lead to another effect source
-and is traversed normally. Friend class/type declarations alone do not define
-functions or introduce executing storage. Explicit instantiations and namespace
-static assertions already are roots. Ill-formed instantiations are covered by the
-original-build and parse-error gates. Resource-limit and compiler-evaluation-cache
-observations remain excluded only to the extent stated by A7; friend injection
-and dynamic initialization are not excluded by A7.
-
-## Potential triggers and the rule
-
-The extractor records `instantiationEffect` on the owning family, inspecting
-patterns as well as known specializations. Template-context detection walks
-semantic enclosing declarations, so nested classes and out-of-line members are
-included. Existing primary/partial/specialization and lexical ownership unions
-remain authoritative. The worker protocol advances to DISTILL-PRUNE-2 for this
-additional field; old workers fail closed.
-
-Core builds a directed potential dependency graph independent of retention:
-
-1. Family to every family whose indexed name occurs as an identifier token in
-   its text. Comments and string contents do not participate.
-2. Family to its AST references and dependent-call name matches.
-3. Type carrier to its associated function/specialization families, as in rule 3.
-4. Both directions for a family union.
-5. Family/system entity to its positive system/user dependency edges.
-
-Starting at effect sources, follow this graph **backward**, retaining all reached
-user families. Retain the sources themselves, then run the existing forward
-fixpoint normally. A token that merely names a template is enough; there is no
-attempt to determine whether it requires completeness, odr-uses storage, executes,
-or selects a particular specialization. Transitive closure is essential: an alias
-may only name a specialization, while a caller of the alias requires completeness;
-a default argument can hide a further carrier. Declaration-only ranges, dormant
-bodies, uninstantiated patterns and all their tokens participate equally. The
-existing macro provenance and dependent-name rules cover expanded identifiers;
-macro-produced declarations remain pinned. The graph is skipped when there are
-no effect sources and capped at four million edges otherwise. A cap violation
-retains everything with an explicit disabling reason.
-
-A nontrivial incoming path from a library can be absent on the worker's target.
-A6 only bounds the names of hooks; it does not say that instantiating a removed
-library use cannot instantiate a rooted user hook's body. Consequently, if reverse
-closure reaches a free ADL/operator hook or a user specialization of a system
-template, the whole pruning analysis refuses with
-`unbounded system instantiation effects through <family>`. A record-owned hidden
-friend has a bounded carrier path only with the extractor's `boundedSystemHooks`
-certificate: every non-member callable in that family must have a parameter
-spelled directly as a record in the same family, optionally through pointers or
-references. Class-template names and injected class names qualify; aliases and
-substituted parameter types do not. Certificates from patterns and instances are
-intersected. Merely having a nonempty associated-types list is insufficient:
-those types can come from unrelated template arguments or another overload.
-A record-owned hook without this certificate also refuses. Member customization
-and callbacks have their ordinary type/value carriers. Positive system edges are
-included without using their absence as evidence of safety.
-
-The common hidden-friend `operator==(S, S)` is deliberately conservative: its
-family was already an operator root, and now its possible instantiation triggers
-stay too. Pruning remains enabled when its carrier is bounded. A blanket exemption
-based only on that parameter spelling would require checking other declarations:
-a namespace redeclaration and address-taking can require the injected definition
-without itself requiring a complete S. Return-type deduction and other friend
-signatures offer further pitfalls. This policy does not claim a signature-based
-proof. The hidden-friend fixture checks that unrelated records remain removable.
-
-## Soundness under A1–A7, A9
-
-The proof extends, rather than replaces, the existing §4.7 dependency argument.
-For every removed family, there is no potential dependency path from it to an
-effect source. Otherwise the reverse closure would retain it. Thus deletion cannot
-remove the last trigger of an effectful instantiation along a supported user
-lookup/type/value path. Patterns and textual names include alternatives not
-selected by the local target; associations preserve implicit dispatch through
-user type carriers, and the unbounded library entry cases refuse. Once triggers
-survive, the existing forward closure preserves their complete definitions,
-lookup candidates and transitive dependencies. Whole-record retention preserves
-members, friends and out-of-line definitions together. No claim is made that a
-missing Clang instantiation means a missing judge instantiation.
-
-A1 bounds header-introduced names; A2 and the macro/paste gates preserve user
-identifier carriers. A3–A5 and, where used, A9 justify the resolved preprocessing
-environment. A6 supplies the library hook surface used for the refusal check,
-with operators handled separately. A7 permits removal of otherwise inert
-instantiation/cache seeds but does not justify removal of either reported effect.
-No new trust assumption is added, and no existing gate is relaxed. Constructs
-whose ownership, AST traversal, attributes or incoming library triggers cannot
-be bounded disable pruning rather than relying on the worker's selected branch.
-
-## Verification
-
-New prune cases cover the friend-injection body and declaration-only forms,
-static-member registration, the self-associated hidden-friend idiom, nested member
-partial specialization through an alias/default, variable-template registration,
-consteval evaluation from a default member initializer, an exempt constexpr
-variable initializer, and a member-function static local. Optional `stdout.txt`
-in the case runner compiles and runs both original and rendered sources under
-available g++/clang++, checking each against the same explicit output oracle.
-Core unit tests independently exercise backward lexical/AST/system paths,
-transitive aliases, unions, dependent names, associations, report attribution,
-protocol round trips and unbounded-dispatch refusals. Extractor model tests cover
-uninstantiated patterns and inert controls, including function/member static locals
-and out-of-line members.
-
-Initial branch validation (before this refinement): Release LLVM-free CMake/Ninja build with `-j4`; all six
-available CTest suites passed under 120-second test timeouts. All 33 pruning core
-unit tests passed, including the exhaustive graph oracle. All nine new original
-fixtures matched their output oracles with both g++ and clang++ (18 runs), with
-20-second compile and five-second runtime limits. `git diff --check` passed.
-The required LLVM 23.1.5 SDK is absent locally; the installed LLVM tree also lacks
-Clang AST development headers. Extractor compilation, worker extraction/model
-cases and original-versus-rendered runtime comparisons remain unverified. They
-require the repository's pinned SDK; no alternate LLVM version was substituted.
-
-## Refinement probes and regression coverage
-
-The reproducible probes are in
-[`tests/probes/instantiation_effects`](../../tests/probes/instantiation_effects/run.py).
-Run `timeout 120s python3 tests/probes/instantiation_effects/run.py` from the
-worktree. Each compilation has a 20-second deadline and each executable a
-five-second deadline; all outputs go under `.checks/probes`. Results below are
-from GCC 15.2.0 and Clang 22.1.8, C++20, on AArch64 Linux.
-
-| Probe | GCC | Clang | Consequence |
+| Probe | GCC 15 | Clang 22 | D3d-7 treatment |
 | --- | --- | --- | --- |
-| Friend has fixed `int` return, self by value / `const&` / pointer; namespace redeclaration; dormant `sizeof(C<int>)` before address-taking | All three link and print `present` with seed; all three fail to link without seed | Same | None of these parameter shapes alone is exempt |
-| Same address-taking with deduced `auto` return | Rejects with and without seed | All three work with seed; reject without | Do not rely on return deduction to repair missing instantiation |
-| ADL requires-expression on `C<X>*` or `*p`, forward declaration only | Both checks false | Both checks false | Pointers/references alone need no complete object |
-| Same ADL probes with reachable class definition for a fresh specialization | Both checks true | Both checks true | ADL can itself instantiate the carrier |
-| Parenthesized call suppressing ADL, namespace redeclaration with deduced return, in a dependent requires-expression | Prints `0` without seed, `1` with seed | Rejects without seed; prints `1` with seed | Ordinary lookup is a separate route; requires-expressions do not rescue the exemption |
-| Class parameter object with constexpr destructor calling `puts` only outside constant evaluation | Prints only `main` | Same | Observation is insufficient for a cross-implementation destructor exemption |
-| Non-constexpr destructor / constexpr destructor with forbidden constant-evaluation mutation | Both rejected | Both rejected | Constant destruction is enforced, but it does not forbid runtime branches |
-| Scalar-only vs class-selected user branch (`unseen_argument.cpp`) | Both builds pass | Both pass; AST confirms extra class-valued argument only in class-selected build | Known specializations are not a completeness bound |
+| Fixed-return friend address, self by value/reference/pointer | Links with dormant carrier; fails without | Same | A11 friend-definition exclusion |
+| Deduced friend return/lookup | Some redeclarations rejected; lookup can change | Lookup/compilation can change | A11 covers compilation success too |
+| Class template parameter object | Only `main`; invalid constant destruction rejected | Same | A11 parameter-object destruction exclusion; observations alone are insufficient |
+| Constexpr reference to a non-trivial temporary's member | `main`, then `destroy`; dropping trigger loses destruction | Unsupported constant expression | A11 constexpr extended-temporary exclusion |
+| Constexpr aggregate with reference member | Same, despite trivial aggregate destructor | Unsupported constant expression | Same exclusion |
+| `Pick<(sizeof(long)==4)>` reference/aggregate | Trivial selection quiet; noisy selection destroys | Trivial accepted; noisy unsupported | A11 exclusion, not a cross-target triviality proof |
+| Never-reached constant-initialized block static/thread object, template/non-template, C++17/20/23, `-O0`/`-O2` | No destruction | No destruction | A11 never-reached block destruction exclusion |
+| Same block object, reached twice, ordinary destructor | Destroys once | Destroys once | Forward dependencies preserve reached declaration |
+| Same block object, constexpr destructor (C++20/23) | Destroys once when reached | Const object destructor folded away even when reached | No portable exemption follows from this difference |
 
-The decisive friend counterexample is small:
+The block matrix also has `constinit` controls in C++20/23 and saves assembly:
+GCC guards destruction registration (`__cxa_atexit` / `__cxa_thread_atexit`)
+on first passage; Clang does so for ordinary destructors but elides registration
+for these const constexpr-destructor controls. No tested never-reached form
+has startup registration. The matrix has 144 configurations / 288 compile-run
+comparisons, plus assembly compilation. The other matrix has 64 combinations.
 
-```cpp
-template<class T> struct C { friend int supplied(C) { return 7; } };
-int supplied(C<int>);
-struct Dormant { decltype(sizeof(C<int>)) declaration(); };
-auto *volatile address = &supplied;
-```
+A11 fixtures explicitly require the report line `pruning assumption: A11` and
+allowed removal of `dormant`. `a11-exclusion | explanation` runs the original
+oracle and omits the equivalence assertion excluded by A11. Coverage includes
+Pick, constexpr destruction, constexpr aggregate lifetime extension and
+non-constexpr constant-initialized block storage. Exact constexpr Noisy
+extended-temporary examples stay in the standalone probes because Clang cannot
+parse them. Non-constexpr namespace lifetime-extension fixtures still require
+retention and original/rendered equality. Dynamic namespace template storage
+and constant-initialized namespace storage with non-trivial destruction are
+also retention regressions. Extractor tests independently check dependent,
+thread-storage and target-selected cases and unchanged rule-1 roots.
 
-Deleting `Dormant` leaves the namespace declaration visible, but loses the
-instantiation supplying its inline definition. The pointer initializer odr-uses
-the function without a call or argument-dependent lookup. It links only with
-`Dormant` under both compilers. Replacing both parameters with `C const&` or
-`C*` gives the same result. This follows the distinction between declaration
-and definition instantiation in [temp.inst]/3 and /5
-(https://timsong-cpp.github.io/cppwp/n4861/temp.inst), plus the ODR definition
-requirement; ADL's associated-class rules do not apply to `&supplied`.
-Consequently no parameter-shape friend exemption is adopted. A stronger
-whole-translation-unit proof excluding all possible redeclarations could be a
-future refinement, but checking only Clang's known redeclaration chain would
-miss dependent declarations instantiated differently on the judge.
+## Measurements
 
-New pruning fixtures cover scalar aliases, the generic-lambda scalar NTTP,
-enums, class pointers/references, dependent pointer shapes, provably trivial
-class objects, nontrivial class objects, system-selected scalar/class types
-(including a field), placeholder/dependent controls and all three friend
-address-taking counterexamples. The original nine effect fixtures remain.
-Extractor model cases independently inspect effect classification.
-
-The three pipeline report oracles now expect `D3d-5`. `github-issue8` deliberately
-retains C7: its specialization contains the identifier `C`, which the conservative
-potential graph connects to `test14::C`. That concept has a dependent NTTP type
-`typename S<T>::type`; this refinement does not prove arbitrary dependent member
-types invariant across targets. Family unions then retain the C7 primary, both
-specializations and the out-of-line member. This is conservative lexical
-retention, not an independent effect in C7; the caide oracle and port note now
-say so. No retention rule is weakened just to restore the old output.
-
-## Refinement measurement
-
-The public atl-cpp checkout was cloned inside `.checks/atl-cpp`, at
-`97d9e2365d265b293d430ad0b2d69dd5ebe684ab`. A checksum-verified public
-LLVM 23.1.5 revision-1 Linux ARM64 SDK was downloaded inside the worktree.
-The Release worker and CLI built with Clang 22.1.8 and `-j2`; the earlier GCC
-Release worker compilation was killed for memory exhaustion. No alternate SDK
-version was substituted.
-
-Both sides used this command (with the corresponding CLI/worker binaries):
+Pinned atl-cpp revision: `97d9e2365d265b293d430ad0b2d69dd5ebe684ab`.
+The public checkout and all outputs stay inside `.checks/`. The checksum-verified
+LLVM 23.1.5 revision-1 Linux ARM64 SDK has archive SHA256
+`5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de`.
+Release uses Clang 22.1.8 and `-j2`. Acquisition/configuration/build have hard
+outer timeouts of 240/60/600 seconds; distillation 180 seconds, each example
+compilation 120 seconds and execution five seconds. SDK/build/check artifacts
+are deleted after validation.
 
 ```sh
-timeout 180s distill --judge cses --strip-comments --no-line-markers \
+timeout 180s build/distill --judge cses --strip-comments --no-line-markers \
   --report report.txt -o output.cpp g++ -std=c++23 -O2 -DNDEBUG \
   -I .checks/atl-cpp/include .checks/atl-cpp/docs/examples/EXAMPLE/quick.cpp
 ```
 
-| Example | Original PR branch, bytes | Refined branch, bytes |
+| Policy | online-convolution quick, bytes | polynomial-gcd quick, bytes |
 | --- | ---: | ---: |
-| online-convolution quick | 149,050 | 149,050 |
-| polynomial-gcd quick | 157,713 | 157,713 |
+| PR #104 / D3d-6 (`1715f38`), historical | 149,050 | 157,713 |
+| Initial `db967a6` positive proofs, historical | 149,050 | 157,713 |
+| D3d-7, extended A11, freshly verified | 84,539 | 99,721 |
 
-The outputs remain byte-identical: the type fixes remove false effect sources,
-but the remaining effects still reach the same retained families. In the online
-report, `mod_int32`, `mod_int64`, `convolution_uint64` and `online_product_state`
-change from intrinsic parameter-object sources to possible triggers of
-`mod_int`. The lambda NTTP inside `convolution_uint64` is
-`[&]<uint32 P>(std::integral_constant<uint32, P>)`; the outer constrained
-parameters really are type parameters. `online_product_state` has the enum NTTP
-`online_product_algorithm Algorithm`, not a class object. The
-`modulus_engine` placeholders and `mod_int`'s dependent parameter still remain
-conservative, along with function friends. Thus this refinement does **not**
-recover the pre-D3d-5 size reduction; doing so needs a stronger proof than
-known scalar instantiations or the proposed friend parameter shapes.
+The prior constexpr-only and block-only comparisons individually saved zero
+bytes: each left sources that reached the same families. Together the exemptions
+remove `atl::static_modulus`'s `static constexpr value_type mod = Mod;`,
+`atl::montgomery`'s `mod`, `mod_inv`, `r_squared`, `twiddles<Z>`'s
+`static constexpr U mod = Z::mod();`, and `get_twiddles<Z>()`'s block-local
+`static typename scalar_ntt::twiddles<Z> const t;` from effect-source classification.
+Fresh reports have zero `family ... instantiation effect: possible trigger of X`
+lines, including all three groups (`static_modulus`, `montgomery`, `scalar_ntt`).
+Counts report one attributed cause, not independently necessary declarations.
+The savings from PR #104 are 64,511 and 57,992 bytes, respectively.
 
-These are CSES-profile, **local** builds. The host is AArch64 Linux with GCC
-15.2.0; the profile's x86-64 GCC 13 compiler is unavailable, and the report
-correctly skips the incompatible local compiler as a judge checker. Original,
-original-PR pruned and refined sources for both examples were separately
-compiled and run under g++ and clang++ (12 compile/run comparisons), all matching
-the repository's `quick.out` byte for byte. An actual CSES run and a complete
-atl-cpp sweep remain unverified.
+Both original and pruned artifacts compiled and matched their example's
+`quick.out` byte for byte under GCC 15.2.0 and Clang 22.1.8 (eight comparisons).
+Both distillation reports select `pruned (local)`, list policy D3d-7 and report
+A11. The pipeline did not request runtime checks; the independent bounded
+compile/run comparisons supply that evidence. These are local AArch64 checks,
+not a check on CSES's x86-64 GCC 13 judge.
 
-## Final refinement validation
+## Validation
 
-* Release CLI/worker compilation succeeded against the pinned LLVM 23.1.5 SDK.
-* All 54 pruning fixtures passed, including the original nine effect regressions
-  and the three new fixtures, with original/pruned g++ and clang++ runtime oracles.
-* All 100 extraction model cases passed (707 assertions), including scalar,
-  dependent, class, alias and selected-member controls.
-* All 81 caide cases passed; `github-issue8` passed again with the final worker.
-* Seven core/resolver fixture suites passed. The remaining worker/CLI suites
-  passed except the pre-existing host-specific `resolver_differential` check
-  described below. Three pipeline suites initially hit their 120-second CTest
-  deadlines under `-j4`; bounded sequential retries passed: `pipeline_cli`
-  48/48 (102.1 s), `pipeline_pruning_d3c` 21/21 (53.9 s), and
-  `pipeline_cli_d3c` 14/14 (81.2 s). Both D3d pipeline suites also passed.
-* All 44 standalone compiler probe combinations completed with the expected
-  results; negative compilations are intentional and their diagnostics are saved.
-* Both final measurement outputs were byte-identical to the original branch's
-  outputs; the 12 example compile/run comparisons matched their output oracles.
-* `git diff --check` passed. No commit or push was made.
+The checksum-verified pinned-SDK Release build and final rebuild passed with
+`-j2` and hard outer timeouts (600 seconds initially, 300 for the final rebuild).
+All 108 extractor model cases passed, with 848 checks and zero failures.
+The 64 friend/parameter-object/lifetime compiler combinations and 144 block
+configurations (288 compile/run comparisons plus assembly builds) passed.
 
-The remaining failure is `resolve_fake_external_model_and_errors` in
-`resolver_differential`: `IntegerModel{}` requests signed 32-bit `wchar_t`, while
-this AArch64 GCC uses unsigned 32-bit `wchar_t`. The GCC oracle cannot represent
-that model and refuses; the Clang evaluator can represent it, so differential
-comparison fails. An isolated rerun reproduced the failure. The resolver test,
-GCC oracle and Clang evaluator are unchanged from the original PR branch. This
-is separate from the policy-string expectations and requires a suitable host or
-an independent test/oracle fix. Native clang resolver tests passed. Unsupported
-local library features still report their existing explicit skips.
+All **293 Python tests** passed: extensions 18, profiles 66, drift 55,
+release 20, retry 23, matrix 11, library 84, LLVM CI 10 and measurement 6.
+The missing pytest dependency was installed in an isolated environment inside
+`.checks`, using the repository's pinned test requirements. Each suite had a
+hard 120-second timeout (300 for library).
+
+The final full CTest run (`--timeout 120 -j2`, 1800-second outer limit)
+passed **102 of 103 suites** in 215.05 seconds, including all 63 pruning
+fixtures, 108 extractor model cases (848 checks), all 81 caide fixtures,
+unit tests and every pipeline/CLI suite. The sole failure is the pre-existing
+AArch64 `resolver_differential` / `resolve_fake_external_model_and_errors`
+mismatch: native GCC has unsigned `wchar_t` and cannot represent the requested
+signed-wchar integer model, while Clang accepts it. Resolver/oracle/evaluator
+files are unchanged from `1715f38`. The earlier sequential run exposed two new
+fixture-oracle mistakes (record return-type association and a GCC-rejected
+aggregate default-member form); the fixtures were corrected before this full
+rerun. No implementation change was needed.
+
+`git diff --check` passed. The SDK, build and `.checks` directories were removed.
+The experiment branch was deleted after detaching its source checkout at
+`7ed2870`, preserving its uncommitted diff and probe files.
+
+## Brief history
+
+D3d-5 introduced reverse retention of possible instantiation triggers. D3d-6
+adopted the original friend-injection/template-parameter-object A11 clauses;
+`1715f38` also repaired LLVM 23's invalid default `NestedNameSpecifier` sentinel
+by explicitly using `std::nullopt`. The initial D3d-7 work at `db967a6` added
+positive lifetime-safe storage proofs. The subsequent constexpr and block-scope
+experiments established the additional assumption boundary and the combined
+size reduction. On 2026-11-20 the user approved those A11 clauses; D3d-7 now
+adopts both and removes superseded classifier logic. No experiment-only policy
+is left in the implementation.

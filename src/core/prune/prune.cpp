@@ -354,7 +354,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     if (u.family == noFamily) system(u.entity,noFamily);
     else systemUses[u.family].push_back(u.entity);
   }
-  // D3d-6: retaining a template does not retain its instantiation triggers.
+  // D3d-7: retaining a template does not retain its instantiation triggers.
   // Reverse the *potential* dependency graph over all text, including dead
   // declarations and patterns, rather than just Clang's seen instantiations.
   // System nodes stay in the graph so aliases/defaults through library types
@@ -426,8 +426,8 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   // Even an enum or unused template can seed constant-evaluation caches.
   // Every enabled pruning result relies on A7, including a pruned artifact
   // whose families all survived (rendering may still remove empty shells).
-  // A11 permits removal of friend-definition instantiation and template
-  // parameter object destruction triggers, including in empty-shell rendering.
+  // A11 excludes friend instantiation and parameter-object/constexpr destruction,
+  // plus destruction of never-reached block storage, even in empty-shell rendering.
   if (out.disabledReasons.empty()) {
     out.assumptions.insert("A7");
     out.assumptions.insert("A11");

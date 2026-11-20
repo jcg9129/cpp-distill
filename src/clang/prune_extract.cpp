@@ -731,6 +731,62 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     // that could have originated in a call, conversion or default arguments.
     return list->getNumInits() == 0;
   }
+  // These proofs are deliberately separate from rule 1's storage roots.
+  // A locally selected specialization or successful constant evaluation is
+  // not evidence about a different target. Inspect the pattern's written type.
+  const VarDecl* storagePattern(const VarDecl* v) const {
+    if (v->getTemplateSpecializationKind() == TSK_ImplicitInstantiation)
+      if (const auto* pattern = v->getTemplateInstantiationPattern()) return pattern;
+    return v;
+  }
+  bool trivialStorageType(QualType q, unsigned depth = 0, bool field = false) {
+    if (depth > 50 || q.isNull() || q->isDependentType()) return false;
+    const auto* t = q.getTypePtr();
+    NestedNameSpecifier qualifier = std::nullopt;
+    if (const auto* n = dyn_cast<TagType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<TypedefType>(t)) qualifier = n->getQualifier();
+    else if (const auto* n = dyn_cast<UsingType>(t)) qualifier = n->getQualifier();
+    if (qualifier.getKind() == NestedNameSpecifier::Kind::Type) return false;
+    if (const auto* u = dyn_cast<UsingType>(t)) {
+      if (!e.user(u->getDecl()->getBeginLoc())) return standardScalarAlias(u->getDecl(),q);
+      return trivialStorageType(u->desugar(),depth+1,field);
+    }
+    if (const auto* a = dyn_cast<TypedefType>(t)) {
+      const auto* d = a->getDecl();
+      if (!e.user(d->getBeginLoc())) return standardScalarAlias(d,q);
+      const auto* info = d->getTypeSourceInfo();
+      return info && trivialStorageType(info->getTypeLoc().getType(),depth+1,field);
+    }
+    if (const auto* a = dyn_cast<ConstantArrayType>(t))
+      return trivialStorageType(a->getElementType(),depth+1,field);
+    if (isa<ReferenceType>(t)) return field; // Reference members have no destructor.
+    if (isa<BuiltinType,PointerType,MemberPointerType,EnumType>(t)) return true;
+    const auto* rt = dyn_cast<RecordType>(t);
+    const auto* r = rt ? dyn_cast<CXXRecordDecl>(rt->getDecl()) : nullptr;
+    if (!r || !(r = r->getDefinition()) || !e.user(r->getBeginLoc()) ||
+        r->isDependentType() || r->getDescribedClassTemplate() ||
+        isa<ClassTemplateSpecializationDecl>(r) || r->hasAttrs() ||
+        !r->hasTrivialDestructor()) return false;
+    for (const auto* context = r->getDeclContext(); context; context = context->getParent()) {
+      if (context->isDependentContext()) return false;
+      if (const auto* parent = dyn_cast<CXXRecordDecl>(context);
+          parent && (parent->getDescribedClassTemplate() || isa<ClassTemplateSpecializationDecl>(parent))) return false;
+    }
+    for (const auto& base : r->bases()) if (!trivialStorageType(base.getType(),depth+1)) return false;
+    for (const auto* f : r->fields()) if (!trivialStorageType(f->getType(),depth+1,true)) return false;
+    return true;
+  }
+  bool noStorageInstantiationEffect(const VarDecl* variable) {
+    const auto* v = storagePattern(variable);
+    if (!safeSystemMacros(v) || v->getType()->isDependentType()) return false;
+    const auto* init = v->getInit();
+    if (init && (init->isTypeDependent() || init->isValueDependent())) return false;
+    // Only non-constexpr storage outside blocks reaches this proof. Use the
+    // syntactic constant-initializer proof, never local constant evaluation.
+    // inertExpr also rejects materialized temporaries and default expressions,
+    // so this cannot overlook lifetime extension through reference members.
+    return inertExpr(init) && trivialStorageType(v->getType());
+  }
   std::set<const VarDecl*> inertActive;
   bool inertExpr(const Expr* expr, unsigned depth = 0) {
     if (!expr) return true;
@@ -869,7 +925,11 @@ public:
     const bool inert = (inertType(v->getType()) && safeSystemMacros(v) && inertExpr(v->getInit())) || inertConstexpr(v);
     if (!inert) {
       e.model.families[current].root = "not inert (static or thread storage)";
-      if (templated(v)) e.model.families[current].instantiationEffect = "template static or thread storage not inert";
+      // A11 excludes constexpr destruction (including extended temporaries)
+      // and destruction of block storage whose declaration is never reached.
+      // Ordinary dependencies preserve reached declarations; rule 1 is unchanged.
+      if (templated(v) && !v->isConstexpr() && !v->isLocalVarDecl() && !noStorageInstantiationEffect(v))
+        e.model.families[current].instantiationEffect = "template static or thread storage not inert";
     }
     return true;
   }

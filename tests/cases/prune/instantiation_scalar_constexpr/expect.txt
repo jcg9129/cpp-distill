@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed dormant | outside the retention closure
+kept value | not inert (static or thread storage)

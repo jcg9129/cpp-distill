@@ -7,6 +7,6 @@ configuration=local
 profile=fixture
 absent=int unused
 report=pruned: passed
-report.1=policy: D3d-6
+report.1=policy: D3d-7
 diagnostic=check compiler unavailable: distill-missing-check-719239
 report.a11=pruning assumption: A11

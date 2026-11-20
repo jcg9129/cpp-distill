@@ -248,14 +248,102 @@ int main(int argc, char** argv) {
       for (const auto& source : {
           "int notify(); template<class T> struct Effect { static inline int x = notify(); };",
           "int notify(); template<class T> inline int Effect = notify();",
-          "template<class T> __attribute__((used)) void Effect() {}",
-          "int notify(); template<class T> int Effect() { static int x = notify(); return x; }",
-          "int notify(); template<class T> struct Effect { int f() { static int x = notify(); return x; } };",
-          "int notify(); template<class T> struct Effect { int f(); }; template<class T> int Effect<T>::f() { static int x = notify(); return x; }"}) {
+          "template<class T> __attribute__((used)) void Effect() {}"}) {
         m = extract(std::string(source) + "\nstruct Dead {}; int main(){}\n",o);
         r = take(computeRetention(m)); check(r.disabledReasons.empty(),"effect pattern disabled");
         check(std::any_of(m.families.begin(),m.families.end(),[](const auto& f) { return f.label.starts_with("Effect") && !f.instantiationEffect.empty(); }),"effect pattern not classified: " + std::string(source));
         check(!kept("Dead"),"effect pattern disabled all deletion");
+      }
+    });
+    run("D3d-7 dynamic block storage keeps roots but releases unrelated triggers", [&] {
+      for (const auto* source : {
+          "int notify(); template<class T> int Effect() { static int x = notify(); return x; } int dormant(){ return Effect<int>(); }",
+          "int notify(); template<class T> struct Effect { int f() { static thread_local int x = notify(); return x; } }; int dormant(){ return Effect<int>{}.f(); }",
+          "int notify(); template<class T> struct Effect { int f(); }; template<class T> int Effect<T>::f() { static int x = notify(); return x; } int dormant(){ return Effect<int>{}.f(); }"}) {
+        m = extract(std::string(source) + "\nint main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"dynamic local disabled");
+        check(!kept("dormant"),"unrelated trigger retained for dynamic block local");
+        check(std::any_of(m.families.begin(),m.families.end(),[](const auto& f) {
+          return f.label.starts_with("Effect") && !f.root.empty() && f.instantiationEffect.empty();
+        }),"dynamic local changed rule-1 root or remained a source");
+      }
+    });
+    run("D3d-7 non-constexpr constant storage releases triggers", [&] {
+      for (const auto* source : {
+          "using Scalar=unsigned; template<int> inline const Scalar value=3;",
+          "struct Plain { int x; }; template<int> inline const Plain value{3};",
+          "struct Base { int x; }; struct Plain:Base { int y; }; template<int> inline const Plain value{{3},4};",
+          "using Scalar=unsigned; template<int> inline const Scalar value[2]={3,4};",
+          "template<int> inline const int* value=nullptr;"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"constant storage disabled");
+        check(family(m,"value").instantiationEffect.empty(),"fixed constant storage remains a source");
+        check(!kept("dormant"),"constant storage retained unrelated trigger");
+      }
+    });
+    run("A11 retains non-constexpr uncertain non-block storage", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> inline int value=notify();",
+          "template<int N, class T=int> inline T value{};",
+          "struct Noisy { constexpr Noisy(){} ~Noisy(){} }; template<int> inline const Noisy value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; template<int> inline const Pick<(sizeof(long)==4)>::type value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; struct Plain { Pick<(sizeof(long)==4)>::type field; }; template<int> inline const Plain value{};",
+          "struct Noisy { constexpr ~Noisy(){} }; struct Holder { const Noisy& member; }; template<int> inline const Holder value{Noisy{}};",
+          "struct Noisy { constexpr ~Noisy(){} }; struct Holder { const Noisy& member=Noisy{}; }; template<int> inline const Holder value{};"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"conservative storage disabled");
+        check(!family(m,"value").instantiationEffect.empty(),"uncertain storage incorrectly exempted: " + std::string(source));
+        check(kept("dormant"),"possible storage trigger removed: " + std::string(source));
+      }
+    });
+    run("A11 excludes all block static and thread storage effects", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> void value(){ static int object=sizeof(long)==4 ? 0 : notify(); }",
+          "int notify(unsigned long); constexpr int notify(unsigned){return 0;} template<int> void value(){ static int object=notify(sizeof(long)); }",
+          "struct Noisy { constexpr Noisy(){} ~Noisy(){} }; template<int> void value(){ static Noisy const object; }",
+          "template<int N, class T=int> void value(){ static T const object{}; }",
+          "template<int N, class T=int> void value(){ thread_local T const object{}; }",
+          "struct Noisy { ~Noisy(){} }; template<int> void value(){ static const Noisy& object=Noisy{}; }",
+          "struct Noisy { ~Noisy(){} }; template<int> void value(){ thread_local const Noisy& object=Noisy{}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"block A11 disabled");
+        check(!family(m,"value").root.empty(),"block A11 lost rule-1 root");
+        check(family(m,"value").instantiationEffect.empty(),"block A11 remains a source");
+        check(!kept("dormant"),"block A11 retained unrelated trigger");
+        check(r.assumptions.contains("A11"),"block A11 not reported");
+      }
+    });
+    run("A11 excludes constexpr storage of any type and extended objects", [&] {
+      for (const auto* source : {
+          "struct Quiet { int x=0; }; template<int> constexpr const int& value=Quiet{}.x;",
+          "struct Quiet { int x=0; }; struct Holder { const Quiet& member; }; template<int> constexpr Holder value{Quiet{}};",
+          "struct Quiet { int x=0; }; struct Holder { const Quiet& member=Quiet{}; }; template<int> constexpr Holder value{};",
+          "template<bool> struct Pick { struct type { int x=0; }; }; template<> struct Pick<true> { struct type { int x=0; constexpr ~type(){} }; }; template<int> constexpr const int& value=Pick<(sizeof(long)==4)>::type{}.x;",
+          "struct Noisy { constexpr ~Noisy(){} }; template<int> void value(){ static constexpr Noisy object{}; }",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; template<int> constexpr Pick<(sizeof(long)==4)>::type value{};",
+          "template<bool> struct Pick { using type=int; }; template<> struct Pick<true> { struct type { constexpr ~type(){} }; }; struct Plain { Pick<(sizeof(long)==4)>::type field; }; template<int> constexpr Plain value{};",
+          "template<int N, class T=int> constexpr T value{};",
+          "template<int> constexpr auto value=0;",
+          "template<int N, class T=int> void value(){ static thread_local constexpr T object{}; }",
+          "template<int N, class T=int> void value(){ static constexpr T object{}; }"}) {
+        m = extract(std::string(source) + "\nvoid dormant(){ (void)&value<0>; } int main(){}\n",o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"A11 storage disabled");
+        check(family(m,"value").instantiationEffect.empty(),"A11 constexpr storage remains a source");
+        check(!kept("dormant"),"A11 constexpr storage retained unrelated trigger");
+        check(r.assumptions.contains("A11"),"A11 not reported");
+      }
+    });
+    run("A11 exemptions preserve other effects in the same family", [&] {
+      for (const auto* source : {
+          "int notify(); template<int> struct Effect { static inline int live=notify(); static constexpr int quiet=0; void local(){static int x=notify();} };",
+          "int notify(); template<int> struct Effect { void local(){static int x=notify();} static constexpr int quiet=0; static inline int live=notify(); };",
+          "template<int> __attribute__((used)) void Effect(){static constexpr int quiet=0;}"}) {
+        const bool function = std::string_view(source).find("__attribute__") != std::string_view::npos;
+        m = extract(std::string(source) + (function ? "\nvoid dormant(){ (void)&Effect<0>; } int main(){}\n" :
+            "\nvoid dormant(){ (void)sizeof(Effect<0>); } int main(){}\n"),o);
+        r = take(computeRetention(m)); check(r.disabledReasons.empty(),"mixed effects disabled");
+        check(!family(m,"Effect").instantiationEffect.empty(),"A11 exemption cleared another effect");
+        check(kept("dormant"),"mixed effect lost its trigger");
       }
     });
     run("A11 excludes friend-definition instantiation", [&] {

@@ -819,10 +819,20 @@ as written, or structurally empty non-template user tags with empty list
 initialization. Aliases/deduced/dependent types receive no new exemption;
 explicit specializations are classified independently. Every pruned artifact
 reports A7, including deletions unrelated to variables (enum cache seeds).
-Policy D3d-6 also reports A11 for every enabled pruning result: friend-definition
-instantiation and template parameter object destruction are excluded. Non-inert
-template static/thread storage and templated attribute/symbol roots still seed
-reverse retention; unbounded incoming library hooks still disable pruning.
+Policy D3d-7 reports the extended A11 (user, 2026-11-20) for every enabled
+pruning result: friend-definition instantiation, template parameter object
+destruction, destruction of constexpr variables and the temporaries whose
+lifetimes they extend, and destruction of never-reached block static/thread
+storage are excluded. Constexpr variables of every scope/type
+and all block-scope static/thread variables cease to seed reverse retention;
+rule-1 roots and ordinary dependencies are unchanged. Non-constexpr storage
+outside blocks still seeds effects unless constant initialization, trivial
+destruction and absence of lifetime-extended temporaries are proven from the
+written pattern. Dynamic namespace storage and possible non-trivial destruction
+remain conservative. Templated attribute/symbol sources and unbounded incoming
+library-hook refusals are unchanged. See the
+[review](../../docs/reviews/2026-11-20-instantiation-effects.md) for the proof,
+A11 exclusions, compiler probes and measurements.
 Constexpr resource-flag support remains deferred.
 
 Policy D3d-4 (`docs/reviews/2026-11-18-equal-literal-macros.md`) accepts a

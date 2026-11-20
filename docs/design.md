@@ -156,12 +156,8 @@ these, and only these; the report lists each one an output depended on, and
   Different values for a name make that name unknown. The report lists A9
   whenever a resolution relies on these header-derived facts.
 
-- **A11** (user, 2026-11-20) The program's observable behaviour and its
-  compilation success do not depend on whether the definition of a function
-  friend declared in a template has been instantiated (friend injection /
-  stateful metaprogramming, cf. CWG 2118), nor on the destruction of template
-  parameter objects. Every pruned artifact relies on A11; the report lists it
-  alongside A7.
+- **A11** (user, 2026-11-20) The program's observable behaviour and its compilation success do not depend on whether the definition of a function friend declared in a template has been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118), nor on the destruction of template parameter objects, of constexpr variables and the temporaries whose lifetime they extend, or of block-scope variables with static or thread storage duration whose declaration control never reached.
+  Every pruned artifact relies on A11; the report lists it alongside A7.
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -1349,12 +1345,36 @@ template parameter names and local names are not indexed.
    declarations included, without filtering by Clang's viability or the
    instantiations it saw. A construct the traversal doesn't support
    pins its family; if its dependencies can't be bounded, pruning is disabled.
-6. **Instantiation effects** (policy **D3d-6**): preserving a template's
+6. **Instantiation effects** (policy **D3d-7**): preserving a template's
    definition does not preserve the code that instantiates it. Effect sources
    are static/thread storage definitions in template contexts outside rule 1's
-   inert exemptions, interpreted attribute roots in template contexts, and
+   inert exemptions and the additional storage proofs below, interpreted
+   attribute roots in template contexts, and
    template entities referenced by interpreted assembly/alias symbols
    (retaining their patterns alone need not emit the referenced specializations).
+   Rule 1's roots are unchanged. Under A11, constexpr variables of any scope
+   or type and all block-scope static/thread variables are not storage effect
+   sources. Constant initialization has no independent runtime effect;
+   dynamic initialization of block storage requires control to reach its
+   declaration, preserved through ordinary dependencies. A11 excludes constexpr
+   destruction (including lifetime-extended temporaries) and destruction of
+   block storage whose declaration is never reached. This block exemption is
+   an assumption, not a language guarantee inferred from compiler behavior.
+   Other static/thread storage is exempt only with an all-target proof of
+   constant initialization, no possible non-trivial destruction of its own
+   type, and **no lifetime-extended temporary in its initializer**, including
+   through aggregate reference members and default member initializers.
+   The additional proof uses the existing syntactic constant initializer proof
+   and a written, target-stable non-reference scalar/array type or a provably
+   trivially destructible user class. User aliases are inspected as written;
+   classes must be non-template and all their bases/fields must have provably
+   trivial destruction. References are allowed as fields only; their
+   initializers still must pass the syntactic proof, which rejects materialized
+   temporaries and default member/default argument expressions outright.
+   Dependent types/initializers, deduced types, template-selected member types
+   and system class selections do not pass this additional proof. Implicit
+   specializations use their pattern; explicit specializations are checked
+   independently. The original positive inert exemptions remain in force.
    This includes member and nested templates, partial specializations,
    variable and function templates,
    generic lambdas, and out-of-line members. Keep effect sources and every
@@ -1380,18 +1400,17 @@ template parameter names and local names are not indexed.
    four-million-edge limit; exceeding it disables pruning. See the
    [instantiation-effects review](reviews/2026-11-20-instantiation-effects.md).
 
-**Under A11 (user, 2026-11-20).** Function friend declarations in templates and
-potential class-valued non-type template parameter objects no longer seed
-rule 6. A11 excludes both behaviour and compilation-success dependencies on
-friend-definition instantiation, and runtime destruction of parameter objects.
-Their ordinary name, type, value and AST dependencies still participate in the
-forward closure. Static/thread variables and templated attribute/symbol roots
-remain effect sources: A11 does not exclude their initialization, destruction or
-emission. Reverse closure still preserves all potential triggers of those
-sources, including dormant patterns and target-dependent paths; unbounded
-incoming library hooks still refuse. Thus removing the two excluded sources
-does not weaken the argument for the remaining effects. Every enabled pruned
-artifact reports A11 alongside A7, even when no family is deleted.
+**Under A11 (user, 2026-11-20).** Function friend declarations in templates,
+potential class-valued non-type template parameter objects, constexpr variables
+and block-scope static/thread variables no longer seed rule 6. Their ordinary
+name, type, value and AST dependencies still participate in forward closure.
+Non-constexpr static/thread storage outside blocks can still introduce dynamic
+initialization or destruction independently of control reaching a declaration;
+it remains a source unless positively proven harmless as above. Templated
+attribute/symbol roots also remain sources. Reverse closure preserves their
+potential triggers, including dormant patterns and target-dependent paths;
+unbounded incoming library hooks still refuse. Every enabled pruned artifact
+reports A11 alongside A7, even when no family is deleted.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. It catches range and editing

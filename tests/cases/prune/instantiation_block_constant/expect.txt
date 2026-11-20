@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+a11-exclusion | A11 excludes constexpr destruction or never-reached block storage destruction
+removed dormant | outside the retention closure
+report | pruning assumption: A11

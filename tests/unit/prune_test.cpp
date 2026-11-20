@@ -57,7 +57,7 @@ TEST(prune_a7_a11_apply_even_without_family_deletion) {
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
   CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3d-6");
+  CHECK(b.run().policy == "D3d-7");
 }
 TEST(prune_never_removed_rules_and_nonroots) {
   for (int rule = 0; rule < 10; ++rule) {
