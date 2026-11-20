@@ -1,7 +1,7 @@
 class A {
     /// caide concept
-    void f() {}
-    void g() {}
+    void distill_discard_f() {}
+    void distill_discard_g() {}
 };
 
 class B {

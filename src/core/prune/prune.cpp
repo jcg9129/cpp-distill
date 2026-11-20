@@ -308,8 +308,8 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   // Also cover models supplied without worker extraction (and offline tests).
   auto memberRegistry = m.libraryMemberNames;
   const auto scannedMemberNames = embeddedLibraryData().memberNames;
-  if (m.assumeLibrarySpelledMembers)
-    for (auto name : scannedMemberNames) memberRegistry.emplace(name);
+  // The scanned union is already sorted. Query it in place instead of copying
+  // every name into a set for each retention calculation.
   // Language member lookup applies even with no system includes.
   for (const char* name : {
       "begin", "end", "get", "get_return_object", "initial_suspend", "final_suspend",
@@ -321,7 +321,9 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     const auto& f = m.families[i];
     members[f.memberOf].push_back(i);
     memberReasons[i] = out.memberDisabledReasons.empty() ? f.memberBlocker : "member pruning disabled";
-    if (memberReasons[i].empty() && memberRegistry.contains(f.memberName))
+    if (memberReasons[i].empty() && (memberRegistry.contains(f.memberName) ||
+        (m.assumeLibrarySpelledMembers &&
+         std::binary_search(scannedMemberNames.begin(),scannedMemberNames.end(),f.memberName))))
       memberReasons[i] = "D3e rule 4: library or language spelling: " + f.memberName;
   }
   // Rules 1-4/8 never separate a unit from a kept owner. Their incoming member

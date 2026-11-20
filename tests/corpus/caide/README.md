@@ -6,7 +6,10 @@ Copied from the user's own GPL-3.0 fork of caide-cpp-inliner at
 The upstream project is https://github.com/slycelote/caide-cpp-inliner.
 These sources retain their original notices and are distributed under GPL-3.0;
 see the repository's [LICENSE](../../../LICENSE). SHA256SUMS identifies the
-byte-for-byte copied files; generated cmd.txt and main.cpp adapters are excluded.
+reviewed files; generated cmd.txt and main.cpp adapters are excluded. The
+`caide-concept-comment` fixture renames f/g to `distill_discard_f/g` to preserve
+member-removal coverage now that f/g occur in the scanned library inventory;
+all other copied sources remain byte-for-byte unchanged.
 
 The corpus supplies both measurements and D4a assertions. Each directory now has
 an individually reviewed `expect.txt`; [PORT.md](PORT.md) classifies all 81 against

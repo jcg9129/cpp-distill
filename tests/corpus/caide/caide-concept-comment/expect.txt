@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# D3e removes unreferenced f/g from kept A; legacy caide concept comments are not roots.
+# f/g occur in the scanned library inventory; renamed members preserve removal coverage.
+# D3e removes unreferenced distill_discard_f/g from kept A; legacy caide concept comments are not roots.
 exit=0
 artifact=pruned
 contains=class A
 contains.1=int main
 absent=class B
 absent.1=void h()
-absent.2=void f()
-absent.3=void g()
+absent.2=void distill_discard_f()
+absent.3=void distill_discard_g()

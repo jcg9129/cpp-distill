@@ -18,7 +18,7 @@ spec.loader.exec_module(measure)
 
 
 class MeasurementTests(unittest.TestCase):
-    def test_all_caide_cases_once_and_original_hashes(self):
+    def test_all_caide_cases_once_and_reviewed_hashes(self):
         root = Path("tests/corpus/caide")
         sources = list(measure.solutions(root))
         self.assertEqual(len(sources), 81)

@@ -66,6 +66,15 @@ per-build changes even when the global union is unchanged. This widening can
 only retain more members. JSON size grows by the canonical name-array bytes
 plus one small summary per build; CI prints the exact added inventory bytes.
 
+The C++ embedding front-codes the sorted union: each newline-delimited record
+stores its shared UTF-8 prefix length and the remaining suffix. Printable prefix
+codes and roughly 4 KiB chunks keep source literals portable. The inventory is
+decoded once on first use into one reserved string and a sorted span of views;
+the views remain valid for the process lifetime. The 32,555-name baseline emits
+about 588 KB of C++ source including feature transitions, down from 852 KB with
+one string-view literal per member. The source-size test allows 620,000 bytes
+(about 5% headroom), and compiled round trips check every shipped name.
+
 The compact file shares repeated records using content-address tables (the first
 16 hexadecimal SHA-256 digits, with collision detection). Build `headers` refer
 through `build_headers` to `snapshots`; version `roots` refer through

@@ -166,12 +166,13 @@ int main(int argc, char** argv) {
       }
       {
         auto [m,r,out] = analyze(
+          // "drop" occurs in the scanned inventory; keep testing removal beside overrides.
           "struct Root { virtual int hook(){return 0;} };\n"
-          "template<class B> struct Dep : B { int hook(){return 0;} int drop(){return 0;} };\n"
-          "struct Override final : Root { int hook() override final {return 0;} int drop(){return 0;} };\n"
+          "template<class B> struct Dep : B { int hook(){return 0;} int distill_discard_override(){return 0;} };\n"
+          "struct Override final : Root { int hook() override final {return 0;} int distill_discard_override(){return 0;} };\n"
           "int main(){Dep<Root> d; Override o; (void)d;(void)o;}\n",true);
         unit(m,r,"Dep::hook",true,"rule 1"); unit(m,r,"Override::hook",true,"rule 1");
-        unit(m,r,"Dep::drop",false); verify(out); ++cases;
+        unit(m,r,"Dep::distill_discard_override",false); verify(out); ++cases;
       }
       {
         auto [m,r,out] = analyze(

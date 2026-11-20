@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # caide assertion port (D4a)
 
-Reviewed individually against `/workspace/caide-cpp-inliner/tests/cases/<case>/etalon.cpp` and its numbered inputs on 2026-11-16. Source hashes remain unchanged. Assertions use preprocessing-token sequences, so comments and formatting cannot satisfy a removed-name check.
+Reviewed individually against `/workspace/caide-cpp-inliner/tests/cases/<case>/etalon.cpp` and its numbered inputs on 2026-11-16. Source hashes remain unchanged except for the reviewed member renames in `caide-concept-comment` (see below). Assertions use preprocessing-token sequences, so comments and formatting cannot satisfy a removed-name check.
 
 Each line classifies declaration retention/removal relative to caide. “Same removal” includes cases with no removed declarations. Unsupported legacy test-harness controls are documented explicitly; they are not compiler options and are not silently executed. Their input still receives the normal v8 checks, with the successful outcome asserted below. Actual unsupported inputs assert exit 1 plus diagnostics.
 
@@ -14,7 +14,7 @@ The caide runner shares `expect.txt` key=value syntax with pipeline cases. `cont
 - `alias-in-template-argument` — same removal: no eligible removals; spelled aliases X/Y and template f/C remain (§4.7 rules 2/4).
 - `base-class-of-template` — keeps more because §4.7 template-family aggregation retains templ<double> and its unused_base dependency.
 - `base-initializers` — same removal: no eligible removals; Type in the base initializer retains the alias and A (§4.7 rules 2/4).
-- `caide-concept-comment` — keeps more because §4.7 keeps A whole, including g; caide concept comments have no special meaning; unused B still goes.
+- `caide-concept-comment` — unsupported because legacy caide concept comments do not root declarations; D3e removes both unreferenced members from kept A and removes unused B. The original f/g names occur in the generator-4 scanned library inventory, so they are renamed to `distill_discard_f/g` to retain removal coverage. SHA256SUMS records the adapted input; its original SHA-256 was `4653ed57542f9c587e2110634a29dab6d69ddd86ab1ea9eea415d346566375a0`.
 - `compiler-macro-branch` — same removal: both compiler branches remain; §4.5 leaves __clang__ unknown without a profile, disabling pruning.
 - `concept-constrained-ctad` — keeps more because §4.7 A6 has no c++2c audit: flat retains splitter as well as the combiner constraint and deduction guide.
 - `concept-ctor-requires` — keeps more because §4.7 A6 has no c++2c audit: flat retains value_range with index_range and the constrained constructor.

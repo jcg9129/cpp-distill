@@ -505,7 +505,7 @@ TEST(resolve_library_shipped_acceptance_and_provenance) {
     CHECK_EQ(r.decisions[0].external[0].fact.provenance, (std::vector{FactOrigin::library}));
     CHECK_EQ(r.decisions[0].external[0].fact.definition->replacement, "201611L");
     CHECK_EQ(r.libraryProvenance.size(), 1u);
-    CHECK(r.libraryProvenance.begin()->find("generator=3 schema=2 embed=1 sha256:") != std::string::npos);
+    CHECK(r.libraryProvenance.begin()->find("generator=4 schema=2 embed=1 sha256:") != std::string::npos);
     CHECK(r.libraryProvenance.begin()->find("selector=" + data.selector(p)) != std::string::npos);
     // Check actual replacement arithmetic with a model the local oracle can
     // represent (the Codeforces profile itself has MinGW's LLP64 layout).

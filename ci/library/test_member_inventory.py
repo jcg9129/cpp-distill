@@ -75,7 +75,7 @@ def test_global_union_determinism_no_repeated_build_sets_and_pasting():
     assert not data['builds']['profile-a']['member_inventory']['token_pasting']
     assert data['builds']['extensions-b']['member_inventory']['token_pasting']
     embedded = generate(baseline_text(data).encode(), {'charconv'})
-    assert '"only_a"' in embedded and '"only_b"' in embedded
+    assert 'memberChunks[]' in embedded
     assert 'worker headers + 2 scanned builds (generator 4)' in embedded
     assert 'token_pasting_headers' not in embedded
 
@@ -108,7 +108,7 @@ def test_embed_missing_inventory_only_supported_for_old_baseline():
         del build['member_inventory']
     text = generate(baseline_text(data).encode(), {'charconv'})
     assert 'scanned-build inventory unavailable' in text
-    assert 'memberNames[]' not in text
+    assert 'memberChunks[]' not in text
 
 
 def test_inventory_changes_evidence_digest_even_when_union_unchanged():
@@ -127,7 +127,7 @@ def test_unicode_inventory_embeds_utf8_without_cpp_surrogate_escapes():
     row['member_inventory'] = inventory({'0/header': r'int caf\u00e9; int \U00010400;'})
     data = merge([row], [row['build']])
     text = generate(baseline_text(data).encode(), {'charconv'})
-    assert '"café"' in text and '"𐐀"' in text
+    assert 'café' in text and '𐐀' in text
     assert '\\ud801' not in text
 
 
