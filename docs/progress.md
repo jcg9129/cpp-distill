@@ -34,6 +34,54 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4/D5 remainder | user corpus measurement (keep the user's library and solutions outside the repo and measure with `ci/measure-local.sh`) and fixes from it; any remaining checker work; see design §7 |
 | D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42), Library Checker (#44), Timus (#48) shipped; Luogu parked (see D6 section) |
 | Profile maintenance | design §4.3.2; drift check (weekly evidence/availability, monthly reproduction) in the drift PR; no binary mirror |
+| L1c library facts | done: part A (#100), part B (#102), `#pragma once` elision (#101), single-build flag coverage (#103) |
+| Pruning soundness D3d-5…7 | done (#104, 2026-11-20): instantiation-effect closure; A11 `instantiation-effects`; `--no-assume=instantiation-effects` |
+| Member pruning D3e | done (#105, #106, 2026-11-20): unused member functions under A12 `library-spelled-members` (worker headers + scanned-build inventory); `--no-assume=library-spelled-members` |
+| Call-based member retention | started 2026-11-20: analysis only (see current state) |
+
+## Current state (2026-11-20)
+
+main is at 183286f (#106). All CI green on the merged heads. atl sweep
+(CSES, atl 97d9e23, 68 examples, nlm): 68/68 pruned, 0 run failures, total
+2,578,588 bytes, median 25,634 (before D3e: 2,675,062 / 27,978). Evidence:
+sweep runs 44799205167 (#105) and 44818934258 (#106), compared with
+44746885846 (#104).
+
+Assumptions added this round (design.md, A11 and A12; both user-approved
+2026-11-20, both reported in every pruned artifact that relies on them):
+
+- A11 `instantiation-effects`: no dependence on template friend definition
+  instantiation, template parameter object destruction, destruction of
+  constexpr variables (and temporaries they extend) or of never-reached
+  block-scope statics. GCC 15/Clang 22 probes in
+  [`reviews/2026-11-20-instantiation-effects.md`](reviews/2026-11-20-instantiation-effects.md).
+- A12 `library-spelled-members`: the library names user members only through
+  identifiers spelled in (or macro-produced by) the worker's included system
+  headers or spelled in a scanned build's headers (`member_names` in
+  `data/library/library.json`, 32,555 names, generator 4). Design and the
+  independent review fixes: [`reviews/2026-11-20-member-pruning.md`](reviews/2026-11-20-member-pruning.md).
+  The audited-list alternative A10 was dropped.
+
+Remaining known over-retention: members whose names are spelled anywhere in
+kept text (rule 5) or in dependent expressions (rule 6) are kept even if never
+called; `modular-arithmetic-residues` keeps ~3.4 KB from the dependent
+`static inline reducer reducer_` of `dynamic_mod_int` (not covered by A11).
+
+Running at handoff (2026-11-20, results not yet in the repo):
+
+- Codex analysis on local branch `calls-analysis` (not pushed): classifies
+  retained member units by reason (AST use, name-only non-dependent, dependent,
+  macro, library inventory, cycles) on atl 5e2a6e2 and writes
+  `docs/reviews/2026-11-21-member-call-analysis.md`. Its result decides the
+  design of call-based retention; nothing is implemented yet.
+- Baseline release + atl sweep on main with the new atl revision 5e2a6e2
+  (adds graph libraries): needed because the sweep always uses atl main, so
+  later comparisons must use this baseline, not 44818934258.
+
+Next step: read the analysis, write the call-based retention design (lookup
+resolution for non-dependent name tokens, instantiation-based or name-based
+handling of dependent names, cross-target type selection risk), get a Codex
+`ask` review, then ask the user before any new assumption.
 
 ## D1 findings (2026-11-15)
 
