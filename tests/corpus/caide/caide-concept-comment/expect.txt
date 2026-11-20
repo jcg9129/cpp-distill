@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# keeps more because §4.7 keeps A whole, including g; caide concept comments have no special meaning; unused B still goes.
+# D3e removes unreferenced f/g from kept A; legacy caide concept comments are not roots.
 exit=0
 artifact=pruned
 contains=class A
-contains.1=void f()
-contains.2=void g()
-contains.3=int main
+contains.1=int main
 absent=class B
 absent.1=void h()
+absent.2=void f()
+absent.3=void g()

@@ -82,3 +82,11 @@ endif()
 # LLVM-free to compile locally; actual measurement requires the SDK worker.
 add_executable(distill_measure measure.cpp)
 target_link_libraries(distill_measure PRIVATE distill_core distill_test_evaluate)
+
+if(TARGET distill_prune_worker)
+  add_executable(distill_member_pruning_tests member_pruning_tests.cpp)
+  target_link_libraries(distill_member_pruning_tests PRIVATE distill_core)
+  add_dependencies(distill_member_pruning_tests distill_prune_worker)
+  add_test(NAME member_pruning COMMAND distill_member_pruning_tests $<TARGET_FILE:distill_prune_worker>)
+  set_tests_properties(member_pruning PROPERTIES TIMEOUT 120)
+endif()

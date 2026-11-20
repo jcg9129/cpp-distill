@@ -179,6 +179,8 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     const auto& f = m.families[i];
     const auto field = "model.families[" + std::to_string(i) + "]";
     if (static_cast<unsigned>(f.kind) > static_cast<unsigned>(FamilyKind::instantiation)) return invalid("invalid family kind",field+".kind");
+    if (f.memberOf != noFamily && (f.memberOf >= n || f.memberOf == i || f.memberName.empty()))
+      return invalid("invalid member owner",field+".memberOf");
     for (std::size_t j = 0; j < f.ranges.size(); ++j) {
       auto r = f.ranges[j];
       if (!valid(r)) return invalid("invalid family edit range",field+".ranges["+std::to_string(j)+"]");
@@ -241,6 +243,12 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   const auto& registry = embeddedAdlRegistry();
   PruningResult out; out.dialect = m.dialect; out.registryVersion = registry.version; out.registryDigest = registry.digest;
   if (!m.assumeInstantiationEffects) out.policy += ", without instantiation-effects";
+  if (!m.assumeLibrarySpelledMembers) out.policy += ", without library-spelled-members";
+  out.memberDisabledReasons = m.memberDisabledReasons;
+  if (!m.assumeLibrarySpelledMembers) out.memberDisabledReasons.push_back("--no-assume=library-spelled-members");
+  else if (!m.libraryMemberNamesComputed) out.memberDisabledReasons.push_back("library-spelled identifier set could not be computed");
+  for (const auto& header : m.systemPasteHeaders)
+    out.memberDisabledReasons.push_back("system header can form identifiers by token pasting (##): " + header);
   auto disable = [&](std::string s) {
     if (std::find(out.disabledReasons.begin(), out.disabledReasons.end(), s) == out.disabledReasons.end()) out.disabledReasons.push_back(std::move(s));
   };
@@ -298,6 +306,22 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     }
   };
   const auto adl = registry.names(m.dialect);
+  // Hook: union inventories of all scanned library builds here in later work.
+  auto memberRegistry = m.libraryMemberNames;
+  // Language member lookup applies even with no system includes.
+  for (const char* name : {
+      "begin", "end", "get", "get_return_object", "initial_suspend", "final_suspend",
+      "return_value", "return_void", "yield_value", "await_transform", "unhandled_exception",
+      "get_return_object_on_allocation_failure", "await_ready", "await_suspend", "await_resume"}) memberRegistry.insert(name);
+  std::vector<std::vector<FamilyId>> members(n);
+  std::vector<std::string> memberReasons(n);
+  for (FamilyId i = 0; i < n; ++i) if (m.families[i].memberOf != noFamily) {
+    const auto& f = m.families[i];
+    members[f.memberOf].push_back(i);
+    memberReasons[i] = out.memberDisabledReasons.empty() ? f.memberBlocker : "member pruning disabled";
+    if (memberReasons[i].empty() && memberRegistry.contains(f.memberName))
+      memberReasons[i] = "D3e rule 4: library or language spelling: " + f.memberName;
+  }
   for (FamilyId i = 0; i < n; ++i) {
     const auto& f = m.families[i];
     std::string why;
@@ -308,16 +332,27 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     else if (f.namespaceUsing) why = "never removed: namespace using";
     else if (f.externCDefinition) why = "never removed: extern C definition";
     else if (f.systemSpecialization && f.associatedTypes.empty()) why = "never removed: system specialization without user type";
-    else if (std::any_of(f.callableNames.begin(), f.callableNames.end(), [&](const auto& name) { return adl.contains(name); })) why = "never removed: ADL name (A6)";
+    else if (f.memberOf == noFamily && std::any_of(f.callableNames.begin(), f.callableNames.end(), [&](const auto& name) { return adl.contains(name); })) why = "never removed: ADL name (A6)";
     else if (!f.root.empty()) why = "root: " + f.root;
     else if (f.kind == FamilyKind::assertion) why = "root: namespace static_assert";
     else if (f.kind == FamilyKind::instantiation) why = "root: explicit instantiation";
-    else if (f.names.contains("main")) why = "root: main";
+    else if (f.memberOf == noFamily && f.names.contains("main")) why = "root: main";
     else if (std::any_of(f.names.begin(), f.names.end(), [&](const auto& name) { return m.keepNames.contains(name); })) why = "root: --keep";
     else if (std::any_of(m.annotations.begin(), m.annotations.end(), [&](auto a) { return a.family == i; })) why = "root: distill: keep";
     else for (auto r : f.ranges) for (auto d : m.sourceDirectives) if (intersects(r,d)) why = "pinned: source directive";
-    if (!why.empty()) keep(i, why, noFamily);
+    if (!why.empty()) keep(i, f.memberOf == noFamily ? why : "D3e rule 7: " + why, noFamily);
   }
+  // D3e applies to member units of kept owners. A coincidental member name
+  // in another record must not resurrect an otherwise-unused record. Actual
+  // AST references, roots/pins and effect triggers still retain their owner.
+  std::vector<std::optional<std::pair<std::string,FamilyId>>> pendingNames(n);
+  auto keepName = [&](FamilyId id, const std::string& why, FamilyId cause) {
+    if (out.families[id].kept) return;
+    const auto owner = m.families[id].memberOf;
+    if (owner != noFamily && !out.families[owner].kept) {
+      if (!pendingNames[id]) pendingNames[id] = {why,cause};
+    } else keep(id,why,cause);
+  };
   auto tokens = pruningIdentifiers(m.text); if (!tokens.ok()) return tokens.error();
   std::map<std::string, std::vector<FamilyId>, std::less<>> index, callables;
   std::vector<std::vector<FamilyId>> associations(n);
@@ -326,7 +361,9 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     for (const auto& name : m.families[i].names) index[name].push_back(i);
     for (const auto& name : m.families[i].callableNames) callables[name].push_back(i);
     const auto& f = m.families[i];
-    if (!f.callableNames.empty() || f.kind == FamilyKind::function || f.kind == FamilyKind::specialization || f.systemSpecialization)
+    // Type association retains nonmember ADL/system hooks. Member lookup is
+    // bounded separately by D3e names; a kept argument type is not a caller.
+    if (f.memberOf == noFamily && (!f.callableNames.empty() || f.kind == FamilyKind::function || f.kind == FamilyKind::specialization || f.systemSpecialization))
       for (auto type : f.associatedTypes) associations[type].push_back(i);
   }
   // Byte ownership, not presumed source locations, decides "outside itself".
@@ -340,7 +377,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     FamilyId owner = noFamily;
     if (it != ownership.begin()) { auto [begin,end,id] = *std::prev(it); if (begin <= t.begin && t.begin < end) owner = id; }
     if (owner == noFamily) {
-      for (auto id : index[t.text]) keep(id, "name: " + t.text + " in structural text", noFamily);
+      for (auto id : index[t.text]) keepName(id, "name: " + t.text + " in structural text", noFamily);
     } else lexical[owner].push_back(t.text);
   }
   auto system = [&](std::size_t start, FamilyId cause) {
@@ -375,6 +412,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
       for (const auto& name : f.dependentNames) for (auto target : callables[name]) dependency(id,target);
       for (auto target : associations[id]) dependency(id,target);
       for (auto entity : systemUses[id]) dependency(id,n+entity);
+      for (auto member : members[id]) if (!memberReasons[member].empty()) dependency(id,member);
     }
     for (auto [a,b] : m.unions) { dependency(a,b); dependency(b,a); }
     for (std::size_t id = 0; id < m.systemEntities.size(); ++id) {
@@ -395,8 +433,10 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
         // A6 bounds names, not which library instantiations dispatch to them.
         // Type-associated hidden friends are covered by the carrier/association
         // graph; free hooks and system specializations have no such bound.
-        const bool hook = f.nonMemberOperator || std::any_of(f.callableNames.begin(),f.callableNames.end(),
-            [&](const auto& name) { return adl.contains(name); });
+        const bool hook = f.nonMemberOperator ||
+            (f.memberOf != noFamily ? !out.memberDisabledReasons.empty() || m.libraryMemberNames.contains(f.memberName) ||
+              (!m.libraryMemberNames.empty() && f.memberBlocker.starts_with("D3e rule 1:")) :
+             std::any_of(f.callableNames.begin(),f.callableNames.end(),[&](const auto& name) { return adl.contains(name); }));
         if (f.systemSpecialization || (hook && (f.kind != FamilyKind::record || !f.boundedSystemHooks)))
           disable("unbounded system instantiation effects through " + f.label);
       }
@@ -409,10 +449,14 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   if (!out.disabledReasons.empty()) for (FamilyId id = 0; id < n; ++id) keep(id,"pruning disabled",noFamily);
   while (!work.empty()) {
     const auto id = work.front(); work.pop(); const auto& f = m.families[id];
-    for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keep(target,"name: " + name,id);
+    for (auto member : members[id]) {
+      if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
+      if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
+    }
+    for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
     for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
     for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
-    for (const auto& name : f.dependentNames) for (auto target : callables[name]) keep(target,"dependent name: " + name,id);
+    for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
     for (auto entity : systemUses[id]) system(entity,id);
   }
   for (FamilyId i = 0; i < n; ++i) {
@@ -432,6 +476,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   if (out.disabledReasons.empty()) {
     out.assumptions.insert("A7");
     if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
+    if (out.memberDisabledReasons.empty()) out.assumptions.insert("A12");
   }
   return out;
 }
@@ -439,8 +484,14 @@ Result<bool> staticNameInvariant(const PruningModel& m, const PruningResult& r, 
   if (!r.disabledReasons.empty() || m.families.size() != r.families.size()) return Error{"static invariant requires enabled matching analysis"};
   auto tokens = pruningIdentifiers(rendered); if (!tokens.ok()) return tokens.error();
   std::set<std::string, std::less<>> removed;
-  for (FamilyId i = 0; i < m.families.size(); ++i) if (!r.families[i].kept)
-    removed.insert(m.families[i].names.begin(),m.families[i].names.end());
+  for (FamilyId i = 0; i < m.families.size(); ++i) if (!r.families[i].kept) {
+    // Members of a removed record disappear under whole-record pruning; a
+    // same-named member elsewhere is allowed. D3e's additional invariant is
+    // about individually removed units of records that remain in the output.
+    const auto owner = m.families[i].memberOf;
+    if (owner == noFamily || r.families[owner].kept)
+      removed.insert(m.families[i].names.begin(),m.families[i].names.end());
+  }
   for (const auto& t : tokens.value()) if (removed.contains(t.text)) return Error{"static name invariant: removed name " + t.text};
   return true;
 }

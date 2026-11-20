@@ -41,10 +41,10 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     (root / 'main.cpp').write_text('// SPDX-License-Identifier: GPL-3.0-or-later\n#if 1\nint main(){}\n#endif\n')
     for args, code, message in [
         (['--help'], 0, 'Usage: distill'),
-        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
-        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
-        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
-        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects'),
+        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
+        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
+        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
+        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
         (['g++', '-std=gnu++20', 'main.cpp'], 0, 'distill: wrote pruned (local)'),
         (['--no-prune'], 1, 'missing compile command'),
         (['--no-prune', '-o'], 1, 'missing value'),
@@ -77,9 +77,29 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             report = (root / 'report.txt').read_text()
             check(('void dormant' in result.stdout) == bool(flags), result.stdout)
             check(('pruning assumption: A11 instantiation-effects\n' in report) == (not flags), report)
-            check(('policy: D3d-7, without instantiation-effects\n' in report) == bool(flags), report)
+            check(('policy: D3e, without instantiation-effects\n' in report) == bool(flags), report)
             if flags:
                 check('pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
+    with case('library-spelled-members flag reaches the worker independently of A11'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('struct S { int unused(){return 0;} };\n'
+                                      'int dead(){return 0;} int main(){S s;(void)s;}\n')
+        selections = [[], ['--no-assume=library-spelled-members'],
+                      ['--no-assume=instantiation-effects,library-spelled-members'], []]
+        for flags in selections:
+            result = subprocess.run([binary, *flags, '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            check(('int unused' in result.stdout) == bool(flags), result.stdout)
+            check('int dead' not in result.stdout, result.stdout)
+            check(('pruning assumption: A12 library-spelled-members\n' in report) == (not flags), report)
+            check(('pruning assumption: A11 instantiation-effects\n' in report) ==
+                  (not any('instantiation-effects' in flag for flag in flags)), report)
+            if flags:
+                check('member pruning disabled: --no-assume=library-spelled-members' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
     with case('judge list, full names, aliases and collision diagnostics'):

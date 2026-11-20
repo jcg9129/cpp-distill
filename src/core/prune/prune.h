@@ -7,9 +7,11 @@
 namespace distill {
 using FamilyId = std::size_t;
 inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
-inline constexpr std::string_view pruningPolicyVersion = "D3d-7";
+inline constexpr std::string_view pruningPolicyVersion = "D3e";
 inline std::string_view assumptionLabel(std::string_view id) {
-  return id == "A11" ? "A11 instantiation-effects" : id;
+  if (id == "A11") return "A11 instantiation-effects";
+  if (id == "A12") return "A12 library-spelled-members";
+  return id;
 }
 struct EditRange {
   std::size_t begin = 0, end = 0;
@@ -33,6 +35,10 @@ struct PruneFamily {
   bool boundedSystemHooks = false;
   bool nonMemberOperator = false, namespaceUsing = false, externCDefinition = false;
   bool systemSpecialization = false;
+  // D3e: same-name declarations share one unit; owner is the
+  // retained record's structural family (also for records nested in it).
+  FamilyId memberOf = noFamily;
+  std::string memberName, memberBlocker;
 };
 struct PruneMacroExpansion {
   std::size_t offset = 0;
@@ -68,6 +74,13 @@ struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
 struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
   bool assumeInstantiationEffects = true;
+  bool assumeLibrarySpelledMembers = true;
+  // Worker inventory, computed after the include graph. Future scanned-library
+  // inventories can be unioned here without changing the retention rule.
+  bool libraryMemberNamesComputed = false;
+  std::vector<std::string> memberDisabledReasons;
+  std::set<std::string, std::less<>> libraryMemberNames;
+  std::vector<std::string> systemPasteHeaders;
   std::string text, dialect;
   std::vector<PruneFamily> families;
   std::vector<std::pair<FamilyId, FamilyId>> unions;
@@ -93,7 +106,7 @@ struct FamilyRetention {
 };
 struct PruningResult {
   std::vector<FamilyRetention> families;
-  std::vector<std::string> disabledReasons;
+  std::vector<std::string> disabledReasons, memberDisabledReasons;
   std::string policy = std::string(pruningPolicyVersion), registryVersion, registryDigest, dialect;
   std::set<std::string> assumptions;
   std::map<std::string, std::size_t> primaryBytes, transitiveBytes;

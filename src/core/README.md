@@ -741,32 +741,25 @@ complete declaration ownership, pins macro-produced declarations and directive
 crossings, and traverses patterns, known instantiations, implicit code, type
 locations, bases, defaults, constraints/requires, constructors/destructors,
 conversions and positive references from system entities. User specializations
-keep their identities; overloads, redeclarations, records/members and user
-template families share retention. Namespace/linkage blocks remain shells.
+keep their identities; overloads, redeclarations and user template families
+share retention. D3e function members form separate same-name units. Namespace/linkage blocks remain shells.
 Non-member dependent lookup names retain matching families across the TU,
 including later declarations and hidden friends. Dependent member/qualified
-lookup uses the whole-record closure described below. Opaque asm, unaudited
+lookup follows member-name/AST rules and the carrier closure described below. Opaque asm, unaudited
 attributes, recovery ASTs and parse errors still disable it.
 
-Dependent member and qualified lookup do **not** disable pruning, and need no
-extra global member-name rule. For `x.size()`, `x.template f<U>()`, `M::op`,
-`M::e`, `T::value` and `T::template f<U>`, the object's/qualifier's initial user
-type comes from arguments named in kept user text or the AST edges of known
-instantiations. Members are never removed from a kept record (§4.7). This
-includes member templates and out-of-line member definitions/specializations:
-separate canonical specializations explicitly union with their enclosing
-record, and their member names are not indexed at namespace scope. Explicit
-member-template arguments retain their types through the ordinary lexical/AST
-rules. Conversion operators (including implicit conversions) and `operator->`
-chains remain in the whole record, with their return-type carriers retained
-by those same rules. Base lists retain the records supplying inherited members.
-Nested-name chains and `typename Tr::type` follow whole-record aliases and
-bases; dependent type locations are traversed too. An enum qualifier likewise
-keeps its complete enumeration. Template parameters cannot name a namespace.
-Induction through these carrier steps therefore retains the user declaration
-that either dependent lookup can select. A user-only pasted **member** name
-adds no requirement: all members already stay. External/unknown paste
-provenance continues to disable pruning.
+Dependent member and qualified lookup do **not** disable pruning. D3e indexes
+function-member units and records dependent member/scope-reference names from
+kept patterns; lexical and AST edges retain the units, including user-only pasted
+names. A same-name unit keeps all its overloads, declarations, definitions and
+specializations. Non-function members, aliases and nested types stay with their
+record. Explicit member-template arguments retain their types through ordinary
+lexical/AST rules. Conversions, operators and special members remain excluded
+from member removal. Base lists preserve records supplying inherited members;
+nested-name chains and `typename Tr::type` follow retained aliases and bases.
+If A12 is disabled or the system-header inventory fails closed, record members
+stay together under the previous whole-record closure. External/unknown paste
+provenance continues to disable pruning under the existing global gates.
 
 A system trait selecting a type from user inputs does not break that argument.
 For `std::conditional_t<sizeof(long) == 4, A, B>`, **both** input types occur in
@@ -819,7 +812,7 @@ as written, or structurally empty non-template user tags with empty list
 initialization. Aliases/deduced/dependent types receive no new exemption;
 explicit specializations are classified independently. Every pruned artifact
 reports A7, including deletions unrelated to variables (enum cache seeds).
-Policy D3d-7 reports the extended `A11 instantiation-effects` (user, 2026-11-20) by default for every enabled
+Policy D3e reports the extended `A11 instantiation-effects` (user, 2026-11-20) by default for every enabled
 pruning result: friend-definition instantiation, template parameter object
 destruction, destruction of constexpr variables and the temporaries whose
 lifetimes they extend, and destruction of never-reached block static/thread
@@ -834,12 +827,12 @@ library-hook refusals are unchanged. See the
 [review](../../docs/reviews/2026-11-20-instantiation-effects.md) for the proof,
 A11 exclusions, compiler probes and measurements.
 `--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
-accepts repetition and comma lists; other names (including assumption IDs) are
-usage errors (exit 1) listing `instantiation-effects` as the only switchable
-name. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
-the worker. Pruning protocol **3** serializes it, and the parent rejects a worker
+accepts repetition and comma lists; `instantiation-effects` and
+`library-spelled-members` are the switchable names. Other names (including
+assumption IDs) are usage errors (exit 1) listing both names. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
+the worker. Pruning protocol **5** serializes both flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
-identity and `D3d-7, without instantiation-effects` distinguish the two modes.
+identity and `D3e, without instantiation-effects` distinguish the two modes.
 Both report formats print the readable A11 name; the flag mode lists it as
 disabled by the flag, never as a relied-on assumption.
 
@@ -886,10 +879,11 @@ spellings such as `msvc::no_unique_address`, and the unaudited
 `__no_unique_address__` spelling disable with `unsupported attribute`. The pinned
 frontend headers/AttrDocs are not present in this source tree, so only the plain
 spelling has been admitted. This adds no roots: unused whole records can still
-be deleted. Retained records keep every member in source order, with normal
-type, initializer, constructor and destructor dependency traversal. Layout and
-trait choices may differ between compilers; preserving the entire record and
-dependency closure does not require those choices to agree.
+be deleted. D3e retains all data members and special members in source order,
+with normal type, initializer, constructor and destructor dependency traversal.
+Layout and trait choices may differ between compilers; preserving layout-relevant
+declarations and their dependency closure does not require those choices to agree.
+Ordinary removable nonvirtual functions do not affect layout.
 
 Since D3d-1, the policy additionally roots the family carrying `ConstructorAttr`,
 `DestructorAttr`, `UsedAttr`, `SectionAttr`, `WeakAttr`, `VisibilityAttr`,
@@ -1355,3 +1349,13 @@ the parsed `updated` date with an injectable UTC calendar day and returns one
 stderr note only after 180 days. The default clock is `system_clock`; both CLI
 selection paths print the note next to `profileSelectionLine`. This diagnostic
 never changes facts, generated output or exit status.
+
+Member pruning (D3e) is enabled by default under A12 `library-spelled-members`.
+The worker scans raw included system headers after the include graph; token
+pasting or an incomplete inventory disables only member pruning.
+`--no-assume=library-spelled-members` also keeps records whole. Both flags are
+immutable protocol-v5 identity fields. Reports list A12 whenever members can be
+pruned, even without a deletion. The adopted rules, regression coverage and
+historical prototype measurements are in
+[`2026-11-20-member-pruning.md`](../../docs/reviews/2026-11-20-member-pruning.md).
+The obsolete variant sweep script was removed; CI's normal ATL sweep measures D3e.

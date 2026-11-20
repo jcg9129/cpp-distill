@@ -7,5 +7,7 @@ kept Box<8>::f |
 kept Box<4>::value |
 kept Box<8>::value |
 kept run |
-removed Unused | outside the retention closure
+# D3e indexes member units in the reverse potential graph. The get name
+# collides with an effect-reaching Box unit, conservatively preserving its owner.
+kept Unused | instantiation effect:
 kept main | root: main

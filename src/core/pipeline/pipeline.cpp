@@ -151,6 +151,7 @@ struct Pipeline {
     try {
       auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
+      m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
@@ -422,6 +423,8 @@ struct Pipeline {
     }
     if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
+    if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
     result.report = renderReport(result, command, options.profile);
     return std::move(result);
   }

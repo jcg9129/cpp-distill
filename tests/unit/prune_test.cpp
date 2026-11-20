@@ -57,20 +57,20 @@ TEST(prune_a7_a11_apply_even_without_family_deletion) {
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
   CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3d-7");
+  CHECK(b.run().policy == "D3e");
 }
 TEST(prune_without_instantiation_effects_identity_and_report) {
   Model b; b.add("main","int main(){}"); b.add("dead","int dead(){return 0;}");
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-3 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-5 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
   const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
   CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
-  CHECK_EQ(r.policy,"D3d-7, without instantiation-effects");
+  CHECK_EQ(r.policy,"D3e, without instantiation-effects");
   const auto report = renderPruningReport(b.m,r).value();
   CHECK(report.find("pruning assumption: A11") == std::string::npos);
   CHECK(report.find("pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)") != std::string::npos);
@@ -81,6 +81,39 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto mixed = extractPruning(b.m,o).value();
   CHECK(!mixed.assumeInstantiationEffects);
   CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
+TEST(prune_library_spelled_members_identity_fallback_and_report) {
+  Model b; const auto owner = b.add("S","struct S {};",FamilyKind::record);
+  const auto member = b.add("unused","int unused(){return 0;}");
+  b.m.families[member].memberOf = owner; b.m.families[member].memberName = "unused";
+  b.m.families[member].edges = {owner};
+  b.add("main","int main(){S s;}"); const auto dead = b.add("dead","int dead(){return 0;}");
+  // An incomplete inventory must keep members while still pruning whole families.
+  auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.memberDisabledReasons.empty());
+  CHECK(r.families[member].kept); CHECK(!r.families[dead].kept); CHECK(!r.assumptions.contains("A12"));
+  b.m.libraryMemberNamesComputed = true;
+  r = b.run(); CHECK(!r.families[member].kept); CHECK(r.assumptions.contains("A12"));
+  auto report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("pruning assumption: A12 library-spelled-members\n") != report.npos);
+  CHECK(report.find("member units kept=0 removed=1\n") != report.npos);
+  b.m.libraryMemberNames.insert("unused"); r = b.run(); CHECK(r.families[member].kept);
+  CHECK(r.assumptions.contains("A12")); // Consistent with A11 even without a member deletion.
+  b.m.libraryMemberNames.clear();
+  const auto enabled = serializePruningModel(b.m).value();
+  b.m.assumeLibrarySpelledMembers = false;
+  const auto disabled = serializePruningModel(b.m).value(); CHECK(enabled != disabled);
+  CHECK(!parsePruningModel(disabled).value().assumeLibrarySpelledMembers);
+  CHECK(parsePruningModel(enabled).value().assumeLibrarySpelledMembers);
+  r = b.run(); CHECK(r.families[member].kept); CHECK(!r.families[dead].kept);
+  CHECK(!r.assumptions.contains("A12")); CHECK(r.assumptions.contains("A11"));
+  report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)") != report.npos);
+  test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
+    ProcessResult response; response.exitCode = 0; response.stdoutText = enabled; return response;
+  };
+  CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
 }
 
 TEST(prune_never_removed_rules_and_nonroots) {
@@ -360,12 +393,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-3 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-5 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-3 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-5 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-3 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-5 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

@@ -125,10 +125,21 @@ TEST(validate_no_assume_names) {
     auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(!r.value().assumeInstantiationEffects);
     CHECK(!r.value().noPrune);
   }
-  for (const auto* name : {"", "A11", "A7", "unknown", "instantiation-effects,", ",instantiation-effects",
+  CHECK(parseDistillOptions({"main.cpp"}).value().assumeLibrarySpelledMembers);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--no-assume=library-spelled-members","main.cpp"},
+      {"--no-assume","library-spelled-members","main.cpp"},
+      {"--no-assume=library-spelled-members,library-spelled-members","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok());
+    CHECK(!r.value().assumeLibrarySpelledMembers); CHECK(r.value().assumeInstantiationEffects); CHECK(!r.value().noPrune);
+  }
+  const auto both = parseDistillOptions({"--no-assume=instantiation-effects,library-spelled-members","main.cpp"});
+  CHECK(both.ok()); CHECK(!both.value().assumeLibrarySpelledMembers); CHECK(!both.value().assumeInstantiationEffects);
+  CHECK(!parseDistillOptions({"--no-assume=library-spelled-members","--judge-probe","cses"}).ok());
+  for (const auto* name : {"", "A11", "A12", "A7", "unknown", "instantiation-effects,", ",instantiation-effects",
                            "instantiation-effects,unknown", "unknown,instantiation-effects"}) {
     const auto r = parseDistillOptions({std::string("--no-assume=")+name,"main.cpp"});
-    CHECK(!r.ok()); CHECK(r.error().message.find("switchable names: instantiation-effects") != std::string::npos);
+    CHECK(!r.ok()); CHECK(r.error().message.find("switchable names: instantiation-effects, library-spelled-members") != std::string::npos);
   }
   CHECK(!parseDistillOptions({"--no-assume"}).ok());
   CHECK(!parseDistillOptions({"--no-assume=instantiation-effects","--judge-probe","cses"}).ok());
