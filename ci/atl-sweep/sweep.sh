@@ -29,12 +29,17 @@ printf 'example\tvariant\tdistill_exit\tartifact\trun_check\tbytes\tline_markers
 
 mapfile -d '' -t examples < <(find "$atl/docs/examples" -type f -name '*.cpp' -print0 | LC_ALL=C sort -z)
 [[ ${#examples[@]} -gt 0 ]] || die 'no examples found'
+variants=(plain strip nlm)
+distill_help=$(timeout 5 "$distill" --help 2>&1 || true)
+if [[ $distill_help == *--compact-whitespace* ]]; then
+  variants+=(compact)
+fi
 failed=0
 for src in "${examples[@]}"; do
   base=${src%.cpp}
   name=${base#"$atl/docs/examples/"}
   name=${name//\//-}
-  for variant in plain strip nlm compact; do
+  for variant in "${variants[@]}"; do
     flags=()
     case "$variant" in
       strip) flags=(--strip-comments) ;;
@@ -102,7 +107,7 @@ for src in "${examples[@]}"; do
   done
 done
 
-python3 - "$summary" "$judge" <<'PY'
+python3 - "$summary" "$judge" "${variants[@]}" <<'PY'
 import collections
 import csv
 import os
@@ -118,7 +123,7 @@ lines = [
     '| Variant | Examples | Median bytes | Max bytes | < 65536 bytes | Pruned | Run FAILs |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
 ]
-for variant in ('plain', 'strip', 'nlm', 'compact'):
+for variant in sys.argv[3:]:
     group = [row for row in rows if row['variant'] == variant]
     sizes = [int(row['bytes']) for row in group]
     lines.append(
@@ -127,6 +132,9 @@ for variant in ('plain', 'strip', 'nlm', 'compact'):
         f'{sum(row["artifact"] == "pruned" for row in group)} | '
         f'{sum(row["run_check"] == "FAIL" for row in group)} |'
     )
+
+if 'compact' not in sys.argv[3:]:
+    lines.extend(['', 'compact: skipped (binary lacks --compact-whitespace)'])
 
 failures = sum(int(row['distill_exit']) != 0 for row in rows)
 lines.extend(['', f'Distill non-zero exits: {failures}.', '', 'Pruning-disabled reasons (example/variant rows):', ''])
