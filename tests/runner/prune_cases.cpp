@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         model = take(preparePruning(configuration,{},flat,&configuration.facts,cli.keep));
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
         model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
-        if (*feature) {
+        if (*feature || name == "ordinary_builtins") {
           model.dialect = "gnu++23";
           for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";
           if (!native) {
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
               const auto source = work.path / "runtime.cpp", binary = work.path / "runtime-program";
               { std::ofstream f(source); f << (original ? flat.text : pruned); }
               ProcessSpec spec; spec.cwd = work.path; spec.timeout = std::chrono::seconds(20);
-              spec.argv = {compiler,"-std=gnu++20","-O0",pathToUtf8(source),"-o",pathToUtf8(binary)};
+              spec.argv = {compiler,"-std=" + model.dialect,"-O0",pathToUtf8(source),"-o",pathToUtf8(binary)};
               const auto built = take(runProcess(spec));
               if (built.exitCode || built.timedOut || built.signal) { fail(std::string(compiler) + " runtime build: " + built.stderrText); continue; }
               spec.argv = {pathToUtf8(binary)}; spec.timeout = std::chrono::seconds(5);

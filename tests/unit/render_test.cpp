@@ -419,3 +419,39 @@ TEST(render_line_marker_observations) {
   p.lineMap[0].reset(); // A generated line has no original location.
   CHECK_EQ(lineMarkerObservations(p,{}),(std::vector<std::string>{"diagnostic error pragma at <generated>:1"}));
 }
+TEST(render_compact_line_edges_directives_and_comments) {
+  const std::string input = " \t\n  #define X 2  \t\n\n  // distill: keep  \t\n  int kept = X; \t\n\n  /* a\n \t\n b */ \t\n  int main() { \t\n    return kept;  \n  }  ";
+  const auto compact = take(compactWhitespace(input));
+  CHECK_EQ(compact,"#define X 2\n// distill: keep  \t\nint kept = X;\n/* a\n \t\n b */\nint main() {\nreturn kept;\n}");
+  CHECK(unmarkedInvariant(input,compact).ok());
+  CHECK(!unmarkedInvariant(input,"#define X 2 int kept = X;\nint main(){return kept;}\n").ok());
+  CHECK(!unmarkedInvariant("a + + b\n", "a ++ b\n").ok());
+  CHECK(!unmarkedInvariant("int x;\n#define X 2\n", "int x; #define X 2\n").ok());
+}
+TEST(render_compact_raw_literals_byte_exact) {
+  for (const auto* prefix : {"R", "u8R", "uR", "UR", "LR"}) {
+    const std::string literal = std::string(prefix) + "\"x(\n  raw text \t \n\n \t\n#line 42\n  // distill: keep\n  continued\n)x\"";
+    const std::string input = "\n  auto text = " + literal + "; \t\n\n";
+    const auto compact = take(compactWhitespace(input));
+    CHECK_EQ(compact,"auto text = " + literal + ";\n");
+    CHECK(unmarkedInvariant(input,compact).ok());
+  }
+  CHECK_EQ(take(compactWhitespace("  auto s = R\"(\n\n  \n)\"; \n")),"auto s = R\"(\n\n  \n)\";\n");
+}
+TEST(render_compact_raw_splice_byte_exact) {
+  const std::string input = "  auto s = u8R\"x(\n  \\ \t\n\n  raw\n)x\";  \n";
+  CHECK_EQ(take(compactWhitespace(input)),input);
+}
+TEST(render_compact_continuations_byte_exact) {
+  for (const auto* newline : {"\n", "\r\n"}) {
+    const std::string n = newline;
+    // All bytes in a spliced logical line survive, including the leading
+    // spaces of a continued line and spaces after a backslash accepted by GCC.
+    const std::string joined = "  #define S(x) #x \\" + n + "    /* c */ \\ \t" + n + "    x  " + n;
+    const std::string tokens = "  int value = 1 +\\" + n + "    +2;  " + n;
+    const auto input = " \t" + n + joined + tokens + "  int other;  " + n;
+    const auto compact = take(compactWhitespace(input));
+    CHECK_EQ(compact,joined + tokens + "int other;\n");
+    CHECK(unmarkedInvariant(input,compact).ok());
+  }
+}

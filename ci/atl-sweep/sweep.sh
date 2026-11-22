@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   echo 'Usage: ci/atl-sweep/sweep.sh <atl-dir> <distill> <out-dir> <judge>'
-  echo 'Measure plain, strip and nlm variants; write summary.tsv, reports and logs.'
+  echo 'Measure plain, strip, nlm and compact variants; write summary.tsv, reports and logs.'
 }
 
 die() {
@@ -34,11 +34,12 @@ for src in "${examples[@]}"; do
   base=${src%.cpp}
   name=${base#"$atl/docs/examples/"}
   name=${name//\//-}
-  for variant in plain strip nlm; do
+  for variant in plain strip nlm compact; do
     flags=()
     case "$variant" in
       strip) flags=(--strip-comments) ;;
       nlm) flags=(--strip-comments --no-line-markers) ;;
+      compact) flags=(--strip-comments --no-line-markers --compact-whitespace) ;;
     esac
     mkdir -p -- "$out/$variant"
     report="$out/$variant/$name.rep"
@@ -117,7 +118,7 @@ lines = [
     '| Variant | Examples | Median bytes | Max bytes | < 65536 bytes | Pruned | Run FAILs |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
 ]
-for variant in ('plain', 'strip', 'nlm'):
+for variant in ('plain', 'strip', 'nlm', 'compact'):
     group = [row for row in rows if row['variant'] == variant]
     sizes = [int(row['bytes']) for row in group]
     lines.append(

@@ -1057,6 +1057,8 @@ int main(int argc, char** argv) {
       m = extract("int main(){return __LINE__;}\n",o);
       check(hasUse("__LINE__ expanded"),"__LINE__ missing:" + uses());
       check(!m.positionUses.empty() && m.positionUses.front().offset == m.text.find("__LINE__"),"__LINE__ offset:" + uses());
+      m = extract("int main(){return __builtin_COLUMN();}\n",o);
+      check(hasUse("__builtin_COLUMN") || hasUse("source position builtin"),"__builtin_COLUMN missing:" + uses());
       m = extract("#define WHERE __FILE__\nconst char* f(){return WHERE;}\nint main(){}\n",o);
       check(hasUse("__FILE__ expanded"),"nested __FILE__ missing:" + uses());
       m = extract("#if __LINE__ > 0\nint x;\n#endif\nint main(){}\n",o);
@@ -1114,6 +1116,11 @@ int main(int argc, char** argv) {
       // A parameter's default is evaluated only at a call that uses it.
       withHeader(where + "template<class T> int plain(T) { return 0; }\n","int main(){return plain(1) + where(7) - 7;}\n");
       check(m.positionUses.empty(),"plain program blocked (unused default argument counted):" + uses());
+      withHeader("inline int column(int c = __builtin_COLUMN()) { return c; }\n","int main(){return column();}\n");
+      check(hasUse("source position builtin"),"system column default missing:" + uses());
+      withHeader("namespace std { struct source_location { unsigned column() const { return __builtin_COLUMN(); } }; }\n",
+                 "int main(){return std::source_location{}.column();}\n");
+      check(hasUse("value of type") && hasUse("source position builtin"),"source_location::column missing:" + uses());
       withHeader(where,"int main(){return where();}\n");
       check(hasUse("source position builtin (outside user code"),"system default argument at a call missing:" + uses());
       check(!hasUse("__builtin_LINE"),"system token attributed to user code:" + uses());

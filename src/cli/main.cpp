@@ -141,6 +141,7 @@ int run(const std::vector<std::string>& args) {
   options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;
   options.assumeLibrarySpelledMembers = parsed.assumeLibrarySpelledMembers;
   options.noLineMarkers = parsed.noLineMarkers;
+  options.compactWhitespace = parsed.compactWhitespace;
   options.samples = take(collectRunSamples(parsed.verifyRun,cwd));
   if (parsed.verbose) options.progress = [](std::string_view step) { std::cerr << "distill: " << step << '\n'; };
   auto executable = runningExecutable();

@@ -186,7 +186,7 @@ struct Pipeline {
       result.checks.push_back({"pruned","passed",flatConfiguration,{}});
       result.artifact = "pruned"; result.bytes = bytes;
       result.assumptions.insert(result.retention->assumptions.begin(),result.retention->assumptions.end());
-      if (options.noLineMarkers) unmark(rendered,path);
+      if (options.noLineMarkers || options.compactWhitespace) unmark(rendered,path);
     } catch (const Error& e) {
       if (e.message.starts_with("--keep ")) throw;
       result.runtime = flatRuntime;
@@ -223,6 +223,7 @@ struct Pipeline {
       result.checks.push_back({"pruned without line markers","passed",flatConfiguration,{}});
       result.bytes = bytes; result.lineMarkers = "omitted";
       result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
+      if (options.compactWhitespace) compact(path,bytes);
     } catch (const Error& e) { failedUnmarked(e.message); }
     catch (const std::exception& e) { failedUnmarked(e.what()); }
   }
@@ -230,6 +231,33 @@ struct Pipeline {
     result.runtime = markedRuntime;
     result.checks.push_back({"pruned without line markers",message,flatConfiguration,{}});
     keepMarkers("marker-free check failed: " + message);
+  }
+  void keepWhitespace(const std::string& why) {
+    result.compactWhitespace = "kept: " + why;
+    result.diagnostic += "whitespace kept: " + why + '\n';
+  }
+  void compact(const std::filesystem::path& unmarked, const std::string& original) {
+    const auto previousRuntime = result.runtime;
+    try {
+      step("compact checks");
+      const auto bytes = take(compactWhitespace(original));
+      take(unmarkedInvariant(original,bytes));
+      const auto path = work.path / "compact.cpp"; write(path,bytes);
+      take(compareUnmarkedPreprocessed(preprocess(*flatConfiguration,unmarked,true),preprocess(*flatConfiguration,path,true)));
+      auto program = build(*flatConfiguration,path,true,"compact");
+      compareRuns(runs["flat"],execute(*flatConfiguration,program));
+      checkedBytes(path,bytes); checkedBytes(unmarked,original);
+      if (Clock::now() >= deadline) throw Error{"compact checks deadline exceeded"};
+      result.checks.push_back({"pruned with compact whitespace","passed",flatConfiguration,{}});
+      result.bytes = bytes; result.compactWhitespace = "compacted";
+      result.diagnostic += "whitespace compacted: no user code observes source positions (including columns)\n";
+    } catch (const Error& e) { failedCompact(e.message,previousRuntime); }
+    catch (const std::exception& e) { failedCompact(e.what(),previousRuntime); }
+  }
+  void failedCompact(const std::string& message, const std::string& previousRuntime) {
+    result.runtime = previousRuntime;
+    result.checks.push_back({"pruned with compact whitespace",message,flatConfiguration,{}});
+    keepWhitespace("compact check failed: " + message);
   }
   std::string preprocess(const Configuration& c, const std::filesystem::path& file, bool generated) {
     ProcessSpec spec; spec.argv = argv(c, file, "-", generated); spec.argv.push_back("-E");
@@ -413,8 +441,10 @@ struct Pipeline {
       if (result.artifact == "raw") result.runtime = rawRuntime;
       if (result.artifact == "flat") prune(raw);
       else if (!options.keep.empty()) throw Error{"--keep " + options.keep.front() + ": requires a checked flat configuration"};
-      if (options.noLineMarkers && result.lineMarkers.empty())
+      if ((options.noLineMarkers || options.compactWhitespace) && result.lineMarkers.empty())
         keepMarkers(result.pruningModel ? "no checked pruned artifact" : "no parse");
+      if (options.compactWhitespace && result.compactWhitespace.empty())
+        keepWhitespace(result.lineMarkers.starts_with("kept: ") ? result.lineMarkers.substr(6) : "no checked pruned artifact");
       if (result.verification == "target") result.assumptions.insert("A4");
       result.exitCode = options.strict && (result.artifact != "pruned" || result.verification != "target") ? 3 : 0;
       result.resultLine = "distill: wrote " + result.artifact + " (" + result.verification + "), runtime " + result.runtime;

@@ -100,7 +100,11 @@ TEST(validate_cli_options) {
   auto defaults = parseDistillOptions({"--keep","first","--keep","second","--strip-comments","main.cpp"});
   CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(defaults.value().stripComments);
   CHECK_EQ(defaults.value().keep,(std::vector<std::string>{"first","second"}));
-  CHECK(!defaults.value().noLineMarkers);
+  CHECK(!defaults.value().noLineMarkers); CHECK(!defaults.value().compactWhitespace);
+  const auto compact = parseDistillOptions({"--compact-whitespace","main.cpp"});
+  CHECK(compact.ok()); CHECK(compact.value().compactWhitespace); CHECK(compact.value().noLineMarkers);
+  CHECK(!parseDistillOptions({"--compact-whitespace","--judge-probe","x"}).ok());
+  CHECK(distillHelp().find("--compact-whitespace") != std::string::npos);
   auto lines = parseDistillOptions({"--no-line-markers","main.cpp"});
   CHECK(lines.ok()); CHECK(lines.value().noLineMarkers);
   CHECK(!parseDistillOptions({"--no-line-markers","--judge-probe","x"}).ok());
@@ -108,7 +112,7 @@ TEST(validate_cli_options) {
   auto samples = parseDistillOptions({"--verify-run","one.in","--verify-run","dir","main.cpp"});
   CHECK(samples.ok()); CHECK_EQ(samples.value().verifyRun,(std::vector<std::string>{"one.in","dir"}));
   CHECK(parseDistillOptions({"main.cpp"}).ok());
-  for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}, {"--no-line-markers"}})
+  for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}, {"--no-line-markers"}, {"--compact-whitespace"}})
     CHECK(!parseDistillOptions(args).ok());
 }
 

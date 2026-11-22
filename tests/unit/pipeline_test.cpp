@@ -75,7 +75,7 @@ struct Fixture {
       }
       for (const auto& arg : spec.argv) {
         const auto p = pathFromUtf8(arg);
-        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp")
+        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp" || p.filename() == "compact.cpp")
           built[pathToUtf8(p.stem())] = test::read(p);
       }
       auto result = runProcess(spec);
@@ -85,12 +85,18 @@ struct Fixture {
       if (result.ok() && spec.argv.size() == 1) {
         if (fault == "stderr") result.value().stderrText = pathToUtf8(program);
         if ((fault == "raw-stdout" && program == "raw.exe") || (fault == "flat-stdout" && program == "flat.exe") ||
-            (fault == "unmarked-stdout" && program == "unmarked.exe"))
+            (fault == "unmarked-stdout" && program == "unmarked.exe") || (fault == "compact-stdout" && program == "compact.exe"))
           result.value().stdoutText = "different sample output";
         if (fault == "raw-exit" && program == "raw.exe") ++result.value().exitCode;
         if (fault == "raw-timeout" && program == "raw.exe") result.value().timedOut = true;
         if (fault == "raw-cap" && program == "raw.exe") result.value().stdoutTruncated = true;
       }
+      if (result.ok() && std::find(spec.argv.begin(),spec.argv.end(),"-E") != spec.argv.end() &&
+          std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "compact.cpp"; }) && fault == "compact-tokens")
+        result.value().stdoutText += "int corrupt;\n";
+      if (result.ok() && fault == "compact-build" && built.contains("compact") &&
+          std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() && spec.argv.size() > 1)
+        result.value().exitCode = 1;
       if (fault == "stdout" && pathFromUtf8(spec.argv.front()).filename() == "pruned.exe" && result.ok())
         result.value().stdoutText = "different output";
       return result;
@@ -161,7 +167,7 @@ TEST(pipeline_pruned_core_exact_checked_bytes_and_samples) {
   CHECK(r.report.find("parse configuration:") != r.report.npos);
   CHECK(r.report.find("primary structural bytes") != r.report.npos);
   // Default (R4-G): markers always, and no line-marker report lines.
-  CHECK(r.bytes.find("#line ") != r.bytes.npos); CHECK(r.lineMarkers.empty());
+  CHECK(r.bytes.find("#line ") != r.bytes.npos); CHECK(r.lineMarkers.empty()); CHECK(r.compactWhitespace.empty());
   CHECK(r.diagnostic.find("line markers") == r.diagnostic.npos); CHECK(!f.built.contains("unmarked"));
 }
 TEST(pipeline_prunes_without_instantiation_effects_assumption) {
@@ -437,4 +443,43 @@ TEST(pipeline_library_fact_reports_a9_and_survives_local_satisfaction) {
   CHECK(r.report.find("selector=gcc-14") != r.report.npos);
   CHECK(r.report.find("__cpp_lib_to_chars: A9 library") != r.report.npos);
   CHECK_EQ(r.resolution.decisions[0].decision, Decision::trueValue);
+}
+TEST(pipeline_compact_checked_with_stringizing_and_keep) {
+  Fixture f("#define TEXT(x) #x\n"
+            "  constexpr auto s = TEXT(alpha\n\n    beta);  \n"
+            "  static_assert(s[5] == ' ' && s[6] == 'b');  \n"
+            "  constexpr auto raw = u8R\"x(\n  raw \t\n\n)x\";  \n"
+            "int unused(){return 7;}\n"
+            "// distill: keep\nint preserve(){return 3;}\n"
+            "  int main(){return 0;}  \n\n");
+  f.options.compactWhitespace = true; f.options.stripComments = true;
+  const auto r = f.run();
+  CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
+  CHECK_EQ(r.lineMarkers,"omitted"); CHECK_EQ(r.compactWhitespace,"compacted");
+  CHECK_EQ(r.bytes,f.built.at("compact")); CHECK(f.strippedKeepObserved);
+  CHECK(r.bytes.find("int preserve") != r.bytes.npos); CHECK(r.bytes.find("int unused") == r.bytes.npos);
+  CHECK(r.bytes.find("u8R\"x(\n  raw \t\n\n)x\"") != r.bytes.npos);
+  CHECK(r.bytes.size() < f.built.at("unmarked").size());
+  CHECK(r.report.find("pruned with compact whitespace: passed\n") != r.report.npos);
+  CHECK(std::any_of(r.processes.begin(),r.processes.end(),[](const auto& p) {
+    return p.step == "compact checks" && std::find(p.spec.argv.begin(),p.spec.argv.end(),"-E") != p.spec.argv.end();
+  }));
+}
+TEST(pipeline_compact_refused_or_failed_keeps_checked_bytes) {
+  for (const auto* fault : {"position","disabled","no-parse","unmarked-stdout","compact-tokens","compact-build","compact-stdout"}) {
+    Fixture f(std::string_view(fault) == "position" ? "int unused(){return 7;}\n  int main(){return __LINE__ > 0 ? 0 : 1;}  \n\n" :
+              "int unused(){return 7;}\n  int main(){return 0;}  \n\n");
+    f.options.compactWhitespace = true;
+    f.options.noPrune = std::string_view(fault) == "no-parse";
+    const auto r = f.run(fault); CHECK_EQ(r.exitCode,0);
+    const std::string_view why = fault;
+    const auto fallback = why == "disabled" || why == "no-parse" ? "flat" :
+                          why == "position" || why == "unmarked-stdout" ? "pruned" : "unmarked";
+    CHECK_EQ(r.bytes,f.built.at(fallback)); CHECK(r.compactWhitespace.starts_with("kept: "));
+    CHECK(r.report.find("whitespace kept: ") != r.report.npos);
+    if (why.starts_with("compact-")) {
+      CHECK(r.compactWhitespace.starts_with("kept: compact check failed: "));
+      CHECK_EQ(r.lineMarkers,"omitted");
+    } else CHECK(!f.built.contains("compact"));
+  }
 }
