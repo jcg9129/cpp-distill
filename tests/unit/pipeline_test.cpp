@@ -433,7 +433,7 @@ TEST(pipeline_library_fact_reports_a9_and_survives_local_satisfaction) {
   CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "flat");
   CHECK(!r.resolution.unknownInUserCode);
   CHECK(r.assumptions.contains("A9"));
-  CHECK(r.report.find("library facts: ci/library generator=4 schema=2 embed=1 sha256:") != r.report.npos);
+  CHECK(r.report.find("library facts: " + std::string(embeddedLibraryData().provenance)) != r.report.npos);
   CHECK(r.report.find("selector=gcc-14") != r.report.npos);
   CHECK(r.report.find("__cpp_lib_to_chars: A9 library") != r.report.npos);
   CHECK_EQ(r.resolution.decisions[0].decision, Decision::trueValue);

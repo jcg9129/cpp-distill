@@ -315,6 +315,31 @@ use, including preserving a binding through proven absence, carries A9 and the
 baseline generator/schema, digest and selected major/profile into the report.
 Local satisfaction reruns use the major's audited agreement.
 
+L1c generator 5 extends the approved feature-macro mechanism to object-like names
+in `data/names/standard-macros.txt`, including `FLT_EVAL_METHOD` after `<cfloat>`.
+Only identifier chains ending in one integer literal supply values; function-like
+macros are excluded, and expressions, parenthesized/unary-minus literals and other
+replacements remain unusable. The capture's own compiler and argv supply every
+value. Positive compiler aliases are audited; `float.h`'s initial undef prefix
+has a narrow positive-pair proof, preserving all raw writes in the evidence. The two explicit source-entry absence
+inputs (`__STDC_VERSION__`, `__STDC_WANT_IEC_60559_TYPES_EXT__`) are revoked by
+command/startup or reachable-header writes. Function-like presence metadata blocks
+false absence claims, including for reproduced snapshots.
+Reserved and standard-list user macro operations lose default library
+configuration and immediately revoke cached header facts, including writes to an
+underlying alias after the include. Include conflicts and GCC option pragmas keep
+these facts unknown;
+reported uses carry `FactOrigin::library`, A9 and capture provenance.
+
+Generator-5 major agreement requires a compatible target triple and identical
+ordered non-harmless flags in one
+scanned build, in both directions: neither a default profile nor a profile with
+`-m32`/`-mfpmath=387` can borrow a different argv's value. Old generator-3/4 data
+still embeds using the legacy feature-only coverage rule and provides no new
+standard macro values. The generated-source cap is now 3,200,000 bytes; embedding
+the unchanged committed baseline measures 588,498 bytes. CI `library.yml` must
+regenerate the widened data for review/import before real profiles gain coverage.
+
 `EvaluationRequirements` records dialect and target integer layout separately
 from external macro facts. Missing fields in options inherit from a profile;
 without a profile only command dialect is available. Command-overridden

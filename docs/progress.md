@@ -34,7 +34,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | D4/D5 remainder | user corpus measurement (keep the user's library and solutions outside the repo and measure with `ci/measure-local.sh`) and fixes from it; any remaining checker work; see design §7 |
 | D6 judge profiles v2 | D6a names/aliases (#30), D6b probe/check (#31, #32) and the native fix (#33) done; D6c: CSES (#34), QOJ (#35), Kattis (#36), yukicoder (#42), Library Checker (#44), Timus (#48) shipped; Luogu parked (see D6 section) |
 | Profile maintenance | design §4.3.2; drift check (weekly evidence/availability, monthly reproduction) in the drift PR; no binary mirror |
-| L1c library facts | done: part A (#100), part B (#102), `#pragma once` elision (#101), single-build flag coverage (#103) |
+| L1c library facts | part A (#100), part B (#102), once elision (#101), flag coverage (#103); standard integer macro extension implemented, CI data import pending (2026-11-22) |
 | Pruning soundness D3d-5…7 | done (#104, 2026-11-20): instantiation-effect closure; A11 `instantiation-effects`; `--no-assume=instantiation-effects` |
 | Member pruning D3e | done (#105, #106, 2026-11-20): unused member functions under A12 `library-spelled-members` (worker headers + scanned-build inventory); `--no-assume=library-spelled-members` |
 | Call-based member retention | started 2026-11-20: analysis only (see current state) |
@@ -633,3 +633,54 @@ passed (84 library, 66 profiles, 18 extensions, 55 drift). The generated source
 is 303,920 bytes versus the 3,940,318-byte baseline; its compiled table sections
 occupy 282,772 bytes in the local unoptimized build. SDK evaluator/worker and
 other-platform coverage remain in CI. No LLVM was downloaded or built.
+
+## L1c library header integer macros (2026-11-22)
+
+The user-approved extension of §4.3.3 widens `__cpp_lib_*` to object-like macros
+in `data/names/standard-macros.txt`. Generator 5/schema 2 captures the profile's
+own compiler and exact argv, expands identifier chains, and retains noninteger
+replacements as unusable evidence. Parenthesized/unary-minus literals are not
+needed for the motivating `FLT_EVAL_METHOD` `0`/`2` values and remain unusable.
+Function-like definitions supply no values; presence-only snapshot metadata
+prevents them from becoming false absence claims. Merge agreement still makes
+cross-build differences explicit unknowns.
+
+The audit verifies compiler value aliases, retains native dependencies even in
+unsupported alias chains, and handles GCC `float.h`'s initial undef prefix only
+for observed positive pairs in a sole writer file. Later undefs and multiple
+writers still fail closed. Two finite source-entry absence inputs cover the
+C++ version gate and IEC type opt-in; source, command/startup and reachable-header
+writes revoke their use. Raw writes, conditions, reset prefixes and source-entry
+absence evidence remain reviewable.
+
+The resolver uses the existing include transition, monotone configuration Boolean,
+A9 union/conflict rule and provenance. Standard-list source/command writes and
+GCC option pragmas invalidate the widened facts. Reserved/standard-list writes
+also revoke cached header facts immediately, covering underlying alias changes
+after an include. Generator-5 agreement requires
+a compatible captured target and identical ordered flags after the existing
+harmless allowlist; `-m32` or
+`-mfpmath=387` never borrow default values, including in the reverse direction.
+The new compiled CSES-like fixture runs through audit/merge/embed and checks ATL's
+`rounded_binary64` with both `0` and `2`, missing data, overrides, include identity,
+union conflicts, cross-build disagreement, option pragmas and argv differences.
+
+The embed source cap is 3,200,000 bytes (formerly 620,000). The unchanged committed
+generator-4 baseline embeds to 588,498 bytes with the new emitter. Generators 3/4
+remain readable; they supply no new standard macro values. `data/library/library.json`
+is deliberately untouched. Run CI `library.yml`, review both generated artifacts,
+then import the compact file byte for byte. Expected data changes: generator 5,
+standard object snapshots/classifications/agreement and function-like presence
+metadata, changed content addresses and evidence digests. The widened production
+JSON/source sizes and real CSES/ATL coverage await that CI artifact.
+
+Validation: 127 Python library tests pass. All 109 CTest entries passed across
+the full run and isolated retries: the parallel run hit one temporary-directory
+creation failure and the existing 120-second `pipeline_cli_d3c` cap; both passed
+alone. The final six unit/resolver/library-macro tests also pass after adding the
+captured-target guard. The new fixture's unavailable-GCC skip path was checked.
+Built with the checksum-verified Linux ARM64 LLVM 23.1.5 SDK, host Clang, `-O0`
+and `-j2`, with hard build/test timeouts. GCC compilation exceeded the container's
+memory limit before switching the host compiler. The downloaded SDK was deleted
+after verification; the CLI and Clang regression also run after its deletion.
+The branch remains uncommitted on the latest `origin/main`.

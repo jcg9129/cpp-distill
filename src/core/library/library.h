@@ -23,6 +23,10 @@ struct LibraryData {
   // Sorted global union, independent of profile/feature-macro selection.
   std::span<const std::string_view> memberNames{};
   std::string_view memberInventoryProvenance{};
+  // Generator 5 widens facts to target-sensitive standard macros. Agreement
+  // requires the same ordered non-harmless argv, including absence of flags.
+  // Older baselines contain feature macros only and retain their coverage rule.
+  bool exactFlags = false;
   const LibraryHeader* find(std::string_view selector, std::string_view header) const;
   std::uint16_t state(const LibraryHeader&, std::string_view name) const;
   std::string selector(const Profile&, bool agreementOnly = false, std::string* reason = nullptr) const;

@@ -7,12 +7,13 @@ import re
 import sys
 
 from merge import canonical, get_agreement, get_classification, get_snapshot
-from audit import INTEGER
+from audit import INTEGER, library_macro
 from member_inventory import validate_names
 
 ROOT = Path(__file__).resolve().parents[2]
+MAX_SOURCE_BYTES = 3_200_000
 VALUE = INTEGER
-NAME = re.compile(r'__cpp_lib_[A-Za-z_0-9]+\Z')
+NAME = re.compile(r'[A-Za-z_][A-Za-z_0-9]*\Z')
 
 
 def require(ok, message):
@@ -34,7 +35,7 @@ def standard_header(header, standard):
 
 
 def transitions(data, standard):
-    require(data['schema'] == 2 and data['generator'] in (3, 4), 'unsupported library schema/generator')
+    require(data['schema'] == 2 and data['generator'] in (3, 4, 5), 'unsupported library schema/generator')
     member_names(data)
     # Validate every content-address record, including unused audit records. Macro
     # set IDs describe their expanded maps, rather than the base/delta encoding.
@@ -93,8 +94,15 @@ def transitions(data, standard):
                 isinstance(record['macros'], dict), 'malformed snapshot')
         require(record['status'] == 'ok' or not record['macros'], 'failed snapshot with facts')
         require(all(isinstance(v, str) for v in record['macros'].values()), 'non-string snapshot value')
+        functions = record.get('function_like', [])
+        require(strings(functions) and len(functions) == len(set(functions)) and
+                all(NAME.fullmatch(n) and library_macro(n) for n in functions) and
+                not set(functions).intersection(record['macros']) and
+                (record['status'] == 'ok' or not functions), 'invalid function-like presence metadata')
         names.update(record['macros'])
-    require(names and all(NAME.fullmatch(n) for n in names), 'invalid feature name')
+    require(names and all(NAME.fullmatch(n) and library_macro(n) for n in names), 'invalid library macro name')
+    require(data['generator'] >= 5 or all(n.startswith('__cpp_lib_') for n in names),
+            'standard macro facts require generator 5')
     names = sorted(names)
     rows, builds = {}, []
     require(data['versions'].keys() == data['agreement'].keys(), 'incomplete major agreement')
@@ -133,7 +141,7 @@ def transitions(data, standard):
                 # Own build-dependent values are allowed, but native inputs still
                 # vary by host. Major dependencies conservatively overapproximate
                 # the own build's native dependencies, including absence claims.
-                if snapshot['status'] != 'ok' or volatile.intersection(entry['dependencies']) or (
+                if snapshot['status'] != 'ok' or name in snapshot.get('function_like', []) or volatile.intersection(entry['dependencies']) or (
                         isinstance(value, str) and not VALUE.fullmatch(value)):
                     value = 1
                 values.append(value)
@@ -249,13 +257,16 @@ for (auto chunk : memberChunks) while (!chunk.empty()) {
 }
 };''']
     inventory_provenance = (f'worker headers + {len(data["builds"])} scanned builds (generator {data["generator"]})'
-                            if data['generator'] == 4 else 'worker headers; scanned-build inventory unavailable')
+                            if data['generator'] >= 4 else 'worker headers; scanned-build inventory unavailable')
     out += ['} const LibraryData& embeddedLibraryData() {',
             *(['static const MemberInventory inventory;'] if inventory else []),
             'static const LibraryData data{names,values,headers,' + ('builds' if builds else '{}') + ',' + quote(provenance) +
-            ',' + ('inventory.names' if inventory else '{}') + ',' + quote(inventory_provenance) + '};',
+            ',' + ('inventory.names' if inventory else '{}') + ',' + quote(inventory_provenance) +
+            ',' + ('true' if data['generator'] >= 5 else 'false') + '};',
             'return data;', '}', '}']
-    return '\n'.join(out) + '\n'
+    output = '\n'.join(out) + '\n'
+    require(len(output.encode('utf-8')) <= MAX_SOURCE_BYTES, 'embedded library source exceeds size budget')
+    return output
 
 
 def main():

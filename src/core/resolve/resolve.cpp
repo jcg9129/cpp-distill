@@ -290,8 +290,17 @@ struct Engine {
   void transition(std::size_t i, States& state) {
     const auto& l = scan.lines[i]; if (!l.directive) return;
     const auto& d = *l.directive; const auto& t = d.tokens;
-    if ((d.name == "define" || d.name == "undef") && !t.empty() && isReserved(t[0].text))
+    if ((d.name == "define" || d.name == "undef") && !t.empty() &&
+        (isReserved(t[0].text) || isStandardMacroName(t[0].text))) {
       state.defaultLibrary = false;
+      // Captured values flatten aliases: a later write to an underlying
+      // reserved name can change an already included macro's expansion.
+      // Revoke cached header facts immediately, before applying this write.
+      for (auto& [name, fact] : state) {
+        (void)name;
+        if (origin(fact, FactOrigin::library)) fact = {MacroState::unknown, {}, {FactOrigin::source}};
+      }
+    }
     if (d.name == "pragma" && !t.empty() && (t[0].text == "push_macro" || t[0].text == "pop_macro"))
       state.defaultLibrary = false; // prepare() retains the existing global refusal.
     if (d.name == "define" && !t.empty()) {
@@ -328,7 +337,7 @@ struct Engine {
           hit->found && hit->compilerSystem && options.libraryData)
         library = options.libraryData->find(librarySelector, header);
       for (auto& [name, f] : state) {
-        if (name.starts_with("__cpp_lib_")) {
+        if (name.starts_with("__cpp_lib_") || isStandardMacroName(name)) {
           const auto value = library ? options.libraryData->state(*library, name) : 1;
           if (value == 0) {
             // Keeping a known binding across this include also relies on the
@@ -368,7 +377,9 @@ struct Engine {
     } else if (d.name == "pragma" && t.size() >= 2 && t[0].text == "GCC" &&
         (t[1].text == "target" || t[1].text == "optimize" || t[1].text == "push_options" || t[1].text == "pop_options")) {
       state.defaultLibrary = false;
-      for (const auto& name : featureNames) state[name] = {MacroState::unknown, {}, {FactOrigin::pragma}};
+      for (auto& [name, fact] : state)
+        if (featureNames.contains(name) || name.starts_with("__cpp_lib_") || isStandardMacroName(name))
+          fact = {MacroState::unknown, {}, {FactOrigin::pragma}};
     }
   }
   States join(const std::vector<States>& paths) {
@@ -503,7 +514,8 @@ struct Engine {
       // cmd is the extra user command; the profile's own ordered operations
       // are already represented by its snapshots and must not be subtracted.
       for (const auto& op : cmd.localMacros())
-        if (isReserved(op.value.substr(0, op.value.find_first_of("(=")))) state.defaultLibrary = false;
+        if (const auto name = op.value.substr(0, op.value.find_first_of("(="));
+            isReserved(name) || isStandardMacroName(name)) state.defaultLibrary = false;
       for (const auto& arg : cmd.args)
         if (arg.option.starts_with("-include") || arg.option.starts_with("-imacros")) state.defaultLibrary = false;
       if (options.profile) for (const auto& flag : options.profile->flags)

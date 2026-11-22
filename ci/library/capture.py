@@ -8,7 +8,7 @@ import subprocess
 import sys
 from time import perf_counter
 
-from audit import ROOT, VERSION, classify, apply_trust
+from audit import ROOT, VERSION, classify, apply_trust, library_macro
 from probe import build_inputs, trusted_build_inputs
 from member_inventory import inventory
 sys.path.append(str(ROOT / 'ci/extensions'))
@@ -24,24 +24,32 @@ def command(compiler, argv, source='', check=True):
 
 
 def dump(text):
-    # GCC 14+ can expose __cpp_lib_x as an alias of __glibcxx_x. Resolve only
+    # GCC can expose feature/standard macros as aliases of other macros. Resolve only
     # complete object-like identifier chains ending in an integer; retain
     # unfamiliar replacements for evidence and let the audit reject them.
-    definitions = dict(re.findall(r'^#define ([A-Za-z_][A-Za-z_0-9]*) (.*)$', text, re.M))
+    definitions = {}
+    for line in text.splitlines():
+        m = re.fullmatch(r'#define ([A-Za-z_][A-Za-z_0-9]*)(?: (.*))?', line)
+        if m:
+            if m[1] in definitions:
+                raise ValueError('duplicate object-like macro: ' + m[1])
+            definitions[m[1]] = m[2] or ''
     def value(body, seen=frozenset()):
         if body in definitions and body not in seen:
             return value(definitions[body], seen | {body})
         return body
     result = {}
-    for line in text.splitlines():
-        m = re.fullmatch(r'#define (__cpp_lib_[A-Za-z_0-9]+) (.*)', line)
-        if m:
-            if m[1] in result:
-                raise ValueError('duplicate feature macro: ' + m[1])
-            result[m[1]] = value(m[2])
-        elif line.startswith('#define __cpp_lib_'):
-            raise ValueError('non-object-like feature macro: ' + line)
+    for name, body in definitions.items():
+        if library_macro(name):
+            result[name] = value(body)
     return dict(sorted(result.items()))
+
+
+def function_macros(text):
+    # Presence metadata only: a function-like definition must never be mistaken
+    # for absence when another capture supplies an object of the same name.
+    return sorted({n for n in re.findall(r'^#define ([A-Za-z_][A-Za-z_0-9]*)\(', text, re.M)
+                   if library_macro(n)})
 
 
 def header_names(search):
@@ -90,9 +98,11 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
             if m:
                 if m[1] == 'define' and origin == '<built-in>':
                     predefines[m[2]] = line
+                    overridden.discard(m[2])
                 else:
                     predefines.pop(m[2], None)
-                    overridden.add(m[2])
+                    if origin != '<built-in>':
+                        overridden.add(m[2])
     # Native-model names must not become host facts indirectly through headers.
     volatile = set()
     if any(f in ('-march=native', '-mtune=native', '-mcpu=native') for f in flags):
@@ -121,6 +131,8 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
             process = command(compiler, [*argv, '-dM', '-E', '-'], '#include <' + header + '>\n', check=False)
             headers[header] = dict(status='ok' if process.returncode == 0 else 'error',
                                    macros=dump(process.stdout) if process.returncode == 0 else {})
+            if process.returncode == 0:
+                headers[header]['function_like'] = function_macros(process.stdout)
     preprocessed = perf_counter()
     data = dict(schema=2, generator=VERSION, build=build, gcc=version,
                 major=version.split('.')[0], std=std, flags=flags,

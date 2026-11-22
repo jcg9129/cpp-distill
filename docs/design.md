@@ -496,7 +496,7 @@ those aliases, so `--judge codeforces` keeps working.
    - then `__has_include` for the headers the A1 lists rely on and library
      version macros, each read after the library header that defines it; these
      lines are diagnostics and never validate A1 inventories (J1-9). The L1c
-     companion (§4.3.3) additionally prints and compares `__cpp_lib_*` values
+     companion (§4.3.3) additionally prints and compares library integer macro values
      after each header in a separate TU; it remains diagnostic only.
 3. The expected output is produced in CI by compiling and running the probe
    with the snapshot compiler under the profile's command, in the job that
@@ -606,15 +606,23 @@ Approved 2026-11-18 after two adversarial reviews; see
 [`reviews/2026-11-18-library-feature-macros.md`](reviews/2026-11-18-library-feature-macros.md).
 Part A supplies CI producers, comparisons and diagnostic tooling; part B
 embeds the reviewed baseline and implements resolver header transitions.
-`__cpp_lib_*` names originate in library headers and are separate from the
-source-entry compiler snapshot and the identity registry.
+Extended by user decision on 2026-11-22 to **library header integer macros**.
+This is an extension of the approved L1c design, with the same include transition,
+default-configuration Boolean, agreement, union rule, invalidation and A9 provenance.
+The universe is `__cpp_lib_*` plus object-like macros named in
+`data/names/standard-macros.txt`. Usable definitions must expand through complete
+object-like identifier chains to a single integer literal. Other replacements
+remain recorded but unusable; function-like macros are not captured. Parenthesized
+literals, unary minus, floating literals and expressions are not admitted: the
+motivating `FLT_EVAL_METHOD` captures need only bare `0`/`2` literals. These are
+header facts, separate from the source-entry compiler snapshot and identity registry.
 
 **Profile data.** For each profile, CI uses the same snapshot compiler and
 exact `-x c++ -std=<std> <flags>` argv, including ordered macro operations.
 For every C/C++ standard-list header, `bits/stdc++.h`, `ext/rope` and every
 installed file below `ext/pb_ds/`, a fresh TU contains only `#include <H>`.
-Its `-dM -E` output supplies the feature names and values. A missing header,
-a preprocessing failure and a successful header defining no feature macros
+Its `-dM -E` output supplies the selected object-like names and values. A missing header,
+a preprocessing failure and a successful header defining no selected macros
 are distinct states; failed output never proves absence. Internal object-like
 aliases (GCC 14+ `__glibcxx_*`) are expanded through the dump to their integer
 values; unfamiliar replacements remain recorded but unusable.
@@ -628,7 +636,7 @@ scans select a supported ISO dialect by GCC major; profile scans always retain
 the profile's exact dialect and flags. Adding a profile or eligible compatibility
 matrix row automatically adds a required input to the merger.
 
-**A12 member inventory.** Generator 4 additionally raw-tokenizes the complete
+**A12 member inventory.** Generators 4 and 5 additionally raw-tokenize the complete
 reachable-header set already computed for each eligible build, including libc,
 inactive branches and macro definitions. Comments, character/string literals and
 pp-numbers contribute no identifier names; line splices and universal character
@@ -639,7 +647,9 @@ the header keys containing `##` or `%:%:`. Pasting is report-only, since the
 worker already inventories actual expansions. The binary embeds the union and
 reports its build count and generator; this is independent of resolver fact
 selection and applies even for builds without reproduced profile snapshots.
-The old generator-3 baseline remains accepted with worker-only provenance.
+Old generator-3/4 baselines remain accepted; generator 3 has worker-only member provenance.
+Until CI data is imported, the old feature-only baseline supplies no new standard
+macro values, so `FLT_EVAL_METHOD` after `<cfloat>` stays unknown.
 Regenerate using `library.yml` (manual dispatch, no inputs; it calls profiles
 with `profiles: all` and the complete eligible extension matrix), review
 `library-generated`, and import its `library.json` byte for byte as documented
@@ -665,6 +675,22 @@ value; it is never a library-wide property of a name. Compiler-looking names
 written in H's closure or overridden by command/startup definitions lose
 compiler-input status. Trusted compiler definitions are retained so changes to
 their replacements are detectable too.
+
+A standard macro's value alias may terminate at an actual compiler predefine
+from this capture's exact argv. Its recorded object-like identifier chain must
+end in an integer literal; missing, locally written, overridden or native-volatile
+links fail closed. Unusable alias chains still retain their transitive identifier
+dependencies so reproduced snapshots cannot hide native inputs behind them. No worker or default-argv value is substituted. Compiler-origin
+undef/redefine sequences retain the final compiler definition; command/startup
+writes still revoke compiler-input status.
+
+GCC `float.h` explicitly undefs `FLT_EVAL_METHOD` before its definitions. For a
+standard-list macro only, a prefix of undefinitions preceding every definition
+in its sole writer file may be ignored for **observed positive literal pairs**.
+Every remaining definition and condition must still pass the audit. All raw
+writes and per-root `reset_prefixes` remain in evidence. A later undefinition,
+another writer file or unsupported replacement invalidates the pairs. This rule
+does not prove absence/identity for a header that resets the name.
 
 The embedded candidate allowlist in `ci/library/audit.py` is exactly
 `_GLIBCXX_FLOAT_IS_IEEE_BINARY32` and `_GLIBCXX_DOUBLE_IS_IEEE_BINARY64`.
@@ -696,6 +722,13 @@ feature/absence result for H; unreachable failures do not affect it. Recoverable
 literal includes in a malformed file still contribute reachability. Literal
 include operands and `__has_include`/`__has_include_next` arguments are never
 macro-name tokens. The audit additionally trusts:
+
+- The source-entry absence of `__STDC_VERSION__` in C++ mode and the user opt-in
+  `__STDC_WANT_IEC_60559_TYPES_EXT__`, needed by GCC 13 `float.h`. These two names
+  must actually be absent from the captured entry definitions, have no
+  command/startup override, and have no write anywhere in H's closure. The
+  default-library Boolean forbids intervening user writes. This finite rule
+  licenses no other library build switch; `source_entry_absences` records it.
 
 - Independent `__cpp_lib_*` and `__glibcxx_*` condition macros justified for
   the same root. SCC expansion follows conditions and request/value aliases;
@@ -730,14 +763,17 @@ total times plus header-key and `-dM` probe counts. Each available requested
 header is preprocessed once.
 
 `ci/library/merge.py` requires reports from the complete profiles and extensions
-matrices and never unions old facts into fresh results. Schema 2/generator 4
+matrices and never unions old facts into fresh results. Schema 2/generator 5
 separates the compact baseline `data/library/library.json` from the uploaded
 `library-evidence.json`. The latter retains complete original build reports,
 including all definitions, conditions, include paths, compiler inputs and
 per-root/per-value classifications. The baseline retains build metadata,
-per-header snapshots/status, per-major/root classification (`independent`,
+per-header snapshots/status (with optional `function_like` presence-only names
+that are excluded from object-value facts), per-major/root classification (`independent`,
 permitted `values`, sorted dependency names) and per-header agreement
-(`defined`, `absent`, `unknown` with short reasons). Each compact build also
+(`defined`, `absent`, `unknown` with short reasons). A function-like definition
+of a name that is object-like in another capture is unknown, never evidence of
+absence, for both major agreement and reproduced snapshots. Each compact build also
 retains a full `evidence_sha256`: SHA-256 of its entire report encoded as ASCII
 JSON with sorted keys, separators `(',', ':')` and no trailing newline. Any
 evidence change therefore fails comparison even when facts do not change.
@@ -769,34 +805,48 @@ that major and one scanned build of that major and dialect containing every
 profile/configuration flag outside the explicit harmless
 warning/debug/diagnostic/constexpr-limit/pipe allowlist. Flag order does not matter,
 and extra build flags are allowed; optimization flags require a scanned match
-because they change predefines.
+because they change predefines. This is the legacy generator-3/4 feature-only
+coverage rule. Generator 5 requires a compatible captured target triple and
+equality of the **ordered** flag sequences
+after removing only the harmless allowlist, including the absence of extra
+scanned-build flags. Thus an unflagged profile cannot borrow `-m32` or
+`-mfpmath=387` values, and a flagged profile cannot borrow a default capture.
+Reproduced snapshots still require their complete exact argv and build identity.
+
+The embedder enforces a 3,200,000-byte generated-source budget (previously
+620,000). With the unchanged generator-4 committed data the new embedder emits
+588,498 bytes; the widened CI artifact's actual size remains to be measured when
+imported. No widened production data is generated locally.
 
 **Default library configuration.** Track a separate, monotone Boolean at every
 point. It holds iff on every path to that point there has been no user
-`#define`/`#undef` of any reserved name, macro-stack `push_macro`/`pop_macro`
+`#define`/`#undef` of any reserved or standard-macro-list name, macro-stack `push_macro`/`pop_macro`
 pragma, system include outside the standard-header list, or `#pragma GCC
 target`, `optimize`, `push_options`, `pop_options`. Macro-stack pragmas
-continue to disable resolution. At entry, extra user-command reserved `-D`/`-U`,
+continue to disable resolution. At entry, extra user-command reserved or standard-macro-list `-D`/`-U`,
 `-include` or `-imacros` beyond the profile's own flags lose the Boolean;
 profiles whose own flags have `-include` or `-imacros` get no library facts.
 The existing command model rejects these include options; this rule supplies
 no new permission to accept them. Joins take logical AND independently of
 macro-value joins; losing the Boolean on a path cannot be repaired by a later
-matching definition, undefinition or header include. Dead paths have no effect.
+matching definition, undefinition or header include. Reserved/standard-list user
+writes also revoke already captured header facts immediately: writing a compiler
+macro after H can change a header macro that aliases it. Dead paths have no effect.
 
 **Include transition (part B).** A standard-list spelling must resolve to an
 actual file inside the compiler's own system include directories. A user file
 shadowing `<charconv>` never qualifies, even when marked `-isystem`. While
 default library configuration holds, and usable data exists for H:
 
-- Each usable positive `__cpp_lib_*` fact in snap(H) becomes defined with its
+- Each usable positive fact in the widened universe in snap(H) becomes defined with its
   value. A name proven not to be defined by H keeps its previous state.
 - Each unusable, disagreeing or conflicting name becomes unknown. Values
   accumulated from previous headers must agree: different snapshot values for
   the same name make it unknown; a later equal include cannot erase a conflict.
 - All other reserved names follow today's invalidation and identity rules.
 
-Otherwise today's rules apply: all `__cpp_lib_*` names become unknown. These
+Otherwise all names in the widened universe become unknown at the include.
+GCC option pragmas also invalidate these header facts immediately. These
 facts are header transitions, never initial facts or identity exemptions.
 A9 asserts the union rule for sequences of qualifying includes; report it when
 relied on, alongside the provenance of the snapshots and classification.

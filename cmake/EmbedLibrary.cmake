@@ -6,6 +6,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${library_input}" "${library_generator}" "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/merge.py"
   "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/audit.py"
   "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/member_inventory.py"
+  "${CMAKE_CURRENT_SOURCE_DIR}/data/names/standard-macros.txt"
   "${CMAKE_CURRENT_SOURCE_DIR}/data/names/standard-headers.txt")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${library_generator}"
   "${library_input}" "${CMAKE_CURRENT_BINARY_DIR}/embedded_library.cpp"

@@ -9,8 +9,9 @@ import sys
 import pytest
 
 from audit import classify, VERSION
-from embed import generate, transitions, ROOT
+from embed import generate, transitions, ROOT, MAX_SOURCE_BYTES
 from merge import merge, baseline_text, get_agreement, get_snapshot
+from member_inventory import inventory
 
 NAME = '__cpp_lib_test'
 
@@ -109,9 +110,9 @@ def test_embed_baseline_round_trip_is_small_and_deterministic():
         assert embedded[-1] == build['flags']
     text = generate(raw, standard)
     assert text == generate(raw, standard)
-    # ~305 KB of transitions plus ~283 KB of front-coded member-name source.
-    # 620 KB allows 5% growth while rejecting the former 852 KB literal array.
-    assert len(text.encode('utf-8')) < 620_000
+    # Widened header facts can add standard names and distinct header rows.
+    # CI's next reviewed capture determines the actual new baseline size.
+    assert len(text.encode('utf-8')) <= MAX_SOURCE_BYTES
     assert hashlib.sha256(raw).hexdigest() in text
     # Dictionary order is irrelevant to table layout; exact bytes still identify
     # distinct baselines in provenance.
@@ -192,3 +193,86 @@ def test_embed_includes_dynamic_standard_pbds_prefix():
     _, rows, _ = transitions(combined(r), {'charconv'})
     assert rows['gcc-14', 'ext/pb_ds/assoc_container.hpp'] == ('1L',)
     assert rows['profile-test', 'ext/pb_ds/assoc_container.hpp'] == ('1L',)
+
+
+def standard_report(build='profile-test', value='0', *, reproduced=True):
+    data = report(build, reproduced=reproduced)
+    text = '#undef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__'
+    data['headers'] = {'cfloat': dict(status='ok', macros={'FLT_EVAL_METHOD': value})}
+    data['audit'] = classify({'0/cfloat': text},
+                             {'__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ ' + value}, roots=['cfloat'])
+    data['member_inventory'] = inventory({'0/cfloat': text})
+    return data
+
+
+def test_embed_standard_integer_values_agreement_and_reproduced_argv():
+    a = standard_report()
+    b = standard_report('other', '2', reproduced=False)
+    b['flags'] = ['-m32', '-mfpmath=387']
+    data = combined(a, b)
+    names, rows, builds = transitions(data, {'cfloat'})
+    assert names == ['FLT_EVAL_METHOD']
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == ('0',)
+    assert next(b for b in builds if not b[0])[-1] == ['-m32', '-mfpmath=387']
+    text = generate(baseline_text(data).encode(), {'cfloat'})
+    assert 'generator=5 schema=2' in text
+    assert text.endswith(',true};\nreturn data;\n}\n}\n')
+    data = combined(standard_report(), standard_report('other', reproduced=False))
+    _, rows, _ = transitions(data, {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == ('0',)
+
+
+@pytest.mark.parametrize('value', ['(0)', '-1', '0 + 0', '__unknown', '0.0', '08', '1uu'])
+def test_embed_standard_noninteger_replacements_stay_unknown(value):
+    data = combined(standard_report(value=value))
+    _, rows, _ = transitions(data, {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_embed_older_format_cannot_license_standard_values():
+    data = combined(standard_report())
+    data['generator'] = 4
+    with pytest.raises(ValueError, match='standard macro facts require generator 5'):
+        transitions(data, {'cfloat'})
+
+
+def test_embed_native_input_cannot_hide_behind_standard_value_aliases():
+    for alias in ['', '#define __eval_alias __AVX2__\n']:
+        data = standard_report(value='1')
+        text = alias + '#define FLT_EVAL_METHOD ' + ('__eval_alias' if alias else '__AVX2__')
+        data['audit'] = classify({'0/cfloat': text}, {}, {'__AVX2__'}, roots=['cfloat'])
+        data['volatile'] = ['__AVX2__']
+        _, rows, _ = transitions(combined(data), {'cfloat'})
+        assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_embed_enforces_source_size_budget(monkeypatch):
+    monkeypatch.setattr('embed.MAX_SOURCE_BYTES', 1)
+    with pytest.raises(ValueError, match='source exceeds size budget'):
+        generate(baseline_text(combined(report())).encode(), {'charconv'})
+
+
+def test_embed_reproduced_function_like_name_is_unknown_not_absent():
+    a = standard_report()
+    a['headers']['cfloat'].update(macros={}, function_like=['FLT_EVAL_METHOD'])
+    _, rows, _ = transitions(combined(a), {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+@pytest.mark.parametrize('conditional_include', [False, True])
+def test_embed_native_conditions_in_unsupported_value_helpers_stay_unknown(conditional_include):
+    data = standard_report(value='2')
+    if conditional_include:
+        files = {'0/cfloat': '#if __AVX2__\n#include <helper>\n#endif\n'
+                             '#define FLT_EVAL_METHOD __eval_alias',
+                 '0/helper': '#define __eval_alias 2'}
+    else:
+        files = {'0/cfloat': '#if __AVX2__\n#define __eval_alias 2\n#else\n'
+                             '#define __eval_alias 0\n#endif\n#define FLT_EVAL_METHOD __eval_alias'}
+    data['audit'] = classify(files, {}, {'__AVX2__'}, roots=['cfloat'])
+    data['volatile'] = ['__AVX2__']
+    _, rows, _ = transitions(combined(data), {'cfloat'})
+    assert rows['profile-test', 'cfloat'] == (1,)

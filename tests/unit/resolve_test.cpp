@@ -44,6 +44,7 @@ Profile profile() {
 }
 Profile featureProfile(bool reproduced = false) {
   auto p = profile(); p.reproduced = reproduced; p.snapshot = "synthetic-empty-source.txt";
+  p.triple = "x86_64-linux-gnu";
   p.snapshotFacts["__cpp_constexpr"] = {MacroState::known, Macro{false, {}, false, "201907L"}, {FactOrigin::compilerBuiltin}};
   // Exercise both explicit negative facts and names absent from the snapshot.
   p.snapshotFacts["__cpp_lib_ranges"] = {MacroState::undefined, {}, {FactOrigin::compilerBuiltin}};
@@ -505,7 +506,7 @@ TEST(resolve_library_shipped_acceptance_and_provenance) {
     CHECK_EQ(r.decisions[0].external[0].fact.provenance, (std::vector{FactOrigin::library}));
     CHECK_EQ(r.decisions[0].external[0].fact.definition->replacement, "201611L");
     CHECK_EQ(r.libraryProvenance.size(), 1u);
-    CHECK(r.libraryProvenance.begin()->find("generator=4 schema=2 embed=1 sha256:") != std::string::npos);
+    CHECK(r.libraryProvenance.begin()->find(data.provenance) != std::string::npos);
     CHECK(r.libraryProvenance.begin()->find("selector=" + data.selector(p)) != std::string::npos);
     // Check actual replacement arithmetic with a model the local oracle can
     // represent (the Codeforces profile itself has MinGW's LLP64 layout).
@@ -595,14 +596,16 @@ TEST(resolve_library_agreement_requires_scanned_dialect_and_flags) {
     r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
     CHECK_EQ(r.decisions[0].decision, Decision::unknown);
     CHECK(data.selector(p).empty()); CHECK(r.libraryProvenance.empty());
-    CHECK_EQ(r.libraryDisabledReason, "profile flags not covered by scanned builds: " + std::string(flag));
+    CHECK_EQ(r.libraryDisabledReason, (data.exactFlags ? "profile ordered flags not matched by a scanned build: " :
+                                                     "profile flags not covered by scanned builds: ") + std::string(flag));
     PipelineResult report; report.resolution = r;
     const auto command = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
     CHECK(renderReport(report, command, &p).find("library facts: none (" + r.libraryDisabledReason + ")\n") != std::string::npos);
   }
   // Match flags within the same dialect, never borrowing from another dialect.
   p.flags = {"-fmodules"}; CHECK(data.selector(p).empty());
-  p.dialect = {"gnu++23", true, 202302}; CHECK_EQ(data.selector(p), "gcc-15");
+  p.dialect = {"gnu++23", true, 202302};
+  CHECK_EQ(data.selector(p), data.exactFlags ? "" : "gcc-15");
   // Debug and diagnostic flags are harmless; optimization still needs coverage.
   p = lookupProfile("codeforces").value(); p.provenance.origin = "user";
   p.flags.push_back("-Wshadow");

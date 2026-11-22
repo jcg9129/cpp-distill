@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Fail-closed, per-root textual libstdc++ feature-macro audit."""
+"""Fail-closed, per-root textual library macro audit."""
 from collections import deque
 from functools import lru_cache
 import re
@@ -10,12 +10,27 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT / 'ci/extensions'))
 from generate import directive_text
 
-VERSION = 4
+VERSION = 5
 NAME = r'[A-Za-z_][A-Za-z_0-9]*'
-INTEGER = re.compile(r'(?:0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\Z')
+INTEGER = re.compile(r"(?:0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*|0[bB][01](?:'?[01])*|"
+                     r"0(?:'?[0-7])*|[1-9](?:'?[0-9])*)"
+                     r'(?:[uU](?:ll|LL|[lLzZ])?|(?:ll|LL|[lLzZ])[uU]?)?\Z')
+STANDARD_MACROS = frozenset(n for n in (ROOT / 'data/names/standard-macros.txt').read_text().splitlines()
+                            if n and not n.startswith('#'))
+
+
+def library_macro(name):
+    return name.startswith('__cpp_lib_') or name in STANDARD_MACROS
+
+
 # Candidates, never unconditional exemptions: verify every reachable write.
 PURE_CANDIDATES = frozenset({'_GLIBCXX_FLOAT_IS_IEEE_BINARY32',
                              '_GLIBCXX_DOUBLE_IS_IEEE_BINARY64'})
+# C++ mode supplies no C version macro; the IEC type request is a user opt-in.
+# Their source-entry absence is usable only when actually absent, not overridden,
+# and not written anywhere in this root. The default-library Boolean prevents
+# user changes before using the corresponding header facts.
+DEFAULT_ABSENT_INPUTS = frozenset({'__STDC_VERSION__', '__STDC_WANT_IEC_60559_TYPES_EXT__'})
 HEADER_TEST = re.compile(r'\b(__has_include(?:_next)?)\s*\(\s*(<[^>\n]+>|"[^"\n]+")\s*\)')
 
 
@@ -126,7 +141,7 @@ def own_guard(name, conditions):
                 parts.append(expression[start:i])
                 start = i + 2
         return bool(parts) and all(conjunct(p) for p in parts + [expression[start:]])
-    return name.startswith(('__cpp_lib_', '__glibcxx_')) and all(conjunct(c) for c in conditions)
+    return (library_macro(name) or name.startswith('__glibcxx_')) and all(conjunct(c) for c in conditions)
 
 
 
@@ -197,6 +212,7 @@ def parse(text, file):
                     raise ValueError(file + ': malformed macro write')
                 name, value = match.groups()
                 writes.append(dict(name=name, value=value.strip() if op == 'define' else None,
+                                   function_like=op == 'define' and value.startswith('('),
                                    dependencies=sorted(deps - {name} if own_guard(name, conditions) else deps),
                                    conditions=conditions, file=file, guard_tests=[g for g in guard_stack if g],
                                    guard=wrappers.get(i - 1) if op == 'define' else None))
@@ -335,8 +351,14 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
         for w in ws:
             writes.setdefault(w['name'], []).append(w)
     for file in unparsed:
-        for name in re.findall(r'\b__cpp_lib_[A-Za-z_0-9]+\b', files[file]):
-            writes.setdefault(name, [])
+        for name in re.findall(NAME, files[file]):
+            if library_macro(name):
+                writes.setdefault(name, [])
+    # Function-like writes are evidence against a previously object-like name,
+    # but function-only standard names do not enter the captured universe.
+    targets = {n for n, ws in writes.items() if library_macro(n) and
+               (n.startswith('__cpp_lib_') or any(w['value'] is not None and not w['function_like'] for w in ws))}
+    audited_names = targets | PURE_CANDIDATES
     candidates = set().union(*(g for _, _, g in parsed.values()))
     guards = {g for g in candidates if g not in predefines and g not in blocked
               and all(w['guard'] == g and w['value'] in ('', '1') for w in writes[g])
@@ -381,7 +403,8 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
                 taints[file].add('<absolute-include>')
             elif target:
                 edges[file].append((target, clean(deps, conditions, guard_tests), conditions))
-    compiler_inputs = ((set(predefines) | {'__cplusplus', '__STRICT_ANSI__'}) - set(blocked)
+    entry_absences = DEFAULT_ABSENT_INPUTS - set(predefines) - set(blocked)
+    compiler_inputs = ((set(predefines) | {'__cplusplus', '__STRICT_ANSI__'} | entry_absences) - set(blocked)
                        - {'__has_include', '__has_include_next'})
     # Undefined request alternatives are known false in a fresh TU only when
     # actual installed writes establish their role (a prefix is insufficient).
@@ -397,7 +420,7 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
     write_deps = {}
     for ws in file_writes.values():
         for w in ws:
-            if w['name'] not in PURE_CANDIDATES and not w['name'].startswith(('__cpp_lib_', '__glibcxx_')):
+            if w['name'] not in audited_names and not w['name'].startswith('__glibcxx_'):
                 continue
             deps = clean(w['dependencies'], w['conditions'], w['guard_tests'])
             if w['name'].startswith('__glibcxx_'):
@@ -458,17 +481,78 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
         for file in sorted(reached):
             for w in file_writes[file]:
                 local.setdefault(w['name'], []).append(w)
+        # GCC float.h resets FLT_EVAL_METHOD (and other standard names) before
+        # defining it. A prefix of undefs in the sole writer file cannot erase
+        # a subsequent positive definition observed by -dM. Retain all writes
+        # in the evidence; ignore only this prefix for positive-value proofs.
+        # Later undefs, or writers in another file, still invalidate all pairs.
+        resets = []
+        for name, ws in local.items():
+            if name not in STANDARD_MACROS or len({w['file'] for w in ws}) != 1:
+                continue
+            first = next((i for i, w in enumerate(ws) if w['value'] is not None), len(ws))
+            if first and first < len(ws) and all(w['value'] is not None for w in ws[first:]):
+                local[name] = ws[first:]
+                resets.append(name)
         requests = {n for n in request_roles
                     if all(w['value'] in ('', None) for w in local.get(n, []))}
         compiler = compiler_inputs - local.keys()
         audited_local = {n: ws for n, ws in local.items()
-                         if n in PURE_CANDIDATES or n.startswith(('__cpp_lib_', '__glibcxx_'))}
+                         if n in audited_names or n.startswith('__glibcxx_')}
+        # An alias to an actual compiler predefine uses this capture's argv,
+        # never a worker/default compiler value. Local writes and volatile or
+        # overridden inputs have already been removed from `compiler`.
+        compiler_values = {}
+        if isinstance(predefines, dict):
+            definitions = {}
+            for n in compiler & predefines.keys():
+                match = re.fullmatch(r'#define ' + re.escape(n) + r' (.*)', predefines[n])
+                if match:
+                    definitions[n] = match[1]
+            for n in definitions:
+                body, seen = n, set()
+                while body in definitions and body not in seen:
+                    seen.add(body)
+                    body = definitions[body]
+                if INTEGER.fullmatch(body):
+                    compiler_values[n] = body
+
+        def value_alias(name):
+            return plumbing(name) or name in compiler_values
+
+        @lru_cache(maxsize=None)
+        def replacement_dependencies(body):
+            # Also retain unsupported/volatile value chains as dependencies.
+            # Reproduced snapshots may use build-dependent integers, but must
+            # never hide a native input behind an unrecognised value alias.
+            pending, seen = [body], set()
+            while pending:
+                name = pending.pop()
+                if not name or not re.fullmatch(NAME, name) or name in seen:
+                    continue
+                seen.add(name)
+                for w in local.get(name, []):
+                    pending.append(w['value'])
+                    # An unsupported helper can select its value through a
+                    # native condition or a conditional include as well as a
+                    # value alias. Preserve those dependencies for own snapshots.
+                    deps = write_deps.get(id(w))
+                    if deps is None:
+                        deps = clean(w['dependencies'], w['conditions'], w['guard_tests'])
+                    pending.extend(external_guards(deps, w['conditions']) | inbound[w['file']])
+                if isinstance(predefines, dict) and name in predefines:
+                    match = re.fullmatch(r'#define ' + re.escape(name) + r' (.*)', predefines[name])
+                    if match:
+                        pending.append(match[1])
+            return frozenset(seen)
+
         # Materialize only inputs actually used by this root, rather than all
         # hundreds of unused compiler predefines in every SCC graph.
         dependency_edges = {}
         seeds = {n: set() for n in dependency_edges}
-        value_sets = {n: set() for n in audited_local}
-        value_users = {n: set() for n in audited_local}
+        value_sets = {n: {v} for n, v in compiler_values.items()}
+        value_sets.update({n: set() for n in audited_local})
+        value_users = {n: set() for n in value_sets}
 
         def direct(w):
             deps = external_guards(write_deps[id(w)], w['conditions'])
@@ -484,12 +568,15 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
                 writers.setdefault(w['file'], set()).add(name)
                 own.update(external_guards(write_deps[id(w)], w['conditions']))
                 body = w['value']
+                aliases = replacement_dependencies(body)
+                deps.update(aliases)
+                own.update(aliases)
                 if body is not None and INTEGER.fullmatch(body):
                     value_sets[name].add(body)
-                elif body in audited_local and plumbing(body):
+                elif body in value_sets and value_alias(body):
                     value_users[body].add(name)
                 if not (body is not None and INTEGER.fullmatch(body)):
-                    if body and plumbing(body):
+                    if body and value_alias(body):
                         deps.add(body)
                         own.add(body)
                     elif not (name in requests and body in ('', None)):
@@ -509,15 +596,16 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
         expand = dependency_expander(dependency_edges, seeds, grounded)
         macros = {}
         for name, ws in sorted(audited_local.items()):
-            if not name.startswith('__cpp_lib_'):
+            if name not in targets:
                 continue
             pairs, all_deps, all_bad = {}, set(unknown), set(unknown)
             for w in ws:
                 deps = direct_deps[id(w)] | unknown
                 body = w['value']
+                deps.update(replacement_dependencies(body))
                 vals = ({body} if body is not None and INTEGER.fullmatch(body)
-                        else value_sets.get(body, set()) if plumbing(body or '') else set())
-                if body and plumbing(body):
+                        else value_sets.get(body, set()) if value_alias(body or '') else set())
+                if body and value_alias(body):
                     deps.add(body)
                 bad = set().union(*(expand(d) for d in deps)) if deps else set()
                 if not vals:
@@ -530,7 +618,11 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
                     entry[1].update(bad)
             # Undef/unsupported writes can invalidate every literal pair.
             invalid = any(w['value'] is None or not (INTEGER.fullmatch(w['value']) or
-                          plumbing(w['value']) and value_sets.get(w['value'])) for w in ws)
+                          value_alias(w['value']) and value_sets.get(w['value'])) for w in ws)
+            if name in resets:
+                # The reset proof licenses observed positive pairs, not an
+                # absence/identity claim about a header that explicitly undefs.
+                all_bad.add('<reset-undef>')
             macros[name] = dict(values=sorted(value_sets[name]), independent=not all_bad,
                                 dependencies=sorted(all_deps), unrecognised=sorted(all_bad),
                                 requirements=sorted(all_bad),
@@ -539,9 +631,9 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
                                               requirements=sorted(bad | ({'<nonliteral-or-undef>'} if invalid else set())),
                                               unrecognised=sorted(bad | ({'<nonliteral-or-undef>'} if invalid else set())))
                                        for v, (deps, bad) in sorted(pairs.items())})
-        results[root] = dict(macros=macros, taint=sorted(unknown),
+        results[root] = dict(macros=macros, taint=sorted(unknown), reset_prefixes=sorted(resets),
                             condition_macros={n: sorted(expand(n)) for n in sorted(condition_names & local.keys())
-                                              if n.startswith(('__cpp_lib_', '__glibcxx_'))})
+                                              if n in targets or n.startswith('__glibcxx_')})
     header_tests = {}
     for file, (ws, includes, _) in parsed.items():
         conditions = [c for w in ws for c in w['conditions']]
@@ -556,10 +648,11 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
     result = dict(generator=VERSION, pure_candidates=sorted(PURE_CANDIDATES), roots=results,
                 header_tests=header_tests,
                 # Definitions and conditions live once in the full artifact.
-                macros={n: ws for n, ws in sorted(writes.items()) if n.startswith('__cpp_lib_')},
+                macros={n: ws for n, ws in sorted(writes.items()) if n in targets},
                 support={n: ws for n, ws in sorted(writes.items()) if n in PURE_CANDIDATES or n.startswith('__glibcxx_')},
                 guards=sorted(guards), includes=include_evidence, unparsed=unparsed,
-                compiler_inputs={n: predefines[n] if isinstance(predefines, dict) else None
+                source_entry_absences=sorted(entry_absences),
+                compiler_inputs={n: predefines.get(n) if isinstance(predefines, dict) else None
                                  for n in sorted(set(predefines) & compiler_inputs)},
                 blocked_inputs=sorted(blocked))
     return apply_trust(result, trusted_inputs or {})

@@ -96,6 +96,8 @@ def merge(reports, expected):
                 reason = None
                 if not all(s and s['status'] == 'ok' for s in snapshots):
                     reason = 'unavailable-header'
+                elif any(name in s.get('function_like', []) for s in snapshots):
+                    reason = 'function-like-definition'
                 elif len(values) != 1:
                     reason = 'cross-build-disagreement'
                 elif values == {None}:

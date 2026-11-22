@@ -1,10 +1,40 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 # L1c CI data pipeline
 
+Generator 5 extends the approved L1c design to `__cpp_lib_*` and object-like
+names in `data/names/standard-macros.txt`. Capture expands complete identifier
+chains, retaining noninteger replacements as unusable evidence. Only a single
+integer literal is usable; parentheses, unary minus and other expressions stay
+unknown, and function-like definitions are not captured. The source compiler and
+ordered argv are always the profile's own. Standard value aliases to compiler
+predefines are audited against those exact inputs, including native uncertainty.
+The narrow sole-writer initial-undef rule handles GCC `float.h`; later undefs and
+multiple writer files still fail closed. Full evidence retains `function_like`
+write metadata and per-root `reset_prefixes`. The finite source-entry absence
+rule for `__STDC_VERSION__` and `__STDC_WANT_IEC_60559_TYPES_EXT__` handles GCC
+13's C++ version gate and IEC opt-in; command/startup overrides and any reachable
+header write revoke it. The evidence records `source_entry_absences`.
+Snapshot `function_like` lists retain presence only, so a name that is object-like
+in another capture cannot be misclassified as absent. They supply no values and
+function-only names do not enlarge the resolver's universe.
+
+Generator 5 also requires a compatible captured target and strict ordered flag
+matching (apart from the existing
+harmless allowlist) for approximate/satisfaction agreement. This rejects both
+borrowing a flagged capture for an unflagged profile and borrowing default values
+for `-m32`/`-mfpmath=387` profiles. Generators 3/4 remain readable with their legacy
+feature-only policy until the widened CI artifact is imported.
+
+DLIB emits integer values normally and `<unsupported>` for recorded noninteger
+replacements, without expanding them in a diagnostic TU. That marker reports
+presence only; it does not validate the replacement or license a fact.
+`<function-like>` serves the same purpose for excluded function-like definitions
+of names otherwise present in the object-like universe.
+
 Design: [§4.3.3](../../docs/design.md#433-library-feature-test-macro-facts-l1c).
 Shipped evidence is generated in CI. Offline tests use synthetic text and mocked
-subprocesses; local compiler benchmarks write only to `out/`. Part A does not
-enable resolver facts.
+subprocesses; local compiler benchmarks write only to `out/`. The resolver uses
+the reviewed embedded baseline; diagnostics never license facts.
 
 `profiles.yml` invokes the L1c capture after each predefined snapshot with the
 same executable, dialect and flags. Each `snapshot-<profile>` artifact adds
@@ -26,12 +56,12 @@ PR and manual captures use the AtCoder compiler cache by default. Only the weekl
 scheduled L1c drift call passes `cold_start: true`; monthly reproduction retains
 its separate cold capture.
 
-The generated artifact contains two files (schema 2, generator 4):
+The generated artifact contains two files (schema 2, generator 5):
 
 - `library.json`: the compact, deterministic baseline to import into
   `data/library/`. It retains build metadata, per-header snapshot facts/status,
   per-major/root classifications and cross-build agreement. Sorted JSON has one
-  record per line. A successful empty snapshot proves no feature macros;
+  record per line. A successful empty snapshot proves no selected object-like macros;
   `missing`, `error` and `disabled` snapshots prove nothing.
 - `library-evidence.json`: complete build reports, including installed-header
   definitions, lexical conditions, include edges/targets, request/value support,
@@ -72,8 +102,11 @@ codes and roughly 4 KiB chunks keep source literals portable. The inventory is
 decoded once on first use into one reserved string and a sorted span of views;
 the views remain valid for the process lifetime. The 32,555-name baseline emits
 about 588 KB of C++ source including feature transitions, down from 852 KB with
-one string-view literal per member. The source-size test allows 620,000 bytes
-(about 5% headroom), and compiled round trips check every shipped name.
+one string-view literal per member. Generator 5 widens transitions to standard
+integer macros and raises the enforced source budget to 3,200,000 bytes. The
+unchanged generator-4 baseline now embeds to 588,498 bytes; the actual widened
+artifact size must be recorded after CI regeneration. Compiled round trips check
+every shipped member name.
 
 The compact file shares repeated records using content-address tables (the first
 16 hexadecimal SHA-256 digits, with collision detection). Build `headers` refer
@@ -176,9 +209,9 @@ Dispatch `.github/workflows/library.yml` ("L1c library data") on the branch
 containing these changes, with **no dispatch inputs**. It calls `profiles.yml`
 with `profiles: all`, `artifact_prefix: library-snapshot`, `cold_start: false`,
 and `extensions.yml` with its complete default matrix. Do not dispatch only a
-single profile or combine old generator-3 artifacts with new captures. The
-first comparison will fail because the committed generator-3 baseline has no
-inventory; `library-generated` is uploaded even on this expected difference.
+single profile or combine generator-3/4 artifacts with generator-5 captures. The
+first comparison will fail because the committed generator-4 baseline has only
+feature-macro facts; `library-generated` is uploaded on this expected difference.
 
 Review the failed check's compact diff and both files: per-build status,
 per-root independent pairs, dependencies, full evidence and unknown reasons.
@@ -245,7 +278,7 @@ the baseline or generator trigger regeneration. Runtime needs no data files.
 The embedded provenance records schema 2, generator 3 or 4, embedding format 1
 and the SHA-256 of the exact baseline bytes. Generator 4 also embeds the global
 member-name union, independently of resolver profile selection, and reports
-`library member inventory: worker headers + N scanned builds (generator 4)`.
+`library member inventory: worker headers + N scanned builds (generator 5)`.
 Generator 3 remains accepted without an inventory and reports
 `library member inventory: worker headers; scanned-build inventory unavailable`.
 The committed data is intentionally left at generator 3 until the full CI

@@ -37,6 +37,29 @@ std::string LibraryData::selector(const Profile& p, bool agreementOnly, std::str
       if (reason) *reason = "profile dialect not covered by scanned builds: " + p.dialect.name;
       return {};
     }
+    if (exactFlags) {
+      const auto target = [&](const auto& b) {
+        return covered(b) && compatibleProfileTriple(b.triple, p.triple);
+      };
+      if (std::none_of(builds.begin(), builds.end(), target)) {
+        if (reason) *reason = "profile target not covered by scanned builds: " + p.triple;
+        return {};
+      }
+      const auto relevant = [](const auto& flags) {
+        std::vector<std::string_view> result;
+        for (const auto& flag : flags) if (!harmlessFlag(flag)) result.emplace_back(flag);
+        return result;
+      };
+      const auto flags = relevant(p.flags);
+      if (std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
+            return target(b) && relevant(b.flags) == flags;
+          })) return "gcc-" + major;
+      if (reason) {
+        *reason = "profile ordered flags not matched by a scanned build:";
+        for (const auto flag : flags) *reason += " " + std::string(flag);
+      }
+      return {};
+    }
     if (std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
           return covered(b) && std::all_of(p.flags.begin(), p.flags.end(), [&](const auto& flag) {
             return harmlessFlag(flag) || std::find(b.flags.begin(), b.flags.end(), flag) != b.flags.end();

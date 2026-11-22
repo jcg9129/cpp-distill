@@ -76,7 +76,7 @@ def test_global_union_determinism_no_repeated_build_sets_and_pasting():
     assert data['builds']['extensions-b']['member_inventory']['token_pasting']
     embedded = generate(baseline_text(data).encode(), {'charconv'})
     assert 'memberChunks[]' in embedded
-    assert 'worker headers + 2 scanned builds (generator 4)' in embedded
+    assert f'worker headers + 2 scanned builds (generator {data["generator"]})' in embedded
     assert 'token_pasting_headers' not in embedded
 
 
