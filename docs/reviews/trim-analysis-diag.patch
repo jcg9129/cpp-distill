@@ -1,0 +1,1442 @@
+diff --git a/src/clang/prune_extract.cpp b/src/clang/prune_extract.cpp
+index 7bf0795..52bc19a 100644
+--- a/src/clang/prune_extract.cpp
++++ b/src/clang/prune_extract.cpp
+@@ -26,6 +26,7 @@
+ #include "llvm/Support/raw_ostream.h"
+ #include "llvm/Support/VirtualFileSystem.h"
+ #include <algorithm>
++#include "core/prune/trim_diag.h"
+ #include <map>
+ #include <memory>
+ #include <set>
+@@ -59,6 +60,15 @@ bool scalarBuiltin(const Decl* d) {
+ }
+ struct Extraction {
+   PruningModel model;
++  std::ofstream diag;
++  std::set<std::string,std::less<>> diagHeaders,diagMacros,diagScanned;
++  void event(std::string_view kind, const Decl* d, clang::SourceLocation loc, FamilyId from, std::size_t sys, bool unevaluated=false) {
++    if(!diag.is_open() || !d)return;
++    auto at=user(loc)?offset(loc):noFamily;
++    auto key=user(d->getLocation())?offset(d->getLocation()):noFamily;
++    diag<<"{\"event\":"<<trim::q(kind)<<",\"from\":"<<from<<",\"sys\":"<<sys<<",\"target\":"<<owner(d)<<",\"key\":"<<key<<",\"at\":"<<at<<",\"uneval\":"<<unevaluated<<",\"declkind\":"<<trim::q(d->getDeclKindName())<<"}\n";
++  }
++
+   CompilerInstance& compiler;
+   SourceManager& sm;
+   std::map<const Decl*,FamilyId> owners;
+@@ -77,6 +87,7 @@ struct Extraction {
+   std::map<unsigned,clang::SourceLocation> noUniqueAddressSpellings;
+   std::set<unsigned> verifiedNoUniqueAddress;
+   explicit Extraction(PruningModel m, CompilerInstance& c) : model(std::move(m)), compiler(c), sm(c.getSourceManager()) {
++    if(!trim::prefix().empty())diag.open(trim::prefix()+".ast.jsonl");
+     auto scan = scanDirectives(model.text);
+     if (!scan.ok()) { disable("directive scan failure in flat.cpp: " + scan.error().message); return; }
+     for (const auto& l : scan.value().lines) if (!l.directive) tokens.insert(tokens.end(),l.tokens.begin(),l.tokens.end());
+@@ -601,6 +612,8 @@ public:
+   // inventory together with the union of all scanned library builds.
+   void collectLibraryMemberNames() {
+     if (!e.model.assumeLibrarySpelledMembers) return;
++    e.diagMacros=expandedLibraryMemberNames;
++    for(auto name:embeddedLibraryData().memberNames)e.diagScanned.emplace(name);
+     e.model.libraryMemberNames = expandedLibraryMemberNames;
+     for (auto name : embeddedLibraryData().memberNames) e.model.libraryMemberNames.emplace(name);
+     for (const auto& [key,file] : headerFiles) {
+@@ -619,7 +632,7 @@ public:
+         if (token.is(tok::raw_identifier)) {
+           // Decode escaped identifiers and line splices just as the parser does.
+           const auto* info = e.compiler.getPreprocessor().LookUpIdentifierInfo(token);
+-          if (info) e.model.libraryMemberNames.insert(info->getName().str());
++          if (info) { e.model.libraryMemberNames.insert(info->getName().str()); e.diagHeaders.insert(info->getName().str()); }
+           else e.model.memberDisabledReasons.push_back("unreadable identifier in system header: " + e.sm.getFilename(loc).str());
+         }
+         if (token.is(tok::unknown)) e.model.memberDisabledReasons.push_back("unrecognized token in system header: " + e.sm.getFilename(loc).str());
+@@ -786,8 +799,12 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
+       symbolRoot(symbol,"asm");
+     }
+   }
++  bool diagCandidate=false;
++  bool diagUneval=false;
++  void resolved(const Decl* d, clang::SourceLocation loc) { e.event("ref",d,loc,current,systemCurrent,diagUneval); }
+   void edge(const Decl* d) {
+     if (!d) return;
++    if(!diagCandidate)e.event("edge",d,{},current,systemCurrent,diagUneval);
+     // Builtin templates have no source declaration to retain. Their template
+     // arguments/result types are still traversed by type()/argument().
+     if (isa<BuiltinTemplateDecl>(d)) return;
+@@ -1116,19 +1133,43 @@ public:
+     if (isa<CoroutineBodyStmt>(s) || isa<CoawaitExpr>(s) || isa<CoyieldExpr>(s)) e.disable("unsupported coroutine machinery at " + s->getBeginLoc().printToString(e.sm));
+     return true;
+   }
++  void depEvent(std::string name,clang::SourceLocation loc) { if(e.diag.is_open()&&e.user(loc)) e.diag<<"{\"event\":\"dep\",\"from\":"<<current<<",\"at\":"<<e.offset(loc)<<",\"name\":"<<trim::q(name)<<"}\n"; }
++  bool TraverseStmt(Stmt* x) {
++    if(!x)return true;
++    bool saved=diagUneval;
++    if(isa<UnaryExprOrTypeTraitExpr,CXXNoexceptExpr,RequiresExpr,TypeTraitExpr>(x))diagUneval=true;
++    bool result=RecursiveASTVisitor::TraverseStmt(x);diagUneval=saved;return result;
++  }
++  bool VisitTypeTraitExpr(TypeTraitExpr* x) {
++    if(e.diag.is_open())for(unsigned i=0;i<x->getNumArgs();++i) {
++      auto t=x->getArg(i)->getType().getNonReferenceType();
++      if(auto*r=t->getAsCXXRecordDecl()) e.event("trait",r,x->getBeginLoc(),current,systemCurrent,true);
++    }
++    return true;
++  }
++  bool TraverseTypeLoc(TypeLoc t, bool qualifier=true) {
++    bool saved=diagUneval;
++    if(!t.isNull()&&isa<DecltypeType>(t.getType().getTypePtr()))diagUneval=true;
++    bool result=RecursiveASTVisitor::TraverseTypeLoc(t,qualifier);diagUneval=saved;return result;
++  }
+   bool VisitExpr(Expr* x) { type(x->getType()); return true; }
+-  bool VisitTypeLoc(TypeLoc t) { type(t.getType()); return true; }
+-  bool VisitDeclRefExpr(DeclRefExpr* x) { edge(x->getDecl()); return true; }
+-  bool VisitUsingShadowDecl(UsingShadowDecl* d) { edge(d->getTargetDecl()); return true; }
+-  bool VisitMemberExpr(MemberExpr* x) { edge(x->getMemberDecl()); return true; }
+-  bool VisitCXXConstructExpr(CXXConstructExpr* x) { edge(x->getConstructor()); return true; }
+-  bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr* x) { edge(x->getTemporary()->getDestructor()); return true; }
+-  bool VisitCXXDeleteExpr(CXXDeleteExpr* x) { edge(x->getOperatorDelete()); type(x->getDestroyedType()); return true; }
++  bool VisitTypeLoc(TypeLoc t) {
++    if(auto a=t.getAs<TypedefTypeLoc>())resolved(a.getTypePtr()->getDecl(),a.getNameLoc());
++    if(auto a=t.getAs<TagTypeLoc>())resolved(a.getDecl(),a.getNameLoc());
++    if(auto a=t.getAs<TemplateSpecializationTypeLoc>())resolved(a.getTypePtr()->getTemplateName().getAsTemplateDecl(),a.getTemplateNameLoc());
++    type(t.getType()); return true;
++  }
++  bool VisitDeclRefExpr(DeclRefExpr* x) { resolved(x->getDecl(),x->getLocation()); edge(x->getDecl()); return true; }
++  bool VisitUsingShadowDecl(UsingShadowDecl* d) { resolved(d->getTargetDecl(),d->getLocation()); edge(d->getTargetDecl()); return true; }
++  bool VisitMemberExpr(MemberExpr* x) { resolved(x->getMemberDecl(),x->getMemberLoc()); edge(x->getMemberDecl()); return true; }
++  bool VisitCXXConstructExpr(CXXConstructExpr* x) { resolved(x->getConstructor(),x->getLocation()); edge(x->getConstructor()); return true; }
++  bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr* x) { resolved(x->getTemporary()->getDestructor(),x->getBeginLoc()); edge(x->getTemporary()->getDestructor()); return true; }
++  bool VisitCXXDeleteExpr(CXXDeleteExpr* x) { if(!x->getDestroyedType().isNull())if(auto*r=x->getDestroyedType()->getAsCXXRecordDecl())resolved(r->getDestructor(),x->getBeginLoc()); edge(x->getOperatorDelete()); type(x->getDestroyedType()); return true; }
+   bool VisitCXXNewExpr(CXXNewExpr* x) { edge(x->getOperatorNew()); edge(x->getOperatorDelete()); return true; }
+   bool VisitConceptSpecializationExpr(ConceptSpecializationExpr* x) { edge(x->getNamedConcept()); return true; }
+   bool VisitUnresolvedLookupExpr(UnresolvedLookupExpr* x) {
+     if (current != noFamily && !x->getQualifier()) e.model.families[current].dependentNames.insert(x->getName().getAsString());
+-    for (auto* d : x->decls()) edge(d);
++    diagCandidate=true; for (auto* d : x->decls()) edge(d); diagCandidate=false;
+     return true;
+   }
+   bool memberName(DeclarationName name) {
+@@ -1136,12 +1177,12 @@ public:
+       e.model.families[current].dependentNames.insert(name.getAsString());
+     return true;
+   }
+-  bool VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr* x) { return memberName(x->getMember()); }
++  bool VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr* x) { depEvent(x->getMember().getAsString(),x->getMemberLoc()); return memberName(x->getMember()); }
+   bool VisitUnresolvedMemberExpr(UnresolvedMemberExpr* x) {
+-    for (auto* d : x->decls()) edge(d);
+-    return memberName(x->getMemberName());
++    diagCandidate=true; for (auto* d : x->decls()) edge(d); diagCandidate=false;
++    depEvent(x->getMemberName().getAsString(),x->getMemberLoc()); return memberName(x->getMemberName());
+   }
+-  bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { return memberName(x->getDeclName()); }
++  bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { depEvent(x->getDeclName().getAsString(),x->getLocation()); return memberName(x->getDeclName()); }
+   // These names live on declarations, not expressions. In uninstantiated
+   // patterns a pasted identifier has neither a raw spelling nor a target edge.
+   bool VisitUnresolvedUsingValueDecl(UnresolvedUsingValueDecl* d) { return memberName(d->getDeclName()); }
+@@ -1240,6 +1281,13 @@ public:
+     for (std::size_t i = 0; i < systemPending.size(); ++i) {
+       systemCurrent = systems.at(systemPending[i]); TraverseDecl(const_cast<Decl*>(systemPending[i]));
+     }
++    if(e.diag.is_open())for(auto*d:systemPending) {
++      bool invalid=false;auto text=Lexer::getSourceText(CharSourceRange::getTokenRange(d->getSourceRange()),e.sm,e.compiler.getLangOpts(),&invalid);
++      std::set<std::string,std::less<>> names;
++      if(!invalid){auto ts=pruningIdentifiers(text.str());if(ts.ok())for(auto&t:ts.value())names.insert(t.text);}
++      auto*n=dyn_cast<NamedDecl>(d);
++      e.diag<<"{\"event\":\"system\",\"id\":"<<systems.at(d)<<",\"name\":"<<trim::q(n?n->getQualifiedNameAsString():d->getDeclKindName())<<",\"names\":";trim::strs(e.diag,names);e.diag<<"}\n";
++    }
+     systemCurrent = noFamily;
+   }
+ };
+@@ -1419,6 +1467,58 @@ public:
+     return true;
+   }
+ };
++
++class TrimDeclarations final : public RecursiveASTVisitor<TrimDeclarations> {
++ Extraction& e;
++public:
++ explicit TrimDeclarations(Extraction& x):e(x){}
++ bool shouldVisitTemplateInstantiations()const{return true;}
++ bool shouldVisitImplicitCode()const{return true;}
++ void clause(const Expr*x){if(!x||!e.diag.is_open())return;auto r=e.range(x->getSourceRange());if(r)e.diag<<"{\"event\":\"requires\",\"begin\":"<<r->begin<<",\"end\":"<<r->end<<"}\n";}
++ bool VisitRequiresExpr(RequiresExpr*x){clause(x);return true;}
++ bool VisitFunctionDecl(FunctionDecl*f){clause(f->getTrailingRequiresClause().ConstraintExpr);return true;}
++ bool VisitTemplateDecl(TemplateDecl*t){clause(t->getTemplateParameters()->getRequiresClause());return true;}
++ bool VisitDecl(Decl*d){
++  if(!e.diag.is_open()||!e.user(d->getBeginLoc()))return true;
++  const auto*n=dyn_cast<NamedDecl>(d);auto r=e.range(d->getSourceRange());if(!r)return true;
++  std::string category;
++  if(isa<FieldDecl>(d)||(isa<VarDecl>(d)&&d->getDeclContext()->isRecord()))category="data";
++  else if(isa<TypedefNameDecl,UsingDecl,UsingDirectiveDecl,NamespaceAliasDecl,UsingEnumDecl>(d))category="alias";
++  else if(isa<EnumDecl>(d))category="enum";
++  else if(isa<StaticAssertDecl>(d))category="assert";
++  else if(isa<ConceptDecl>(d))category="concept";
++  else if(isa<VarDecl>(d))category="variable";
++  else if(isa<RecordDecl,AccessSpecDecl,NamespaceDecl>(d))category="scaffold";
++  else if(isa<FunctionDecl>(d))category="free";
++  if(category.empty()&&n)category="binding";
++  if(category.empty())return true;
++  std::string kind;bool used=false,referenced=false,virtualness=false;
++  if(auto*f=dyn_cast<FunctionDecl>(d)){
++   used=f->isUsed();referenced=f->isReferenced();
++   if(auto*c=dyn_cast<CXXConstructorDecl>(f)){
++    if(c->isCopyOrMoveConstructor())kind="copy/move ctor";
++    else if(c->isDefaultConstructor())kind="default ctor";
++    else if(c->getMinRequiredArguments()<=1&&c->getNumParams()>=1)kind=c->isExplicit()?"ctor-explicit":"ctor-implicit-converting";
++    else kind="multi-arg ctor";
++   }else if(isa<CXXDestructorDecl>(f))kind="destructor";
++   else if(auto*c=dyn_cast<CXXConversionDecl>(f))kind=c->isExplicit()?"conversion-explicit":"conversion-implicit";
++   else if(isa<CXXDeductionGuideDecl>(f))kind="deduction guide";
++   else if(auto*m=dyn_cast<CXXMethodDecl>(f);m&&(m->isCopyAssignmentOperator()||m->isMoveAssignmentOperator()))kind="copy/move assignment";
++   else if(f->isOverloadedOperator()){
++    auto op=f->getOverloadedOperator();
++    if(op==OO_Call)kind="operator()";
++    else if(op==OO_EqualEqual||op==OO_ExclaimEqual||op==OO_Less||op==OO_Greater||op==OO_LessEqual||op==OO_GreaterEqual||op==OO_Spaceship)kind="operator-comparison";
++    else if(op==OO_Plus||op==OO_Minus||op==OO_Star||op==OO_Slash||op==OO_Percent||op==OO_Caret||op==OO_Amp||op==OO_Pipe||op==OO_Tilde||op==OO_PlusPlus||op==OO_MinusMinus||op==OO_LessLess||op==OO_GreaterGreater||op==OO_PlusEqual||op==OO_MinusEqual||op==OO_StarEqual||op==OO_SlashEqual||op==OO_PercentEqual||op==OO_CaretEqual||op==OO_AmpEqual||op==OO_PipeEqual||op==OO_LessLessEqual||op==OO_GreaterGreaterEqual)kind="operator-arithmetic";
++    else kind="operator-other";
++    if(op==OO_LessLess||op==OO_GreaterGreater)for(auto*p:f->parameters())if(p->getType().getAsString().find("stream")!=std::string::npos)kind="operator-stream";
++   }
++   if(auto*m=dyn_cast<CXXMethodDecl>(f)){virtualness=m->isVirtual();if(kind.empty()&&virtualness)kind="virtual";}
++  }
++  bool local=false;for(auto*c=d->getLexicalDeclContext();c;c=c->getParent())if(c->isFunctionOrMethod())local=true;
++  e.diag<<"{\"event\":\"decl\",\"key\":"<<(e.user(d->getLocation())?e.offset(d->getLocation()):noFamily)<<",\"owner\":"<<e.owner(d)<<",\"begin\":"<<r->begin<<",\"end\":"<<r->end<<",\"category\":"<<trim::q(category)<<",\"kind\":"<<trim::q(kind)<<",\"name\":"<<trim::q(n?n->getQualifiedNameAsString():d->getDeclKindName())<<",\"implicit\":"<<d->isImplicit()<<",\"used\":"<<used<<",\"referenced\":"<<referenced<<",\"virtual\":"<<virtualness<<",\"local\":"<<local<<"}\n";
++  return true;
++ }
++};
+ class Consumer final : public ASTConsumer {
+   Extraction& e;
+ public:
+@@ -1447,6 +1547,10 @@ public:
+     Dependencies dependencies(e); dependencies.run();
+     Positions positions(e); // Whole user TU, independent of family discovery.
+     for (auto* d : context.getTranslationUnitDecl()->decls()) if (e.user(d->getLocation())) positions.TraverseDecl(d);
++    if(e.diag.is_open()) {
++      TrimDeclarations(e).TraverseDecl(context.getTranslationUnitDecl());
++      e.diag<<"{\"event\":\"inventory\",\"headers\":";trim::strs(e.diag,e.diagHeaders);e.diag<<",\"macros\":";trim::strs(e.diag,e.diagMacros);e.diag<<",\"scanned\":";trim::strs(e.diag,e.diagScanned);e.diag<<"}\n";
++    }
+     NameExpressions(e).TraverseDecl(context.getTranslationUnitDecl()); // Whole TU, no filtering.
+     for (auto [d,id] : e.declarations) {
+       for (auto r : e.model.families[id].ranges) for (auto m : e.macroInvocations)
+diff --git a/src/core/pipeline/pipeline.cpp b/src/core/pipeline/pipeline.cpp
+index b7101ce..c6e971c 100644
+--- a/src/core/pipeline/pipeline.cpp
++++ b/src/core/pipeline/pipeline.cpp
+@@ -6,6 +6,7 @@
+ #include "core/path.h"
+ #include "core/temporary.h"
+ #include <algorithm>
++#include "core/prune/trim_diag.h"
+ #include <fstream>
+ 
+ namespace distill {
+@@ -174,6 +175,11 @@ struct Pipeline {
+       if (options.noPrune) { result.diagnostic += "pruning disabled: --no-prune\n"; return; }
+       step("render pruned");
+       auto rendered = take(renderSource(*result.pruningModel,&*result.retention,options.stripComments));
++      if (!trim::prefix().empty()) {
++        std::ofstream o(trim::prefix()+".render.json");
++        o<<"{\"text\":"<<trim::q(rendered.provenance.text)<<",\"copied\":[";
++        bool first=true;for(auto c:rendered.copied){if(!first)o<<',';first=false;o<<'['<<c.input.begin<<','<<c.input.end<<','<<c.output<<']';}o<<"]}";
++      }
+       const auto& bytes = rendered.provenance.text;
+       take(renderingInvariant(*result.pruningModel,&*result.retention,bytes));
+       take(staticNameInvariant(*result.pruningModel,*result.retention,bytes));
+diff --git a/src/core/report/prune.cpp b/src/core/report/prune.cpp
+index c632df1..f1a9534 100644
+--- a/src/core/report/prune.cpp
++++ b/src/core/report/prune.cpp
+@@ -3,11 +3,13 @@
+ #include "core/names/adl.h"
+ #include "core/library/library.h"
+ #include <iomanip>
++#include "core/prune/trim_diag.h"
+ #include <numeric>
+ #include <sstream>
+ namespace distill {
+ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResult& r) {
+   if (m.families.size() != r.families.size()) return Error{"pruning report model/result mismatch"};
++  trim::dump(m,r);
+   std::ostringstream out;
+   out << "pruning analysis (does not certify an artifact)\npolicy: " << r.policy
+       << "\nADL registry: " << r.registryVersion << ' ' << r.registryDigest << "\ndialect coverage: " << r.dialect << "\nparse configuration:";
+diff --git a/src/core/prune/trim_diag.h b/src/core/prune/trim_diag.h
+new file mode 100644
+--- /dev/null
++++ b/src/core/prune/trim_diag.h
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Temporary analysis-only diagnostics; enabled only by DISTILL_TRIM_PREFIX.
++#pragma once
++#include "core/prune/prune.h"
++#include <cstdlib>
++#include <fstream>
++#include <sstream>
++namespace distill::trim {
++inline std::string q(std::string_view s) {
++ std::string o="\""; const char* hex="0123456789abcdef";
++ for(unsigned char c:s) { if(c=='"'||c=='\\') {o+='\\';o+=c;} else if(c<32) {o+="\\u00";o+=hex[c>>4];o+=hex[c&15];} else o+=c; } return o+'"';
++}
++inline std::string prefix(){ const char* p=std::getenv("DISTILL_TRIM_PREFIX");return p?p:""; }
++inline void ranges(std::ostream& o,const std::vector<EditRange>& rs){o<<'[';bool first=true;for(auto r:rs){if(!first)o<<',';first=false;o<<'['<<r.begin<<','<<r.end<<']';}o<<']';}
++template<class T> inline void nums(std::ostream&o,const T&v){o<<'[';bool first=true;for(auto x:v){if(!first)o<<',';first=false;o<<x;}o<<']';}
++template<class T> inline void strs(std::ostream&o,const T&v){o<<'[';bool first=true;for(auto x:v){if(!first)o<<',';first=false;o<<q(x);}o<<']';}
++inline void dump(const PruningModel&m,const PruningResult&r){
++ auto p=prefix();if(p.empty())return;
++ std::ofstream proto(p+".model");auto encoded=serializePruningModel(m);if(encoded.ok())proto<<encoded.value();
++ std::ofstream o(p+".json");o<<"{\"text\":"<<q(m.text)<<",\"disabled\":";strs(o,r.disabledReasons);
++ o<<",\"memberDisabled\":";strs(o,r.memberDisabledReasons);o<<",\"families\":[";
++ for(std::size_t i=0;i<m.families.size();++i){if(i)o<<',';auto&f=m.families[i];auto&k=r.families[i];
++ o<<"{\"id\":"<<i<<",\"kind\":"<<int(f.kind)<<",\"label\":"<<q(f.label)<<",\"memberOf\":"<<f.memberOf<<",\"memberName\":"<<q(f.memberName)<<",\"blocker\":"<<q(f.memberBlocker)<<",\"ranges\":";ranges(o,f.ranges);
++ o<<",\"edges\":";nums(o,f.edges);o<<",\"deps\":";strs(o,f.dependentNames);o<<",\"names\":";strs(o,f.names);
++ o<<",\"root\":"<<q(f.root)<<",\"pin\":"<<q(f.pinned)<<",\"never\":"<<q(f.neverRemoved)<<",\"effect\":"<<q(f.instantiationEffect)<<",\"kept\":"<<k.kept<<",\"reason\":"<<q(k.reason)<<",\"cause\":"<<k.cause<<'}';}
++ o<<"],\"unions\":[";bool first=true;for(auto[a,b]:m.unions){if(!first)o<<',';first=false;o<<'['<<a<<','<<b<<']';}
++ o<<"],\"systems\":[";first=true;for(auto&s:m.systemEntities){if(!first)o<<',';first=false;o<<"{\"label\":"<<q(s.label)<<",\"users\":";nums(o,s.userEdges);o<<",\"systems\":";nums(o,s.systemEdges);o<<'}';}
++ o<<"],\"uses\":[";first=true;for(auto s:m.systemUses){if(!first)o<<',';first=false;o<<'['<<s.family<<','<<s.entity<<']';}
++ o<<"],\"lines\":[";first=true;for(auto s:m.lineMap){if(!first)o<<',';first=false;if(s)o<<'['<<q(s->file)<<','<<s->line<<']';else o<<"null";}
++ o<<"],\"directives\":";ranges(o,m.sourceDirectives);o<<",\"markers\":";ranges(o,m.generatedMarkers);o<<",\"library\":";strs(o,m.libraryMemberNames);
++ o<<",\"tokens\":[";auto ts=pruningIdentifiers(m.text);first=true;if(ts.ok())for(auto&t:ts.value()){if(!first)o<<',';first=false;o<<'['<<t.begin<<','<<t.end<<','<<q(t.text)<<']';}o<<"]}";
++}
++} // namespace distill::trim
+diff --git a/.checks/trim/README.txt b/.checks/trim/README.txt
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/README.txt
+@@ -0,0 +1,60 @@
++Analysis-only diagnostics for base 49d6b76, ATL 4cbbe2f (126 examples).
++The patch changes no retention model or rule. DISTILL_TRIM_PREFIX enables sidecar
++model/AST/reference/inventory/copy-map diagnostics. Apply the patch only temporarily.
++
++All paths are worktree-local except the explicitly allowed read-only ATL clone.
++Use TMPDIR="$PWD/.checks/trim/tmp" for every command; create that directory first.
++Run the example stages sequentially. Each stage uses at most two examples.
++
++SDK acquisition (before applying diagnostics, if reproducing the clean baseline):
++ GITHUB_REPOSITORY=jcg9129/cpp-distill timeout 600 python3 ci/llvm/acquire.py \
++   --source release --version 23.1.5 --rev 1 --platform linux-arm64
++The acquisition verifies public release SHA256SUMS. Expected archive SHA-256:
++5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de
++ timeout 120 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
++   '-DCMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG' -DCMAKE_C_COMPILER=clang \
++   -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld \
++   -DDISTILL_LLVM_DIR="$PWD/spike-work/sdk/lib/cmake/llvm"
++ timeout 900 cmake --build build --parallel 2
++Copy distill and distill_prune_worker to .checks/trim/baseline before applying patch.
++After applying diagnostics, rebuild with a 600-second cap and --parallel 2.
++Never edit a source file while a compiler is reading it.
++
++Cross packages: timeout 600 python3 .checks/trim/acquire-cross.py
++Every .deb is verified against SHA256 from public Ubuntu questing package indexes.
++The g++ wrapper uses the relocated native AArch64-hosted x86_64 GCC 15.2 compiler.
++QEMU executes standalone outputs using the worktree-local x86_64 runtime.
++
++Compile the offline helpers with timeout 120, clang++ -std=c++20 -O1 -Isrc,
++build/libdistill_core.a -pthread. Each helper source is named after its executable
++(counter, compact, unblock, replay). For counter, first run prepare-counter.py
++and compile counter-prune.cpp too. The copied closure suppresses the embedded
++scanned inventory and has renamed public helpers to avoid changing production.
++
++Measurement/reproduction order:
++ 1. timeout 1800 python3 .checks/trim/sweep.py
++ 2. timeout 600 python3 .checks/trim/analyze.py
++ 3. python3 .checks/trim/report.py
++ 4. timeout 300 python3 .checks/trim/replay-run.py
++ 5. timeout 240 python3 .checks/trim/unblock-run.py
++ 6. timeout 60 python3 .checks/trim/compact-run.py
++ 7. timeout 300 python3 .checks/trim/supplement.py
++ 8. timeout 60 python3 .checks/trim/target-check.py
++ 9. timeout 180 python3 .checks/trim/free-pool.py
++10. timeout 60 python3 .checks/trim/free-close.py
++11. timeout 180 python3 .checks/trim/free-check.py
++12. timeout 180 python3 .checks/trim/free-closed-check.py
++13. python3 .checks/trim/audit.py
++14. python3 .checks/trim/finalize.py
++progress.py is an optional partial-report updater during the sweep.
++replay compares exact model identities after sorting/deduplicating unordered graph
++edges; the diagnostic traversal can change redundant edge visitation order.
++
++Focused tests: timeout 240 ctest --test-dir build --timeout 120 -j2 \
++ -R '^(unit|embedded_members|prune_extract_cases|prune_extract_models|member_pruning|member_review)$' \
++ --output-on-failure
++
++Save the acquisition metadata, then delete spike-work/sdk after the build/tests.
++Save the diagnostic patch before restoring the three production source files and
++removing src/core/prune/trim_diag.h. No commit or push is needed.
++Raw data stays in ignored measurements/trim; scripts/logs stay in .checks/trim.
+diff --git a/.checks/trim/acquire-cross.py b/.checks/trim/acquire-cross.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/acquire-cross.py
+@@ -0,0 +1,32 @@
++import urllib.request,lzma,pathlib,json,hashlib,subprocess
++root=pathlib.Path('.checks/trim/cross');root.mkdir(exist_ok=True)
++pkgs={}
++for comp in ['main','universe']:
++ p=root/(comp+'.xz')
++ if not p.exists(): p.write_bytes(urllib.request.urlopen('https://ports.ubuntu.com/ubuntu-ports/dists/questing/'+comp+'/binary-arm64/Packages.xz',timeout=60).read())
++ for block in lzma.decompress(p.read_bytes()).decode().split('\n\n'):
++  d={}
++  for line in block.splitlines():
++   if line and line[0]!=' ' and ': ' in line:
++    k,v=line.split(': ',1);d[k]=v
++  if 'Package'in d:pkgs[d['Package']]=d
++names=['g++-15-x86-64-linux-gnu','gcc-15-x86-64-linux-gnu','cpp-15-x86-64-linux-gnu','binutils-x86-64-linux-gnu','libgcc-15-dev-amd64-cross','libstdc++-15-dev-amd64-cross','libc6-dev-amd64-cross','linux-libc-dev-amd64-cross','libc6-amd64-cross','libstdc++6-amd64-cross','libgcc-s1-amd64-cross','libgomp1-amd64-cross','libitm1-amd64-cross','libatomic1-amd64-cross','libasan8-amd64-cross','liblsan0-amd64-cross','libtsan2-amd64-cross','libubsan1-amd64-cross','libquadmath0-amd64-cross','qemu-user','libbinutils','libsframe2']
++records=[]
++for name in names:
++ d=pkgs[name]; print(name,d['Version'],d.get('Depends',''),flush=True)
++ p=root/(name+'.deb')
++ if not p.exists():p.write_bytes(urllib.request.urlopen('https://ports.ubuntu.com/ubuntu-ports/'+d['Filename'],timeout=120).read())
++ assert hashlib.sha256(p.read_bytes()).hexdigest()==d['SHA256']
++ import tarfile,io,os
++ dest=(root/'sysroot2').resolve()
++ data=subprocess.check_output(['dpkg-deb','--fsys-tarfile',str(p)],timeout=60)
++ with tarfile.open(fileobj=io.BytesIO(data)) as tf:
++  for m in tf:
++   target=dest/m.name
++   if m.issym() and m.linkname.startswith('/'):continue
++   if target.is_symlink() or (target.exists() and not target.is_dir()):target.unlink()
++   if m.issym() and m.linkname.startswith('/'):
++    m.linkname=os.path.relpath(dest/m.linkname.lstrip('/'),target.parent)
++   tf.extract(m,dest,filter='fully_trusted')
++ records.append({k:d[k]for k in ['Package','Version','Filename','SHA256']})
++(root/'packages.json').write_text(json.dumps(records,indent=2))
+diff --git a/.checks/trim/g++ b/.checks/trim/g++
+new file mode 100755
+--- /dev/null
++++ b/.checks/trim/g++
+@@ -0,0 +1,4 @@
++#!/bin/sh
++root=$(CDPATH= cd -- "$(dirname -- "$0")/cross/sysroot2" && pwd)
++export LD_LIBRARY_PATH="$root/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
++exec "$root/usr/bin/x86_64-linux-gnu-g++-15" --sysroot="$root" "$@"
+diff --git a/.checks/trim/sweep.py b/.checks/trim/sweep.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/sweep.py
+@@ -0,0 +1,30 @@
++import pathlib,os,subprocess,concurrent.futures,json,time,resource
++R=pathlib.Path.cwd();ATL=pathlib.Path('/tmp/claude-1000/-workspace-cpp-distill/f0c845e5-23d4-411f-9b94-324515809aa1/scratchpad/atl');OUT=R/'measurements/trim';OUT.mkdir(exist_ok=True)
++SOURCES=sorted((ATL/'docs/examples').rglob('*.cpp'))
++assert len(SOURCES)==126
++
++def limits():resource.setrlimit(resource.RLIMIT_AS,(2500000*1024,2500000*1024))
++def run(src):
++ name=str(src.relative_to(ATL/'docs/examples').with_suffix('')).replace('/','-');p=OUT/name;p.mkdir(exist_ok=True);prefix=p/'diag'
++ env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'),DISTILL_TRIM_PREFIX=str(prefix))
++ cmd=[str(R/'build/distill'),'--strip-comments','--no-line-markers','--judge','cses','--report',str(p/'report.txt'),'-o',str(p/'out.cpp'),str(R/'.checks/trim/g++'),'-std=c++23','-O2','-I'+str(ATL/'include'),str(src)]
++ start=time.time();row=dict(name=name,source=str(src),command=cmd)
++ with (p/'log.txt').open('w')as log:
++  try:row['rc']=subprocess.run(cmd,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=240,preexec_fn=limits).returncode
++  except subprocess.TimeoutExpired:row['rc']=124
++  out=p/'out.cpp';row['bytes']=out.stat().st_size if out.exists()else 0
++  rep=(p/'report.txt').read_text()if(p/'report.txt').exists()else'';row['artifact']=rep.splitlines()[0]if rep else'-'
++  if row['rc']==0 and out.exists():
++   binary=p/'out.bin'
++   try:
++    c=subprocess.run([str(R/'.checks/trim/g++'),'-std=c++23','-O2',str(out),'-o',str(binary)],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=120,preexec_fn=limits)
++    if c.returncode==0:
++     inp=src.with_suffix('.in').read_bytes()if src.with_suffix('.in').exists()else b''
++     q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],input=inp,stdout=subprocess.PIPE,stderr=log,timeout=30)
++     row['sample']=q.returncode==0 and q.stdout==src.with_suffix('.out').read_bytes();(p/'actual.out').write_bytes(q.stdout)
++    else:row['sample']=False
++   except subprocess.TimeoutExpired:row['sample']=False
++   binary.unlink(missing_ok=True)
++ row['seconds']=round(time.time()-start,1);(p/'summary.json').write_text(json.dumps(row,indent=2));return row
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for row in pool.map(run,SOURCES):print(json.dumps(row),flush=True)
+diff --git a/.checks/trim/analyze.py b/.checks/trim/analyze.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/analyze.py
+@@ -0,0 +1,302 @@
++import pathlib,json,collections,re,subprocess,bisect,array,os,sys
++ROOT=pathlib.Path.cwd();OUT=ROOT/'measurements/trim';NO=2**64-1
++LANG=set('begin end get get_return_object initial_suspend final_suspend return_value return_void yield_value await_transform unhandled_exception get_return_object_on_allocation_failure await_ready await_suspend await_resume'.split())
++KINDS=['ctor-explicit','ctor-implicit-converting','multi-arg ctor','default ctor','copy/move ctor','destructor','copy/move assignment','operator()','operator-comparison','operator-arithmetic','operator-stream','operator-other','conversion-explicit','conversion-implicit','deduction guide','virtual']
++CATS=['own','pp','scaffold','data','member']+KINDS+['free','alias','variable','assert','concept','enum','other']
++LABELS=dict(own="Example's own code",pp='Preprocessor directives and includes',scaffold='Namespace and record scaffolding',data='Data members',member='Member functions: non-rule-1',free='Free functions and function templates',alias='Type aliases and using-declarations',variable='Variables and constants',**{'assert':'static_asserts'},concept='Concepts and requires clauses',enum='Enums',other='Other')
++CLASSES=['R-AST','R-lib','R-dep(a)','R-dep(b)','R-dep(c)','R-nondep-other','R-macro','R-cycle','R-other']
++PREV={'R-AST':(1863,542969),'R-lib':(801,164127),'R-dep(a)':(23,2095),'R-dep(b)':(0,0),'R-dep(c)':(221,45852),'R-nondep-other':(18,6387),'R-macro':(0,0),'R-cycle':(0,0),'R-other':(160,26419)}
++
++def analyze(p,counters=True):
++ m=json.loads((p/'diag.json').read_text());text=m['text'].encode();n=len(text);fs=m['families'];ev=[json.loads(l)for l in(p/'diag.ast.jsonl').read_text().splitlines()]
++ decls=[e for e in ev if e['event']=='decl'];refs=[e for e in ev if e['event']=='ref'];edges=[e for e in ev if e['event']=='edge'];deps=[e for e in ev if e['event']=='dep'];inventory=next(e for e in ev if e['event']=='inventory')
++ parent=list(range(len(fs)))
++ def find(i):
++  while parent[i]!=i:parent[i]=parent[parent[i]];i=parent[i]
++  return i
++ for a,b in m['unions']:parent[find(b)]=find(a)
++ groups={i:find(i)for i in range(len(fs))};kept={f['id']for f in fs if f['kept']};sizes={f['id']:sum(b-a for a,b in f['ranges'])for f in fs}
++ owner=array.array('i',[-1])*n
++ for f in fs:
++  for a,b in f['ranges']:owner[a:b]=array.array('i',[f['id']])*(b-a)
++ def phys(at):return owner[at]if 0<=at<n else -1
++ def alive(e):
++  source=e.get('from',NO)
++  if source==NO:return e.get('sys',NO)in system
++  if source not in kept:return False
++  at=e.get('at',NO);o=phys(at)
++  return at==NO or o<0 or o in kept
++ system=set(s for f,s in m['uses']if f in kept);pending=list(system)
++ while pending:
++  for s in m['systems'][pending.pop()]['systems']:
++   if s not in system:system.add(s);pending.append(s)
++ incoming=collections.defaultdict(set);keyRefs=collections.defaultdict(list);rawRefs=collections.defaultdict(list)
++ for e in edges+refs:
++  if not alive(e):continue
++  target=e['target'];source=e.get('from',NO)
++  if target!=NO and (source==NO or groups.get(source)!=groups.get(target)):incoming[groups[target]].add(source)
++  keyRefs[e['key']].append(e)
++  if e['event']=='ref' and e['at']!=NO:rawRefs[e['at']].append(e)
++ byowner=collections.defaultdict(list);bykey=collections.defaultdict(list)
++ for d in decls:
++  byowner[d['owner']].append(d);bykey[d['key']].append(d)
++ # Written source identity aggregates flags from known instances and template wrappers.
++ written={}
++ roots={}
++ for d in decls:
++  if d['kind']and not d['implicit']and d['owner']in kept:
++   f=fs[d['owner']]
++   if (f['memberOf']!=NO and 'rule 1:'in f['blocker'])or d['kind']=='deduction guide':
++    if d['owner']not in roots or d['begin']<roots[d['owner']]['begin']:roots[d['owner']]=d
++ for d in decls:
++  if not d['kind']or d['implicit']or(d['owner']not in kept):continue
++  f=fs[d['owner']]
++  if d['kind']!='deduction guide' and (f['memberOf']==NO or 'rule 1:'not in f['blocker']):continue
++  if d['key']!=roots[d['owner']]['key']:continue
++  key=(d['key'],d['kind'])
++  if key not in written:written[key]=dict(d)
++  else:
++   w=written[key];w['begin']=min(w['begin'],d['begin']);w['end']=max(w['end'],d['end']);w['used']|=d['used'];w['referenced']|=d['referenced'];w['virtual']|=d['virtual']
++ # Source ranges in original physical order give per-declaration owned bytes.
++ declarations=[]
++ traits=[e for e in ev if e['event']=='trait'and alive(e)]
++ systemMeta={e['id']:e for e in ev if e['event']=='system'}
++ traitKinds=collections.defaultdict(set)
++ for t in traits:
++  if t['target']==NO:continue
++  if t['at']!=NO:
++   raw=text[t['at']:t['at']+100].decode(errors='replace');match=re.match(r'(__[A-Za-z_0-9]+)',raw);names={match.group(1)}if match else set()
++  else:names={v for v in systemMeta.get(t['sys'],{}).get('names',[])if v.startswith('__is_')or v.startswith('__has_')}
++  traitKinds[groups[t['target']]].update(names)
++ def traitRelevant(kind,owner):
++  names=traitKinds.get(groups.get(owner),set());joined=' '.join(names)
++  if kind in ['ctor-explicit','ctor-implicit-converting','multi-arg ctor']:
++   return any(s in joined for s in ['constructible','convertible','aggregate'])
++  if kind in ['default ctor','copy/move ctor']:
++   return any(s in joined for s in ['constructible','convertible','aggregate','trivial','pod','copyable'])
++  if kind=='destructor':return any(s in joined for s in ['destructible','constructible','trivial','pod','copyable'])
++  if kind=='copy/move assignment':return any(s in joined for s in ['assignable','trivial','copyable'])
++  if kind.startswith('conversion-'):return 'convertible'in joined
++  if kind=='virtual':return bool(names)
++  return False
++ keyEvidence={}
++ for (key,kind),d in written.items():
++  f=fs[d['owner']];group=groups[d['owner']]
++  witnesses=[e for e in keyRefs[key]if e.get('declkind')in ['CXXConstructor','CXXDestructor','CXXConversion','CXXMethod','CXXDeductionGuide','Function']]
++  # Broad edge entries are semantic references, but function-type metadata alone
++  # is not an evaluated call. Only explicit reference events establish group 1.
++  witnesses=[e for e in witnesses if e['event']=='ref']
++  evidence=1 if any(not e['uneval']for e in witnesses)else 2 if witnesses or d['used']or d['referenced']or(f['memberOf']!=NO and traitRelevant(kind,f['memberOf']))else 3
++  if kind=='deduction guide'and evidence==1:evidence=2
++  keyEvidence[key]=min(keyEvidence.get(key,3),evidence)
++  # All ranges owned by this written declaration, including its template header.
++  ranges=fs[d['owner']]['ranges'];owned=sum(b-a for a,b in ranges)
++  declarations.append(dict(d,evidence=evidence,bytes=owned,group=group,traitKinds=sorted(traitKinds.get(groups.get(f['memberOf']),set())),hasAstReference=bool(witnesses),traitOnly=bool(evidence==2 and not witnesses and not d['used']and not d['referenced'])))
++ # In this extractor each member family is one written declaration. If there are
++ # multiple metadata aliases of a family, partition by physical declaration span.
++ counts=collections.Counter(d['owner']for d in declarations)
++ for d in declarations:
++  if counts[d['owner']]>1:
++   d['bytes']=sum(1 for a,b in fs[d['owner']]['ranges']for j in range(a,b)if d['begin']<=j<d['end'])
++ units=collections.defaultdict(list)
++ for f in fs:
++  if f['memberOf']!=NO and f['kept']and f['memberOf']in kept:units[(groups[f['id']],f['memberName'])].append(f['id'])
++ classrows=[];groupClass={}
++ # Exact written declaration and resolved-reference bindings for every matching token.
++ bindings=collections.defaultdict(list)
++ for d in decls:bindings[d['key']].append(d['owner'])
++ tokens=collections.defaultdict(list)
++ for a,b,name in m['tokens']:
++  o=phys(a)
++  if o<0 or o in kept:tokens[name].append((a,b,o))
++ depBy=collections.defaultdict(list)
++ for d in deps:
++  if alive(d):depBy[d['name']].append(d)
++ for (g,name),ids in units.items():
++  parts=[fs[i]for i in ids];sz=sum(sizes[i]for i in ids)
++  if any('rule 1:'in f['blocker']for f in parts):c='rule1'
++  elif m['disabled']or m['memberDisabled']:c='R-other'
++  elif incoming[g]:c='R-AST'
++  elif any(f['blocker']or f['root']or f['pin']or f['never']or f['effect']for f in parts)or name in LANG:c='R-other'
++  elif name in m['library']:c='R-lib'
++  else:
++   external=[t for t in tokens[name]if t[2]<0 or groups[t[2]]!=g]
++   matching=[d for d in depBy[name]if groups.get(d['from'])!=g]
++   depFallback=any(name in f['deps']and f['id']in kept and groups[f['id']]!=g for f in fs)
++   if matching or depFallback:
++    allresolved=bool(matching)
++    for site in matching:
++     rr=[r for r in rawRefs[site['at']]if r['target']!=NO]
++     if not rr:allresolved=False
++     if any(groups[r['target']]==g for r in rr):allresolved=False
++    # A dependent-name set with no physical site cannot be proved resolved.
++    ownersWithSites={s['from']for s in matching}
++    if any(name in f['deps']and f['id']in kept and groups[f['id']]!=g and f['id']not in ownersWithSites for f in fs):allresolved=False
++    c='R-dep(a)'if allresolved else'R-dep(c)'
++   elif external:
++    resolved=[]
++    for a,b,o in external:
++     rr=rawRefs[a];bb=bindings[a]
++     resolved.append(bool(rr or bb)and all(r['target']==NO or groups[r['target']]!=g for r in rr)and all(i==NO or groups.get(i)!=g for i in bb))
++    if all(resolved):c='R-nondep-other'
++    elif not any(resolved)and all(any(a<=t[0]<b for a,b in m['directives'])for t in external):c='R-macro'
++    else:c='R-other'
++   else:c='R-other'
++  groupClass[g]=c
++  origin='header'if name in inventory['headers']else'macro'if name in inventory['macros']else'scanned'
++  classrows.append(dict(group=g,name=name,ids=ids,bytes=sz,reason=c,origin=origin,label=parts[0]['label']))
++ # Diagnose unused collision cascades over actual resolved member edges.
++ anchors=set();memberGroups=set(groupClass)
++ for g,c in groupClass.items():
++  if c not in ['R-AST','R-nondep-other','R-dep(a)']:anchors.add(g)
++ for g,c in groupClass.items():
++  if c=='R-AST' and any(s==NO or groups.get(s)not in memberGroups for s in incoming[g]):anchors.add(g)
++ active=set(anchors);change=True
++ while change:
++  change=False
++  for g,c in groupClass.items():
++   if c=='R-AST' and g not in active and any(groups.get(s)in active for s in incoming[g]):active.add(g);change=True
++ for row in classrows:
++  if row['reason']=='R-AST'and row['group']not in active:row['reason']='R-cycle';groupClass[row['group']]='R-cycle'
++ # Byte categories and reach evidence on the immutable stripped worker buffer.
++ category=array.array('b',[CATS.index('other')])*n;reach=bytearray(n)
++ def fill(a,b,cat,ref=False):
++  a=max(0,a);b=min(n,b)
++  if a>=b:return
++  category[a:b]=array.array('b',[CATS.index(cat)])*(b-a);reach[a:b]=bytes([bool(ref)])*(b-a)
++ kd={d['owner']:d for d in declarations}
++ fk={1:'free',2:'scaffold',3:'enum',4:'alias',5:'variable',6:'concept',7:'scaffold',8:'alias',9:'assert',10:'other'}
++ for f in fs:
++  cat=fk.get(f['kind'],'other');ref=bool(incoming[groups[f['id']]])
++  if f['memberOf']!=NO:
++   cat=kd[f['id']]['kind']if f['id']in kd else'member'
++   if f['id']in kd:ref=kd[f['id']]['hasAstReference']
++  for a,b in f['ranges']:fill(a,b,cat,ref)
++ # Namespace shells have no family owner; account for their heads and braces.
++ for d in decls:
++  if d['category']!='scaffold'or d['owner']!=NO or d['implicit']:continue
++  a,b=d['begin'],d['end'];opening=text.find(b'{',a,b)
++  if opening<0:continue
++  ref=bool(keyRefs[d['key']])
++  for start,stop in [(a,opening+1),(max(a,b-1),b)]:
++   for j in range(start,min(n,stop)):
++    if owner[j]<0:category[j]=CATS.index('scaffold');reach[j]=ref
++ # Nested non-function members are preserved structural fragments of records.
++ nested=[d for d in decls if not d['implicit']and not d['local']and d['category']in ['data','alias','enum','assert','concept','variable','free']]
++ unique={(d['begin'],d['end'],d['category']):d for d in nested}
++ for d in sorted(unique.values(),key=lambda d:-(d['end']-d['begin'])):
++  key=d['key'];ref=bool(keyRefs[key]);a,b=d['begin'],d['end'];end=b
++  if d['category']=='free':
++   if d['kind']in ['deduction guide','operator()']or '(lambda)'in d['name']:continue
++   # A hidden friend/template is a free function inside structural record text.
++   for wrapper in bykey[key]:
++    if wrapper['owner']==d['owner']and wrapper['category']=='binding'and wrapper['begin']<=a and wrapper['end']>=b:a=wrapper['begin']
++
++  # Include the declaration terminator when present; never cross another token.
++  if text[b:b+1]==b';':end+=1
++  for j in range(a,min(n,end)):
++   o=owner[j]
++   if o>=0 and fs[o]['memberOf']==NO and fs[o]['kind']in [2,7]:category[j]=CATS.index(d['category']);reach[j]=ref
++ for d in declarations:
++  if d['kind']=='deduction guide':
++   for a,b in fs[d['owner']]['ranges']:fill(a,b,'deduction guide',d['hasAstReference'])
++ # Separate explicit requires expressions/clauses from their enclosing function.
++ for e in ev:
++  if e['event']=='requires':
++   a,b=e['begin'],e['end'];before=text[max(0,a-40):a];match=re.search(rb'\brequires\s*$',before)
++   if match:a=max(0,a-40)+match.start()
++   fill(a,b,'concept',reach[a]if a<n else False)
++ for a,b in m['directives']:fill(a,b,'pp',False)
++ # Assign unowned indentation/newlines to the nearest declaration on that line;
++ # directive lines and record structural gaps retain their own categories.
++ lines=text.splitlines(keepends=True);pos=0;ownRanges=[]
++ for li,line in enumerate(lines):
++  info=m['lines'][li]if li<len(m['lines'])else None
++  if info and '/docs/examples/'in info[0]:ownRanges.append((pos,pos+len(line)))
++  if line.lstrip().startswith(b'#'):
++   if not re.match(rb'\s*#\s*line\b',line):fill(pos,pos+len(line),'pp',False)
++  else:
++   meaningful=[j for j in range(pos,pos+len(line))if not chr(text[j]).isspace()and category[j]!=CATS.index('other')]
++   if meaningful:
++    first=meaningful[0];last=meaningful[-1]
++    for j in range(pos,pos+len(line)):
++     if category[j]==CATS.index('other')and text[j]in b' \t\r\n':
++      near=first if j<first else last;category[j]=category[near];reach[j]=reach[near]
++  pos+=len(line)
++ # Example source wins all categories except preprocessor directives.
++ for a,b in ownRanges:
++  for j in range(a,b):
++   if category[j]!=CATS.index('pp'):category[j]=CATS.index('own')
++ actual=(p/'out.cpp').read_bytes();summary=json.loads((p/'summary.json').read_text())
++ if summary['artifact'].startswith('distill: wrote pruned'):
++  rend=json.loads((p/'diag.render.json').read_text());marked=rend['text'].encode();positions=array.array('i',[-1])*len(marked)
++  for a,b,to in rend['copied']:positions[to:to+b-a]=array.array('i',range(a,b))
++  if actual!=marked:
++   keep=[];start=0
++   for line in marked.splitlines(keepends=True):
++    if not re.match(rb'^#line\b',line):keep.extend(range(start,start+len(line)))
++    start+=len(line)
++   assert b''.join(marked[i:i+1]for i in keep)==actual,(p.name,'render mismatch')
++   positions=array.array('i',(positions[i]for i in keep))
++ else:
++  assert actual==text,(p.name,'flat mismatch')
++  positions=array.array('i',range(n))
++ totals=collections.Counter();noref=collections.Counter()
++ for j,at in enumerate(positions):
++  if at>=0:cat=CATS[category[at]];ref=reach[at]
++  else:
++   # Inserted deletion separators / metadata are renderer-owned residual bytes.
++   cat='other';ref=False
++  totals[cat]+=1
++  if not ref:noref[cat]+=1
++ assert sum(totals.values())==len(actual)
++ # Full closure counterfactuals suppress the embedded scanned union too.
++ counter={}
++ facility=set(inventory['macros'])|LANG
++ for e in ev:
++  if e['event']=='system'and e['id']in system:facility.update(e['names'])
++ for mode,names in [('worker',set(inventory['headers'])|set(inventory['macros'])),('facility',facility)]:
++  namesfile=p/(mode+'.names');namesfile.write_text('\n'.join(sorted(names))+'\n');result=p/(mode+'.json')
++  if counters and not result.exists():
++   subprocess.run([str(ROOT/'.checks/trim/counter'),str(p/'diag.model'),str(namesfile),str(result)],check=True,timeout=60,env=dict(os.environ,TMPDIR=str(ROOT/'.checks/trim/tmp')))
++  if result.exists():
++   c=json.loads(result.read_text());ids=set(c['freed']);c['ownedBytes']=sum(sizes[i]for i in ids);c['a12Bytes']=sum(r['bytes']for r in classrows if r['reason']=='R-lib'and set(r['ids'])<=ids)
++   c['outputGain']=len(actual)-c['bytes']if 'bytes'in c and summary['artifact'].startswith('distill: wrote pruned')else None
++   counter[mode]=c
++ # Source locations of physical declarations survive comment stripping.
++ lineStarts=[0]
++ for match in re.finditer(b'\n',text):lineStarts.append(match.end())
++ for d in declarations:
++  li=bisect.bisect_right(lineStarts,d['key'])-1;loc=m['lines'][li]if li<len(m['lines'])else None
++  d['location']=(loc[0].split('/include/')[-1]+':'+str(loc[1]))if loc else str(d['key'])
++  d['signature']=text[d['begin']:min(d['end'],d['begin']+200)].decode(errors='replace').split('{')[0].strip().replace('\n',' ')
++ ordinary=sum(r['bytes']for r in classrows if r['reason']!='rule1');rule=sum(r['bytes']for r in classrows if r['reason']=='rule1')
++ counted=sum(d['bytes']for d in declarations if d['kind']!='deduction guide');assert rule==counted,(p.name,'rule1 reconciliation',rule,counted)
++ freeUnused=[]
++ for f in fs:
++  if f['kept']and f['memberOf']==NO and f['kind']==1 and not incoming[groups[f['id']]]:
++   freeUnused.append(dict(id=f['id'],label=f['label'],bytes=sizes[f['id']],reason=f['reason'],root=f['root'],never=f['never']))
++ result=dict(version=7,freeUnused=freeUnused,name=p.name,bytes=len(actual),totals=dict(totals),noref=dict(noref),classes=classrows,declarations=declarations,counter=counter,artifact=summary['artifact'],sample=summary.get('sample'),ordinaryBytes=ordinary,rule1Bytes=rule,systems=len(system),facilityNames=len(facility))
++ (p/'analysis.json').write_text(json.dumps(result));return result
++
++def aggregate(results):
++ total=collections.Counter();nr=collections.Counter();cs=collections.defaultdict(lambda:[0,0]);rs=collections.defaultdict(lambda:[0,0]);libs=collections.defaultdict(lambda:collections.Counter());ds=[]
++ for r in results:
++  total.update(r['totals']);nr.update(r['noref'])
++  for c in r['classes']:
++   cs[c['reason']][0]+=1;cs[c['reason']][1]+=c['bytes']
++   if c['reason']=='R-lib':libs[c['name']][c['origin']]+=c['bytes'];libs[c['name']]['units']+=1
++  for d in r['declarations']:
++   rs[(d['kind'],d['evidence'])][0]+=1;rs[(d['kind'],d['evidence'])][1]+=d['bytes'];ds.append(dict(d,example=r['name']))
++ summary=dict(examples=len(results),bytes=sum(total.values()),totals=dict(total),noref=dict(nr),classes=dict(cs),rule1={k:{str(e):rs[(k,e)]for e in [1,2,3]}for k in KINDS},library={k:dict(v)for k,v in libs.items()})
++ (OUT/'aggregate.json').write_text(json.dumps(summary,indent=2))
++ return summary,rs,ds
++if __name__=='__main__':
++ results=[]
++ for p in sorted(OUT.iterdir()):
++  if p.is_dir()and(p/'summary.json').exists()and(p/'diag.json').exists():
++   try:
++    r=json.loads((p/'analysis.json').read_text())if (p/'analysis.json').exists()and json.loads((p/'analysis.json').read_text()).get('version')==7 and '--fresh'not in sys.argv else analyze(p)
++    results.append(r);print(p.name,r['bytes'],flush=True)
++   except Exception as e:print('ERROR',p.name,repr(e),flush=True);raise
++ aggregate(results)
+diff --git a/.checks/trim/report.py b/.checks/trim/report.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/report.py
+@@ -0,0 +1,82 @@
++import analyze as a,json,pathlib,collections,datetime
++R=a.ROOT;O=a.OUT
++results=[json.loads(p.read_text())for p in sorted(O.glob('*/analysis.json'))]
++s,rs,ds=a.aggregate(results)
++def fmt(x):return f'{x:,}'
++def esc(x):return str(x).replace('|',r'\|').replace('\n',' ')
++def cell(v):return f'{fmt(v[0])} / {fmt(v[1])}'
++lines=['<!-- SPDX-License-Identifier: GPL-3.0-or-later -->','# Remaining output bytes: ATL trim analysis','',
++'2026-11-22. Analysis only; base `49d6b76`, branch `trim-analysis`. Read-only ATL input `4cbbe2f`: 126 examples. No production policy change.','',
++f'**Measured so far: {len(results)}/126 examples, {fmt(s["bytes"])} output bytes.** This is a partial report until all 126 are reconciled. Updated '+datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M UTC')+'.','',
++'## Measurement and byte attribution','',
++'CSES profile `cses-gcc13-cpp23`, C++23, `-O2 --strip-comments --no-line-markers`, default A11/A12, following `ci/atl-sweep/sweep.sh`. Totals sum example occurrences; shared ATL headers are counted in each output. The worker uses GCC 15.2 x86_64 headers, not a CSES GCC 13.3 header capture. These are local checks, not judge runs.','',
++'The diagnostic preserves production retention. The baseline comparison has identical coordinate-compression output bytes and family/member report rows. Whole-output categories use the renderer copy map into the immutable comment-stripped worker input. Every final byte is assigned once, including indentation, newlines, directives and renderer-inserted deletion separators. Declaration-owned bytes and output-category bytes are separate denominators: output categories include adjacent trivia and carve out requires clauses.','',
++"The example's own non-directive source takes precedence. Directives own their entire physical lines. Nested data, aliases, enums and assertions are carved out of structural records; function-local declarations remain part of their function. Function/member ranges otherwise include signatures, bodies and template headers. Explicit requires-expression and head/trailing-clause spans are separated. Unowned line indentation inherits that line's declaration category; blank structural gaps and inserted separators remain Other. Inactive text in unresolved flat branches is opaque when the worker did not parse it.",'',
++'“No AST reference” means no positive surviving semantic witness, not proven dead code. Member units exclude self-group references; rule-1 declarations use their own declaration identities. Data and aliases use their exact declaration reference keys. A resolved unevaluated function reference counts as reached in the whole-output table even though it is evidence (2) in the separate rule-1 table; trait- and flag-only evidence does not. Roots such as `main` may legitimately have no incoming reference. Evidence from reached system entities counts; references from discarded physical text do not.','',
++'## Whole-output totals','',
++'| Category | Output bytes | % | No positive AST-reference bytes | Why unreferenced bytes remain |','| --- | ---: | ---: | ---: | --- |']
++why={'own':'Entry point / enclosing example declaration; source is part of the program.','pp':'Source directives are never removed; includes and generated guards remain.','scaffold':'Structural family ownership, class layout and namespace/access syntax.','data':'D3e preserves all non-function members of a kept record; layout/initialization may observe them.','member':'A12, dependent/name rules, language lookup, roots/pins or refusal; see the retention table.','free':'A6/ADL, nonmember operators, lexical/dependent closure, root/pin or flat refusal.','alias':'Structural record ownership, namespace-using protection or lexical/dependent closure.','variable':'Structural ownership, non-inert storage/effect roots, references/names or flat refusal.','assert':'Namespace static_assert is a root; record assertions stay structurally.','concept':'Enclosing retained declaration or constraint/lexical dependency; requires can inspect API without a call.','enum':'Structural record ownership or enum-family/name/lexical dependency.','other':'Blank structural gaps, renderer separators, pinned unknown declarations and unparsed flat-branch text.'}
++for c in a.CATS:
++ v=s['totals'].get(c,0);n=s['noref'].get(c,0);reason=why.get(c,'D3e rule 1 keeps the declaration with its record; overload/trait/target sensitivity is not disproved.')
++ lines.append(f'| {a.LABELS.get(c,c)} | {fmt(v)} | {v/max(s["bytes"],1):.2%} | {fmt(n)} | {reason} |')
++lines+= [f'| **Total** | **{fmt(s["bytes"])}** | **100%** | **{fmt(sum(s["noref"].values()))}** | Every output byte appears exactly once. |','',
++'### Top 15 examples by output bytes','',
++'Each cell is bytes. Rule 1 combines its declaration-kind rows above; “Rest” combines aliases, variables, assertions, constraints, enums and Other.','',
++'| Example | Output | Own | PP | Scaffold | Data | Ordinary members | Rule 1 | Free | Rest | No AST | Artifact |','| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
++for r in sorted(results,key=lambda r:-r['bytes'])[:15]:
++ t=r['totals'];fixed=['own','pp','scaffold','data','member'];rule=sum(t.get(k,0)for k in a.KINDS);free=t.get('free',0);rest=r['bytes']-sum(t.get(k,0)for k in fixed)-rule-free
++ lines.append('| '+r['name']+' | '+' | '.join(fmt(x)for x in [r['bytes']]+[t.get(k,0)for k in fixed]+[rule,free,rest,sum(r['noref'].values())])+' | '+('pruned'if'wrote pruned'in r['artifact']else'flat')+' |')
++lines+=['','## Member retention, previous and current','',
++'Units group `(union-find family group, member spelling)` and include overloads/redeclarations. Rule 1 is excluded. Classification follows [the preceding retention analysis](2026-11-21-member-call-analysis.md): refusal; positive AST; independent mandatory roots/protection; A12; dependent sites; foreign resolved bindings; macro-only; opaque remainder. R-dep(b) is part of R-AST and zero in this exclusive table. A name inventory is independent protection, even when unrelated user tokens also match.','',
++'R-dep(a) requires a resolved foreign target at every matching kept physical site; missing/unobserved sites and unresolved declaration sites remain (c). R-cycle audits whether AST-only users are themselves locally unused collision units. R-other includes opaque/mixed raw-token bindings; unresolved macro-argument joins are conservatively left there. The previous table and this table share definitions; the extractor/classifier implementation is fresh, so unresolved evidence may move from a narrower prior row to R-other.','',
++'| Class | Previous 85 units / bytes | Current units / bytes | Delta bytes |','| --- | ---: | ---: | ---: |']
++for c in a.CLASSES:
++ v=s['classes'].get(c,[0,0]);old=a.PREV[c];lines.append(f'| {c} | {cell(old)} | {cell(v)} | {v[1]-old[1]:+,} |')
++rule=s['classes'].get('rule1',[0,0]);ordinary=sum(v[1]for k,v in s['classes'].items()if k!='rule1')
++lines += [f'','Ordinary member owned bytes: **'+fmt(ordinary)+'**. Rule-1 member units: **'+cell(rule)+'**, compared with **838 / 237,583** previously.','',
++'## Rule 1: declaration kinds and evidence','',
++'Each cell is written declarations / owned bytes. Implicit compiler-generated declarations and repeated template instances do not add counts. Default and copy/move constructors take precedence over explicitness. Explicit and implicit converting rows mean callable with one argument (at most one required, at least one accepted); the multi-argument row has more than one required argument. Lambda call operators nested inside a unit belong to the enclosing written unit, and are not counted as another declaration.','',
++'(1) has a resolved reference/call from surviving user text or a system entity reached from kept code. (2), with no (1), has an unevaluated reference, a relevant constructibility/assignment/conversion or structural special-member trait involving its record, CTAD participation, or residual compiler used/referenced flags. Relevant trait records conservatively protect every matching kind of declaration of the tested record: this is a broader group (2) than the preceding overload-selection replay, and shrinks the candidate set. Flags can originate in discarded code. (3) has none of those observed witnesses; it is a worker candidate, not a cross-target deletion proof.','',
++'Guides are additional record-owned declarations, outside the old member-unit denominator. Virtualness is recorded independently; virtual destructors remain in the destructor row. Stream operators here are member operators only; free/hidden-friend stream operators are counted as free functions.','',
++'| Kind | (1) Resolved AST | (2) Trait / unevaluated / residual flags | (3) No reference | Total |','| --- | ---: | ---: | ---: | ---: |']
++for k in a.KINDS:
++ cells=[rs[(k,e)]for e in[1,2,3]];tot=[sum(x[i]for x in cells)for i in [0,1]];lines.append('| '+k+' | '+' | '.join(cell(v)for v in cells+[tot])+' |')
++explicit=rs[('ctor-explicit',3)];implicit=rs[('ctor-implicit-converting',3)];all3=[sum(rs[(k,3)][i]for k in a.KINDS)for i in[0,1]]
++lines += ['',f'**Explicit one-argument constructors, evidence (3): {cell(explicit)}. Implicit one-argument converting constructors, evidence (3): {cell(implicit)}. All rule-1 kinds plus guides, evidence (3): {cell(all3)}.**','',
++'### Explicit constructor candidates','',
++'Identical written source declarations are grouped across examples; bytes below sum occurrences. The full declaration/evidence inventory is retained in the diagnostic evidence.','',
++'| Written declaration | Examples / occurrences | Candidate bytes |','| --- | ---: | ---: |']
++ex=collections.defaultdict(lambda:[set(),0])
++for d in ds:
++ if d['kind']=='ctor-explicit'and d['evidence']==3:
++  key=(d['location'],d['name']);ex[key][0].add(d['example']);ex[key][1]+=d['bytes']
++for(loc,name),(examples,b)in sorted(ex.items(),key=lambda kv:-kv[1][1]):lines.append(f'| `{esc(loc)}` `{esc(name)}` | {len(examples)} | {fmt(b)} |')
++lines+=['','### Implicit converting constructor candidates','',
++'All surviving implicit one-argument candidates must be audited against ATL’s new documented value-conversion exception. Audit results are added after the full sweep.','',
++'| Written declaration | Examples / occurrences | Candidate bytes |','| --- | ---: | ---: |']
++im=collections.defaultdict(lambda:[set(),0])
++for d in ds:
++ if d['kind']=='ctor-implicit-converting'and d['evidence']==3:
++  key=(d['location'],d['name']);im[key][0].add(d['example']);im[key][1]+=d['bytes']
++for(loc,name),(examples,b)in sorted(im.items(),key=lambda kv:-kv[1][1]):lines.append(f'| `{esc(loc)}` `{esc(name)}` | {len(examples)} | {fmt(b)} |')
++lines+=['','## A12 inventory detail','',
++'Exclusive provenance is (i) an included worker header’s raw identifier, then (ii) an actual system-macro expansion only, then (iii) scanned-build-only. A name can occur in multiple sources; the table assigns the strongest local source. It covers only R-lib bytes after positive AST and independent mandatory rules. Scanned inventory: 14 builds, generator 4, 32,555 names.','',
++'| Name | Units | (i) Worker headers | (ii) Macro only | (iii) Scanned only |','| --- | ---: | ---: | ---: | ---: |']
++for name,v in sorted(s['library'].items(),key=lambda kv:-sum(kv[1].get(k,0)for k in['header','macro','scanned'])):lines.append(f'| `{esc(name)}` | {v.get("units",0)} | {fmt(v.get("header",0))} | {fmt(v.get("macro",0))} | {fmt(v.get("scanned",0))} |')
++lines+=['','### Inventory counterfactuals','',
++'Each counterfactual reruns the complete production closure on the saved model with its embedded scanned-name fallback suppressed in a separate offline copy. Worker-only uses raw included-header names plus actual macro names. The facility estimate instead keeps identifiers in the written bodies/signatures of all system entities transitively reached from the kept TU, including complete reached record definitions, plus actual macro expansions and language lookup names. System-type edges make this a deliberately broad facility proxy. It still misses dormant judge-library paths, alternative overloads and target-selected implementations; it is an estimate, not a sound replacement for A12.','',
++'| Counterfactual | Examples with enabled closure | Direct R-lib bytes freed | All owned bytes freed | Rendered output bytes saved |','| --- | ---: | ---: | ---: | ---: |']
++for mode,title in [('worker','Drop scanned-only inventory'),('facility','Restrict to reached system facilities (estimate)')]:
++ cc=[r['counter'][mode]for r in results if mode in r['counter']and not r['counter'][mode]['disabled']]
++ gains=[c['outputGain']for c in cc if c['outputGain']is not None]
++ lines.append(f'| {title} | {len(cc)} | {fmt(sum(c["a12Bytes"]for c in cc))} | {fmt(sum(c["ownedBytes"]for c in cc))} | {fmt(sum(gains))} |')
++lines+=['','## Recommendation (partial)','',
++'Ranking will use the complete sweep. Candidate pools must not be added together: stronger inventory or mandatory rules can independently protect a declaration, and deleting a rule-1 overload may release helpers or change traits.','',
++'1. Narrow broad A12 name retention to library facilities actually available to the TU, under an amended A12 bounding judge lookup by that facility inventory. Cross-target risk: another library implementation can use another member protocol or constrained overload.','2. Split rule-1 overloads and prune declarations with evidence (3), starting with explicit constructors, under an assumption that judge overload resolution, traits, constraints and CTAD do not observe worker-unreferenced candidates. Explicitness alone does not establish that assumption; ATL’s matrix and persistent-backing constraints provide concrete portability hazards.','3. Resolve refusal gates introduced by the expanded corpus, especially geometry `FLT_EVAL_METHOD` and `__builtin_prefetch`; measure potential gains separately from retained-unit rules. A worker macro value is not a judge fact.','4. Refine name collisions only when foreign bindings are proved stable across the supported targets, as recommended by the preceding analysis. Preserve the reverse potential-effect graph.','',
++'## Verification and reproducibility','',
++'Pinned LLVM 23.1.5 Linux ARM64 SDK SHA-256: `5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de`, verified against release SHA256SUMS. SDK/build are ignored. Configure/build hard caps: 120/900 seconds; rebuilds 600 seconds; `-j2`, Clang 22.1.8, `-O1 -DNDEBUG`, LLD. All six focused CTest suites pass (`unit`, `embedded_members`, `prune_extract_cases`, `prune_extract_models`, `member_pruning`, `member_review`) after the completed diagnostic rebuild.','',
++f'Generation cap 240 seconds/example, 2,500,000 KiB address-space cap, two examples concurrently. Standalone compile/run caps 120/30 seconds. Completed sample checks represented here: {sum(r["sample"]is True for r in results)}/{len(results)}. Cross GCC 15.2 and QEMU 10.1 packages are checksum-verified against public Ubuntu indexes and extracted entirely inside this worktree.','',
++'The new geometry fallbacks retain unresolved `FLT_EVAL_METHOD != 0` in `geometry/predicates.hpp`; Aho–Corasick encounters unsupported `__builtin_prefetch`. Those outputs remain in the whole-output denominator; their ordinary units are R-other under global refusal. No refusal was bypassed for the measured artifacts.','',
++'Raw models, declarations, references, rendered copy maps, sample outputs and reports are under ignored `measurements/trim/`; tooling and build/test/acquisition logs are under `.checks/trim/`. Diagnostic patch: `docs/reviews/trim-analysis-diag.patch` (saved before production sources are restored). SDK deletion, full totals, final audits and source restoration are pending while this report is partial.','']
++(R/'docs/reviews/2026-11-22-trim-analysis.md').write_text('\n'.join(lines))
++print('report',len(results),fmt(s['bytes']),'bytes')
+diff --git a/.checks/trim/progress.py b/.checks/trim/progress.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/progress.py
+@@ -0,0 +1,9 @@
++import pathlib,subprocess,time,os,sys
++root=pathlib.Path.cwd();out=root/'measurements/trim';deadline=time.time()+1900
++while time.time()<deadline:
++ result=subprocess.run([sys.executable,str(root/'.checks/trim/analyze.py')],stdout=(root/'.checks/trim/progress-analysis.log').open('w'),stderr=subprocess.STDOUT,timeout=300)
++ subprocess.run([sys.executable,str(root/'.checks/trim/report.py')],timeout=30,check=True)
++ if result.returncode:raise SystemExit('analysis failed; see progress-analysis.log')
++ done=len(list(out.glob('*/analysis.json')));print('analysed',done,flush=True)
++ if done==126:break
++ time.sleep(25)
+diff --git a/.checks/trim/counter.cpp b/.checks/trim/counter.cpp
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/counter.cpp
+@@ -0,0 +1,17 @@
++#include "core/prune/prune.h"
++#include "core/render/render.h"
++#include "core/prune/trim_diag.h"
++#include <fstream>
++#include <iostream>
++namespace distill { Result<PruningResult> trimRetention(const PruningModel&); }
++int main(int argc,char**argv){
++ using namespace distill;if(argc!=4&&argc!=5)return 2;
++ std::ifstream in(argv[1]);std::string bytes{std::istreambuf_iterator<char>(in),{}};
++ auto parsed=parsePruningModel(bytes);if(!parsed.ok())return 3;auto m=std::move(parsed.value());auto old=computeRetention(m);if(!old.ok())return 4;
++ m.libraryMemberNames.clear();std::ifstream names(argv[2]);std::string line;while(std::getline(names,line))m.libraryMemberNames.insert(line);
++ auto rr=trimRetention(m);if(!rr.ok())return 5;auto&r=rr.value();std::ofstream o(argv[3]);
++ o<<"{\"disabled\":";trim::strs(o,r.disabledReasons);o<<",\"freed\":[";bool first=true;
++ for(std::size_t i=0;i<m.families.size();++i)if(old.value().families[i].kept&&!r.families[i].kept){if(!first)o<<',';first=false;o<<i;}o<<']';
++ if(r.disabledReasons.empty()) {auto rendered=renderSource(m,&r,true);if(rendered.ok()){auto unmarked=withoutLineMarkers(rendered.value());if(unmarked.ok()){o<<",\"bytes\":"<<unmarked.value().size();if(argc==5){std::ofstream file(argv[4]);file<<unmarked.value();}}}}
++ o<<'}';return 0;
++}
+diff --git a/.checks/trim/prepare-counter.py b/.checks/trim/prepare-counter.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/prepare-counter.py
+@@ -0,0 +1,5 @@
++from pathlib import Path
++s=Path('src/core/prune/prune.cpp').read_text().replace('Result<PruningResult> computeRetention(', 'Result<PruningResult> trimRetention(').replace('const auto scannedMemberNames = embeddedLibraryData().memberNames;','const std::span<const std::string_view> scannedMemberNames{};')
++for n in ['pruningIdentifiers','captureKeepOffsets','validatePruningModel','staticNameInvariant']:s=s.replace(n,'trim_'+n)
++s=s.replace('namespace distill {','namespace distill {\nResult<bool> trim_validatePruningModel(const PruningModel&,std::string* = nullptr);\nResult<std::vector<Token>> trim_pruningIdentifiers(std::string_view);',1)
++Path('.checks/trim/counter-prune.cpp').write_text(s)
+diff --git a/.checks/trim/compact.cpp b/.checks/trim/compact.cpp
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/compact.cpp
+@@ -0,0 +1,12 @@
++#include "core/lex/scan.h"
++#include "core/prune/trim_diag.h"
++#include <fstream>
++#include <iostream>
++#include <tuple>
++using namespace distill;
++std::vector<std::string> signature(const ScanResult&s){std::vector<std::string>v;for(auto&l:s.lines){if(l.directive)v.push_back("directive:"+l.directive->name);for(auto&t:l.tokens)v.push_back(std::to_string(int(t.kind))+":"+t.text);if(l.directive)v.push_back("directive-end");}return v;}
++int main(int argc,char**argv){if(argc!=4)return 2;std::ifstream in(argv[1]);std::string text{std::istreambuf_iterator<char>(in),{}};auto scanned=scanDirectives(text);if(!scanned.ok())return 3;std::vector<bool>protect(text.size());auto mark=[&](std::size_t a,std::size_t b){for(;a<b;++a)protect[a]=true;};
++for(auto&l:scanned.value().lines){auto sv=std::string_view(text).substr(l.begin,l.end-l.begin);if(l.directive||sv.find("\\\n")!=sv.npos||sv.find("\\\r\n")!=sv.npos)mark(l.begin,l.end);for(auto&t:l.tokens)if(t.kind==TokenKind::literal&&text.substr(t.begin,t.end-t.begin).find('\n')!=text.npos)mark(t.begin,t.end);}
++for(auto c:scanned.value().comments)mark(c.begin,c.end);
++std::string out;std::size_t indent=0,blank=0;for(std::size_t a=0;a<text.size();){auto b=text.find('\n',a);if(b==text.npos)b=text.size();else ++b;bool blocked=false;for(auto j=a;j<b;++j)blocked|=protect[j];if(blocked){out.append(text,a,b-a);a=b;continue;}auto first=a;while(first<b&&(text[first]==' '||text[first]=='\t'||text[first]=='\r'))++first;if(first==b||text[first]=='\n'){blank+=b-a;}else{indent+=first-a;out.append(text,first,b-first);}a=b;}
++auto check=scanDirectives(out);if(!check.ok()||signature(check.value())!=signature(scanned.value()))return 4;std::ofstream o(argv[2]);o<<out;std::ofstream j(argv[3]);j<<"{\"before\":"<<text.size()<<",\"bytes\":"<<out.size()<<",\"gain\":"<<text.size()-out.size()<<",\"indent\":"<<indent<<",\"blank\":"<<blank<<",\"tokensEqual\":true}";return 0;}
+diff --git a/.checks/trim/compact-run.py b/.checks/trim/compact-run.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/compact-run.py
+@@ -0,0 +1,8 @@
++import pathlib,subprocess,json,os
++R=pathlib.Path.cwd();env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'))
++for p in sorted((R/'measurements/trim').iterdir()):
++ if not(p/'summary.json').exists()or(p/'compact.json').exists():continue
++ s=json.loads((p/'summary.json').read_text());text=(p/'out.cpp').read_bytes()
++ if 'wrote pruned'not in s['artifact']or b'#line 'in text:continue
++ rc=subprocess.run([str(R/'.checks/trim/compact'),str(p/'out.cpp'),str(p/'compact.cpp'),str(p/'compact.json')],env=env,timeout=15).returncode
++ if rc:print('ERROR',p.name,rc,flush=True)
+diff --git a/.checks/trim/unblock.cpp b/.checks/trim/unblock.cpp
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/unblock.cpp
+@@ -0,0 +1,10 @@
++#include "core/prune/prune.h"
++#include "core/render/render.h"
++#include "core/prune/trim_diag.h"
++#include <fstream>
++#include <iostream>
++int main(int argc,char**argv){using namespace distill;if(argc!=3)return 2;std::ifstream in(argv[1]);std::string bytes{std::istreambuf_iterator<char>(in),{}};auto p=parsePruningModel(bytes);if(!p.ok())return 3;auto m=std::move(p.value());
++ bool eligible=!m.disabledReasons.empty();for(auto&s:m.disabledReasons)if(s.find("geometry/predicates.hpp:38")==s.npos&&s.find("__builtin_prefetch")==s.npos)eligible=false;if(!eligible)return 10;
++ m.disabledReasons.clear();m.unknownInUserCode=false;auto rr=computeRetention(m);if(!rr.ok()||!rr.value().disabledReasons.empty())return 4;auto rendered=renderSource(m,&rr.value(),true);if(!rendered.ok())return 5;
++ auto invariant=renderingInvariant(m,&rr.value(),rendered.value().provenance.text);if(!invariant.ok())return 6;auto stat=staticNameInvariant(m,rr.value(),rendered.value().provenance.text);if(!stat.ok())return 7;
++ auto result=withoutLineMarkers(rendered.value());if(!result.ok())return 8;std::ofstream o(argv[2]);o<<result.value();return 0;}
+diff --git a/.checks/trim/unblock-run.py b/.checks/trim/unblock-run.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/unblock-run.py
+@@ -0,0 +1,21 @@
++import pathlib,json,subprocess,os
++R=pathlib.Path.cwd();env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));O=R/'measurements/trim'
++for p in sorted(O.iterdir()):
++ if not(p/'summary.json').exists()or not(p/'diag.model').exists()or(p/'unblock.json').exists():continue
++ s=json.loads((p/'summary.json').read_text())
++ if 'wrote flat'not in s['artifact']:continue
++ out=p/'unblock.cpp';rc=subprocess.run([str(R/'.checks/trim/unblock'),str(p/'diag.model'),str(out)],env=env,timeout=30).returncode
++ if rc==10:continue
++ r={'rc':rc,'sample':False}
++ if rc==0:
++  r['bytes']=out.stat().st_size;r['gain']=s['bytes']-r['bytes']
++  # Counterfactual compilation is separate evidence, with original branches intact.
++  binary=p/'unblock.bin'
++  with(p/'unblock.log').open('w')as log:
++   c=subprocess.run([str(R/'.checks/trim/g++'),'-std=c++23','-O2',str(out),'-o',str(binary)],env=env,timeout=120,stdout=log,stderr=subprocess.STDOUT)
++   if c.returncode==0:
++    src=pathlib.Path(s['source']);inp=src.with_suffix('.in').read_bytes()if src.with_suffix('.in').exists()else b''
++    q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],env=env,timeout=30,input=inp,stdout=subprocess.PIPE,stderr=log)
++    r['sample']=q.returncode==0 and q.stdout==src.with_suffix('.out').read_bytes()
++  binary.unlink(missing_ok=True)
++ (p/'unblock.json').write_text(json.dumps(r));print(p.name,r,flush=True)
+diff --git a/.checks/trim/replay.cpp b/.checks/trim/replay.cpp
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/replay.cpp
+@@ -0,0 +1,19 @@
++#include "core/prune/prune.h"
++#include <fstream>
++#include <iostream>
++#include <algorithm>
++using namespace distill;
++std::string read(char*p){std::ifstream f(p);return {std::istreambuf_iterator<char>(f),{}};}
++int main(int argc,char**argv){if(argc!=4)return 2;auto p=parsePruningModel(read(argv[2]));if(!p.ok())return 3;auto m=std::move(p.value());if(std::string(argv[1])=="prepare"){
++ m.families.clear();m.unions.clear();m.annotations.clear();m.expansions.clear();m.systemEntities.clear();m.systemUses.clear();m.parseWidths.reset();m.positionUses.clear();m.memberDisabledReasons.clear();m.libraryMemberNames.clear();m.libraryMemberNamesComputed=false;
++ auto bytes=serializePruningModel(m);if(!bytes.ok())return 4;std::ofstream f(argv[3]);f<<bytes.value();return 0;}
++ auto q=parsePruningModel(read(argv[3]));if(!q.ok())return 5;auto normalize=[](PruningModel&x){
++ auto unique=[](auto&v){std::sort(v.begin(),v.end());v.erase(std::unique(v.begin(),v.end()),v.end());};
++ for(auto&f:x.families){unique(f.edges);unique(f.associatedTypes);}
++ for(auto&e:x.systemEntities){unique(e.userEdges);unique(e.systemEdges);}
++ for(auto&u:x.unions)if(u.first>u.second)std::swap(u.first,u.second);unique(x.unions);
++ std::sort(x.systemUses.begin(),x.systemUses.end(),[](auto a,auto b){return std::tie(a.family,a.entity)<std::tie(b.family,b.entity);});
++ x.systemUses.erase(std::unique(x.systemUses.begin(),x.systemUses.end(),[](auto a,auto b){return a.family==b.family&&a.entity==b.entity;}),x.systemUses.end());
++ };normalize(m);normalize(q.value());
++ auto a=serializePruningModel(m);auto b=serializePruningModel(q.value());if(!a.ok()||!b.ok())return 6;
++ if(a.value()!=b.value()){std::size_t i=0;while(i<a.value().size()&&i<b.value().size()&&a.value()[i]==b.value()[i])++i;std::cerr<<"model mismatch at byte "<<i<<"\noriginal="<<a.value().substr(i,250)<<"\nreplay="<<b.value().substr(i,250)<<'\n';return 7;}return 0;}
+diff --git a/.checks/trim/replay-run.py b/.checks/trim/replay-run.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/replay-run.py
+@@ -0,0 +1,16 @@
++import pathlib,subprocess,json,os,concurrent.futures,time
++R=pathlib.Path.cwd();env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));env.pop('DISTILL_TRIM_PREFIX',None)
++def run(p):
++ if(p/'replay.json').exists():return json.loads((p/'replay.json').read_text())
++ result={'example':p.name};start=time.time()
++ with(p/'replay.log').open('w')as log:
++  prep=subprocess.run([str(R/'.checks/trim/replay'),'prepare',str(p/'diag.model'),str(p/'replay.input')],env=env,timeout=30,stdout=log,stderr=subprocess.STDOUT);result['prepare']=prep.returncode
++  if prep.returncode==0:
++   with(p/'baseline.model').open('w')as output:
++    worker=subprocess.run([str(R/'.checks/trim/baseline/distill_prune_worker'),'--internal-prune',str(p/'replay.input')],env=env,timeout=60,stdout=output,stderr=log);result['worker']=worker.returncode
++   if worker.returncode==0:
++    check=subprocess.run([str(R/'.checks/trim/replay'),'compare',str(p/'diag.model'),str(p/'baseline.model')],env=env,timeout=30,stdout=log,stderr=subprocess.STDOUT);result['compare']=check.returncode
++ result['seconds']=round(time.time()-start,1);(p/'replay.json').write_text(json.dumps(result));return result
++paths=sorted(p.parent for p in(R/'measurements/trim').glob('*/diag.model'))
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for result in pool.map(run,paths):print(json.dumps(result),flush=True)
+diff --git a/.checks/trim/supplement.py b/.checks/trim/supplement.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/supplement.py
+@@ -0,0 +1,52 @@
++import pathlib,json,subprocess,os,concurrent.futures,array,re,collections
++R=pathlib.Path.cwd();O=R/'measurements/trim';env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));results=[json.loads(p.read_text())for p in O.glob('*/analysis.json')];assert len(results)==126
++jobs=[]
++# Largest whitespace counterfactuals.
++comp=sorted(((p.parent,json.loads(p.read_text())['gain'])for p in O.glob('*/compact.json')),key=lambda x:-x[1])[:3]
++for p,g in comp:jobs.append((p,'compact',p/'compact.cpp',g))
++# Largest examples for both inventory estimates.
++for mode in ['worker','facility']:
++ selected=sorted((r for r in results if not r['counter'][mode]['disabled']and(r['counter'][mode]['outputGain']or 0)>0),key=lambda r:-r['counter'][mode]['outputGain'])[:3]
++ for r in selected:
++  p=O/r['name'];out=p/(mode+'-candidate.cpp');meta=p/(mode+'-candidate.json')
++  subprocess.run([str(R/'.checks/trim/counter'),str(p/'diag.model'),str(p/(mode+'.names')),str(meta),str(out)],check=True,env=env,timeout=30)
++  assert json.loads(meta.read_text())['bytes']==r['counter'][mode]['bytes']
++  jobs.append((p,mode,out,r['counter'][mode]['outputGain']))
++# Largest observed-unused explicit constructors, one declaration per example.
++candidates=sorted(((d['bytes'],r,d)for r in results if'wrote pruned'in r['artifact']for d in r['declarations']if d['kind']=='ctor-explicit'and d['evidence']==3),key=lambda x:-x[0]);chosen=set()
++for size,r,d in candidates:
++ if r['name']in chosen:continue
++ p=O/r['name'];actual=(p/'out.cpp').read_bytes()
++ if b'#line 'in actual:continue
++ model=json.loads((p/'diag.json').read_text());rend=json.loads((p/'diag.render.json').read_text());marked=rend['text'].encode();positions=array.array('i',[-1])*len(marked)
++ for a,b,to in rend['copied']:positions[to:to+b-a]=array.array('i',range(a,b))
++ if actual!=marked:
++  keep=[];start=0
++  for line in marked.splitlines(keepends=True):
++   if not re.match(rb'^#line\b',line):keep.extend(range(start,start+len(line)))
++   start+=len(line)
++  assert b''.join(marked[i:i+1]for i in keep)==actual
++  positions=array.array('i',(positions[i]for i in keep))
++ ranges=model['families'][d['owner']]['ranges'];remove=bytearray(len(model['text'].encode()))
++ for a,b in ranges:remove[a:b]=b'\1'*(b-a)
++ out=p/'ctor-candidate.cpp';source=bytes(c for c,at in zip(actual,positions)if at<0 or not remove[at]);out.write_bytes(source)
++ (p/'ctor-candidate.json').write_text(json.dumps(dict(declaration=d,gain=len(actual)-len(source)),indent=2))
++ jobs.append((p,'ctor',out,len(actual)-len(source)));chosen.add(r['name'])
++ if len(chosen)==3:break
++
++def check(job):
++ p,mode,source,gain=job;s=json.loads((p/'summary.json').read_text());src=pathlib.Path(s['source']);binary=p/(mode+'-candidate.bin');row=dict(example=p.name,variant=mode,gain=gain,sample=False)
++ with(p/(mode+'-check.log')).open('w')as log:
++  c=subprocess.run([str(R/'.checks/trim/g++'),'-std=c++23','-O2',str(source),'-o',str(binary)],env=env,timeout=120,stdout=log,stderr=subprocess.STDOUT);row['compile']=c.returncode
++  if c.returncode==0:
++   inp=src.with_suffix('.in').read_bytes()if src.with_suffix('.in').exists()else b''
++   q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],env=env,timeout=30,input=inp,stdout=subprocess.PIPE,stderr=log)
++   row['sample']=q.returncode==0 and q.stdout==src.with_suffix('.out').read_bytes()
++ binary.unlink(missing_ok=True);return row
++rows=[]
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for row in pool.map(check,jobs):rows.append(row);print(json.dumps(row),flush=True)
++by=collections.defaultdict(list)
++for row in rows:by[row['example']].append(row)
++for name,group in by.items():(O/name/'supplement.json').write_text(json.dumps(group,indent=2))
++assert all(r['sample']for r in rows)
+diff --git a/.checks/trim/target-check.py b/.checks/trim/target-check.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/target-check.py
+@@ -0,0 +1,40 @@
++import pathlib,subprocess,json,os
++R=pathlib.Path.cwd();D=R/'.checks/trim/targets';D.mkdir(exist_ok=True);env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'))
++pre='template<bool,class A,class B>struct pick{using type=A;};template<class A,class B>struct pick<false,A,B>{using type=B;};\n'
++sources={
++ 'constructor':pre+'''using Word=pick<sizeof(long)==8,long,int>::type;
++struct C {
++#ifndef DELETE_CANDIDATE
++explicit C(int){}
++#endif
++explicit C(long){} explicit C(double){} };
++int main(){C c(Word{});}
++''',
++ 'trait':pre+'''using Word=pick<sizeof(long)==8,double,int>::type;
++struct C {
++#ifndef DELETE_CANDIDATE
++explicit C(int){}
++#endif
++explicit C(long)=delete; explicit C(double){} };
++static_assert(__is_constructible(C,Word));
++''',
++ 'member':pre+'''struct Eight{int chosen(){return 8;}};
++struct Four{
++#ifndef DELETE_CANDIDATE
++int chosen(){return 4;}
++#endif
++};
++using Chosen=pick<sizeof(long)==8,Eight,Four>::type;
++int main(){Eight a;Four b;(void)a;(void)b;return Chosen{}.chosen();}
++'''}
++rows=[]
++for name,source in sources.items():
++ path=D/(name+'.cpp');path.write_text(source)
++ for target in ['x86_64-linux-gnu','i386-linux-gnu']:
++  for delete in [False,True]:
++   cmd=['clang++','--target='+target,'-std=c++23','-fsyntax-only',str(path)]+(['-DDELETE_CANDIDATE']if delete else[])
++   q=subprocess.run(cmd,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)
++   expected=not(delete and target.startswith('i386'))
++   row=dict(case=name,target=target,deleted=delete,rc=q.returncode,expectedSuccess=expected,passCheck=(q.returncode==0)==expected);rows.append(row)
++   (D/(name+'-'+target+('-deleted'if delete else'-full')+'.log')).write_bytes(q.stdout)
++(D/'summary.json').write_text(json.dumps(rows,indent=2));print(sum(r['passCheck']for r in rows),'/',len(rows),'target checks passed');assert all(r['passCheck']for r in rows)
+diff --git a/.checks/trim/audit.py b/.checks/trim/audit.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/audit.py
+@@ -0,0 +1,22 @@
++import pathlib,json,re,collections,hashlib
++R=pathlib.Path.cwd();O=R/'measurements/trim';rows=[]
++for p in sorted(O.iterdir()):
++ if not(p/'summary.json').exists():continue
++ s=json.loads((p/'summary.json').read_text());r=json.loads((p/'analysis.json').read_text());assert s['rc']==0 and s['sample']
++ assert r['version']==7 and r['bytes']==s['bytes']==(p/'out.cpp').stat().st_size
++ assert sum(r['totals'].values())==r['bytes']
++ assert all(0<=v<=r['totals'].get(c,0)for c,v in r['noref'].items())
++ members=[]
++ for l in(p/'report.txt').read_text().splitlines():
++  if l.startswith('member unit ')and': blocked: 'in l:members.append(int(re.search(r'; bytes=(\d+)$',l).group(1)))
++ assert sum(members)==sum(c['bytes']for c in r['classes']),(p.name,'member bytes')
++ assert len(members)==len(r['classes']),(p.name,'member units')
++ assert sum(d['bytes']for d in r['declarations']if d['kind']!='deduction guide')==r['rule1Bytes']
++ for mode in ['worker','facility']:
++  c=r['counter'][mode]
++  if not c['disabled']:assert c['ownedBytes']>=c['a12Bytes']
++ if(p/'replay.json').exists():assert json.loads((p/'replay.json').read_text()).get('compare')==0
++ rows.append(s)
++assert len(rows)==126
++summary=dict(examples=len(rows),samplePasses=sum(r['sample']for r in rows),outputBytes=sum(r['bytes']for r in rows),artifacts=dict(collections.Counter(r['artifact'].split('(')[0].strip()for r in rows)),sdkAbsent=not(R/'spike-work/sdk').exists(),atlCommit='4cbbe2f')
++(O/'audit.json').write_text(json.dumps(summary,indent=2));print(json.dumps(summary,indent=2))
+diff --git a/.checks/trim/analyze-parallel.py b/.checks/trim/analyze-parallel.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/analyze-parallel.py
+@@ -0,0 +1,6 @@
++import analyze,pathlib,concurrent.futures,json
++if __name__=='__main__':
++ ps=sorted(p.parent for p in analyze.OUT.glob('*/diag.json'))
++ with concurrent.futures.ProcessPoolExecutor(max_workers=2)as pool:
++  rs=list(pool.map(analyze.analyze,ps))
++ analyze.aggregate(rs);print('reconciled',len(rs),'examples',sum(r['bytes']for r in rs),'bytes')
+diff --git a/.checks/trim/free-pool.py b/.checks/trim/free-pool.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/free-pool.py
+@@ -0,0 +1,45 @@
++import pathlib,json,collections,bisect,re
++R=pathlib.Path.cwd();O=R/'measurements/trim';NO=2**64-1;total=0;count=0
++for p in sorted(O.iterdir()):
++ if not(p/'analysis.json').exists():continue
++ r=json.loads((p/'analysis.json').read_text())
++ if'wrote pruned'not in r['artifact']:continue
++ m=json.loads((p/'diag.json').read_text());fs=m['families'];kept={f['id']for f in fs if f['kept']}
++ reached={s for f,s in m['uses']if f in kept};pending=list(reached)
++ while pending:
++  for s in m['systems'][pending.pop()]['systems']:
++   if s not in reached:reached.add(s);pending.append(s)
++ ds={};refs=set();wrappers=collections.defaultdict(list)
++ with(p/'diag.ast.jsonl').open()as stream:
++  for line in stream:
++   if line.startswith('{"event":"decl"'):
++    d=json.loads(line)
++    if d['category']=='binding':wrappers[d['key']].append(d)
++    if d['category']!='free'or d['implicit']or d['local']or d['owner']not in kept or d['kind']in ['deduction guide','operator()']or '(lambda)'in d['name']:continue
++    f=fs[d['owner']]
++    if f['memberOf']!=NO or(f['kind']==1 and(f['root']or f['pin']))or d['name']=='main':continue
++    k=d['key']
++    if k not in ds:ds[k]=dict(d)
++    else:
++     ds[k]['used']|=d['used'];ds[k]['referenced']|=d['referenced'];ds[k]['begin']=min(ds[k]['begin'],d['begin']);ds[k]['end']=max(ds[k]['end'],d['end'])
++   elif line.startswith('{"event":"ref"'):
++    e=json.loads(line)
++    if e['from']in kept or(e['from']==NO and e['sys']in reached):refs.add(e['key'])
++ text=m['text'].encode();starts=[0]+[x.end()for x in re.finditer(b'\n',text)];candidates=[]
++ for k,d in ds.items():
++  if k in refs or d['used']or d['referenced']:continue
++  a,b=d['begin'],d['end']
++  for w in wrappers[k]:
++   if w['owner']==d['owner']and w['begin']<=a and w['end']>=b:a=w['begin']
++  if text[b:b+1]==b';':b+=1
++  spans=[]
++  for x,y in fs[d['owner']]['ranges']:
++   lo=max(a,x);hi=min(b,y)
++   if lo<hi:spans.append([lo,hi])
++  if fs[d['owner']]['kind']==1:spans=fs[d['owner']]['ranges']
++  size=sum(y-x for x,y in spans)
++  if not size:continue
++  li=bisect.bisect_right(starts,k)-1;loc=m['lines'][li];where=loc[0].split('/include/')[-1]+':'+str(loc[1])if loc else str(k)
++  candidates.append(dict(key=k,owner=d['owner'],name=d['name'],location=where,bytes=size,ranges=spans,kind=d['kind']or'free function'))
++ total+=sum(d['bytes']for d in candidates);count+=len(candidates);(p/'free-candidates.json').write_text(json.dumps(candidates))
++print('unused free declarations',count,'owned bytes',total)
+diff --git a/.checks/trim/free-close.py b/.checks/trim/free-close.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/free-close.py
+@@ -0,0 +1,23 @@
++import pathlib,json,re,array
++O=pathlib.Path('measurements/trim');total=0;count=0;original=0
++for p in O.glob('*/free-candidates.json'):
++ m=json.loads((p.parent/'diag.json').read_text());ds=json.loads(p.read_text());original+=sum(d['bytes']for d in ds);n=len(m['text'].encode());remaining=list(ds)
++ retained=array.array('b',[1])*n
++ for f in m['families']:
++  if not f['kept']:
++   for a,b in f['ranges']:retained[a:b]=array.array('b',[0])*(b-a)
++ changed=True
++ while changed:
++  changed=False;removed=array.array('b',[0])*n
++  for d in remaining:
++   for a,b in d['ranges']:removed[a:b]=array.array('b',[1])*(b-a)
++  external={name for a,b,name in m['tokens']if not removed[a]and retained[a]}
++  next=[]
++  for d in remaining:
++   name=d['name'].split('::')[-1]
++   if re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',name)and name in external:changed=True
++   else:next.append(d)
++  remaining=next
++ (p.parent/'free-closure-candidates.json').write_text(json.dumps(remaining));total+=sum(d['bytes']for d in remaining);count+=len(remaining)
++print('lexically closed free candidate pool',count,total,'from',original)
++(O/'free-pool-summary.json').write_text(json.dumps(dict(original=original,closedBytes=total,closedCount=count)))
+diff --git a/.checks/trim/free-check.py b/.checks/trim/free-check.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/free-check.py
+@@ -0,0 +1,34 @@
++import pathlib,json,subprocess,array,re,os,concurrent.futures,collections
++R=pathlib.Path.cwd();O=R/'measurements/trim';env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));candidates=[]
++for p in O.glob('*/free-candidates.json'):
++ for d in json.loads(p.read_text()):candidates.append((d['bytes'],p.parent,d))
++jobs=[];used=set()
++for size,p,d in sorted(candidates,key=lambda x:-x[0]):
++ if p.name in used:continue
++ actual=(p/'out.cpp').read_bytes()
++ if b'#line 'in actual:continue
++ m=json.loads((p/'diag.json').read_text());rd=json.loads((p/'diag.render.json').read_text());marked=rd['text'].encode();pos=array.array('i',[-1])*len(marked)
++ for a,b,to in rd['copied']:pos[to:to+b-a]=array.array('i',range(a,b))
++ if actual!=marked:
++  keep=[];start=0
++  for line in marked.splitlines(keepends=True):
++   if not re.match(rb'^#line\b',line):keep.extend(range(start,start+len(line)))
++   start+=len(line)
++  assert b''.join(marked[i:i+1]for i in keep)==actual
++  pos=array.array('i',(pos[i]for i in keep))
++ remove=bytearray(len(m['text'].encode()))
++ for a,b in d['ranges']:remove[a:b]=b'\1'*(b-a)
++ source=bytes(c for c,at in zip(actual,pos)if at<0 or not remove[at]);out=p/'free-candidate.cpp';out.write_bytes(source);(p/'free-candidate.json').write_text(json.dumps(d,indent=2));jobs.append((p,out,len(actual)-len(source),d));used.add(p.name)
++ if len(jobs)==3:break
++
++def run(job):
++ p,out,gain,d=job;binary=p/'free-candidate.bin';s=json.loads((p/'summary.json').read_text());src=pathlib.Path(s['source']);row=dict(example=p.name,variant='free',gain=gain,declaration=d['name'],sample=False)
++ with(p/'free-check.log').open('w')as log:
++  c=subprocess.run([str(R/'.checks/trim/g++'),'-std=c++23','-O2',str(out),'-o',str(binary)],env=env,timeout=120,stdout=log,stderr=subprocess.STDOUT);row['compile']=c.returncode
++  if c.returncode==0:
++   inp=src.with_suffix('.in').read_bytes()if src.with_suffix('.in').exists()else b''
++   q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],env=env,timeout=30,input=inp,stdout=subprocess.PIPE,stderr=log);row['sample']=q.returncode==0 and q.stdout==src.with_suffix('.out').read_bytes()
++ binary.unlink(missing_ok=True);return row
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for row in pool.map(run,jobs):
++  p=O/row['example']/'supplement.json';records=json.loads(p.read_text())if p.exists()else[];records=[r for r in records if r['variant']!='free']+[row];p.write_text(json.dumps(records,indent=2));print(json.dumps(row),flush=True)
+diff --git a/.checks/trim/free-closed-check.py b/.checks/trim/free-closed-check.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/free-closed-check.py
+@@ -0,0 +1,37 @@
++import pathlib,json,subprocess,array,re,os,concurrent.futures,collections
++R=pathlib.Path.cwd();O=R/'measurements/trim';env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));candidates=[]
++for p in O.glob('*/free-closure-candidates.json'):
++ ds=json.loads(p.read_text())
++ if ds:
++  d=dict(bytes=sum(x['bytes']for x in ds),ranges=[r for x in ds for r in x['ranges']],name='lexically closed free declaration group',declarations=ds)
++  candidates.append((d['bytes'],p.parent,d))
++jobs=[];used=set()
++for size,p,d in sorted(candidates,key=lambda x:-x[0]):
++ if p.name in used:continue
++ actual=(p/'out.cpp').read_bytes()
++ if b'#line 'in actual:continue
++ m=json.loads((p/'diag.json').read_text());rd=json.loads((p/'diag.render.json').read_text());marked=rd['text'].encode();pos=array.array('i',[-1])*len(marked)
++ for a,b,to in rd['copied']:pos[to:to+b-a]=array.array('i',range(a,b))
++ if actual!=marked:
++  keep=[];start=0
++  for line in marked.splitlines(keepends=True):
++   if not re.match(rb'^#line\b',line):keep.extend(range(start,start+len(line)))
++   start+=len(line)
++  assert b''.join(marked[i:i+1]for i in keep)==actual
++  pos=array.array('i',(pos[i]for i in keep))
++ remove=bytearray(len(m['text'].encode()))
++ for a,b in d['ranges']:remove[a:b]=b'\1'*(b-a)
++ source=bytes(c for c,at in zip(actual,pos)if at<0 or not remove[at]);out=p/'free-closed-candidate.cpp';out.write_bytes(source);(p/'free-closed-candidate.json').write_text(json.dumps(d,indent=2));jobs.append((p,out,len(actual)-len(source),d));used.add(p.name)
++ if len(jobs)==3:break
++
++def run(job):
++ p,out,gain,d=job;binary=p/'free-closed-candidate.bin';s=json.loads((p/'summary.json').read_text());src=pathlib.Path(s['source']);row=dict(example=p.name,variant='free-closed',gain=gain,declaration=d['name'],sample=False)
++ with(p/'free-closed-check.log').open('w')as log:
++  c=subprocess.run([str(R/'.checks/trim/g++'),'-std=c++23','-O2',str(out),'-o',str(binary)],env=env,timeout=120,stdout=log,stderr=subprocess.STDOUT);row['compile']=c.returncode
++  if c.returncode==0:
++   inp=src.with_suffix('.in').read_bytes()if src.with_suffix('.in').exists()else b''
++   q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],env=env,timeout=30,input=inp,stdout=subprocess.PIPE,stderr=log);row['sample']=q.returncode==0 and q.stdout==src.with_suffix('.out').read_bytes()
++ binary.unlink(missing_ok=True);return row
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for row in pool.map(run,jobs):
++  p=O/row['example']/'supplement.json';records=json.loads(p.read_text())if p.exists()else[];records=[r for r in records if r['variant']!='free-closed']+[row];p.write_text(json.dumps(records,indent=2));print(json.dumps(row),flush=True)
+diff --git a/.checks/trim/recheck-replay.py b/.checks/trim/recheck-replay.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/recheck-replay.py
+@@ -0,0 +1,10 @@
++import pathlib,json,subprocess,os
++R=pathlib.Path.cwd();env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));count=0
++for p in sorted((R/'measurements/trim').glob('*/replay.json')):
++ r=json.loads(p.read_text())
++ if r.get('compare')==0 and r.get('normalized'):count+=1;continue
++ with(p.parent/'replay-normalized.log').open('w')as log:
++  c=subprocess.run([str(R/'.checks/trim/replay'),'compare',str(p.parent/'diag.model'),str(p.parent/'baseline.model')],env=env,timeout=30,stdout=log,stderr=subprocess.STDOUT)
++ r['compare']=c.returncode;r['normalized']=True;p.write_text(json.dumps(r));count+=c.returncode==0
++ if c.returncode:print('FAIL',p.parent.name,flush=True)
++print('normalized model passes',count,flush=True)
+diff --git a/.checks/trim/finalize.py b/.checks/trim/finalize.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/finalize.py
+@@ -0,0 +1,104 @@
++import analyze as a,json,pathlib,collections,re,hashlib,datetime
++R=a.ROOT;O=a.OUT;doc=R/'docs/reviews/2026-11-22-trim-analysis.md'
++results=[json.loads(p.read_text())for p in sorted(O.glob('*/analysis.json'))];assert len(results)==126
++assert all(r['version']==7 for r in results)
++s,rs,ds=a.aggregate(results)
++def fmt(n):return f'{n:,}'
++def esc(x):return str(x).replace('|',r'\|').replace('\n',' ')
++def cell(v):return f'{fmt(v[0])} / {fmt(v[1])}'
++text=doc.read_text();text=re.sub(r'\*\*Measured so far:.*?Updated [^\n]+',f'**Completed: 126/126 examples, {fmt(s["bytes"])} output bytes.** Final accounting reconciles every artifact byte exactly.',text)
++text=text.replace('The full declaration/evidence inventory is retained in the diagnostic evidence.','The full source-declaration/evidence inventory is included in the appendix below.')
++text=text.replace('All surviving implicit one-argument candidates must be audited against ATL’s new documented value-conversion exception. Audit results are added after the full sweep.','''The source audit does **not** confirm that every implicit-(3) candidate has an explicit doc-comment exception. In `atl/ds/static_vector.hpp:74`, `static_vector(std::initializer_list<T>)` is implicit. Its comment says “A vector holding the elements of init, in order” and gives the capacity precondition, but does not state why implicit conversion is intentional. This is list-value construction, yet the exception is not expressly documented in the supplied `4cbbe2f` clone. Other implicit candidate declarations, if present, are listed below; the read-only clone was not changed.''')
++# Actual candidate pools distinguish globally disabled flat artifacts.
++pruned={r['name']for r in results if'wrote pruned'in r['artifact']}
++ruleEligible=[d for d in ds if d['example']in pruned and d['evidence']==3 and d['kind']!='deduction guide']
++ruleGain=sum(d['bytes']for d in ruleEligible);guideGain=sum(d['bytes']for d in ds if d['example']in pruned and d['evidence']==3 and d['kind']=='deduction guide')
++explicit=sum(d['bytes']for d in ruleEligible if d['kind']=='ctor-explicit');multi=sum(d['bytes']for d in ruleEligible if d['kind']=='multi-arg ctor')
++comp=[json.loads(p.read_text())for p in O.glob('*/compact.json')];compactGain=sum(c['gain']for c in comp)
++unblocks=[(p.parent.name,json.loads(p.read_text()))for p in O.glob('*/unblock.json')];eligible=[(n,c)for n,c in unblocks if c['rc']==0];unblockGain=sum(c['gain']for n,c in eligible)
++facility=[r['counter']['facility']for r in results if not r['counter']['facility']['disabled']and r['counter']['facility']['outputGain']is not None]
++facilityGain=sum(c['outputGain']for c in facility)
++worker=[r['counter']['worker']for r in results if not r['counter']['worker']['disabled']and r['counter']['worker']['outputGain']is not None];workerGain=sum(c['outputGain']for c in worker)
++collisions=sum(c['bytes']for r in results for c in r['classes']if c['reason']in['R-nondep-other','R-dep(a)','R-cycle'])
++freeSummary=json.loads((O/'free-pool-summary.json').read_text());freeGain=freeSummary['closedBytes']
++recommendations=[(compactGain,'Formatting after source-position checks',
++ f'Exact lexer-preserving indentation/blank-line counterfactual across {len(comp)} already-pruned marker-free outputs. Removes {fmt(sum(c["indent"]for c in comp))} indentation bytes and {fmt(sum(c["blank"]for c in comp))} blank-line bytes.',
++ 'The program’s observable behaviour and compilation success do not depend on horizontal indentation or redundant empty physical lines outside literals, comments, directives and line continuations, once the existing source-position observation gate has passed. This strengthens no library-dispatch assumption.',
++ 'Preserve multiline literals, directive logical lines, continuations and token/directive boundaries. `fast-io/roundtrip` remains ineligible while it falls back with position-sensitive macro evidence. A token-equivalence check alone cannot replace the position gate.'),
++ (unblockGain,'Certify the new refusal gates',
++ f'Offline gate-waiver estimate over {len(eligible)} affected flat outputs; original `#if` branches remain in the counterfactual. This is estimated pruning potential, not a production change.',
++ 'The judge’s `__builtin_prefetch` has no implicit user-declaration dependencies beyond the argument expressions that are traversed; every alternative of an unresolved floating-evaluation conditional has no lookup, declaration or instantiation dependency outside the union retained for those alternatives. Prefer proving this for the bounded constructs over introducing a blanket assumption.',
++ 'Do not replace judge `FLT_EVAL_METHOD` with the worker value: x87/excess precision can differ. In `geometry/predicates.hpp:38`, the nonzero branch contains a volatile binary64 store that must survive. `aho-corasick/quick` exercises the builtin gate. Both program branches must remain semantically available.'),
++ (ruleGain,'Per-declaration rule-1 pruning',
++ f'Direct owned bytes with evidence (3), restricted to currently pruned artifacts; includes {fmt(explicit)} explicit-one-argument and {fmt(multi)} multi-argument constructor bytes. Guides offer another {fmt(guideGain)} candidate bytes and are separate.',
++ 'The judge’s user and library overload resolution, implicit conversions, constraints, traits, deduction and virtual dispatch do not name or require a rule-1 declaration that has no reference or relevant trait/unevaluated evidence in the kept worker program. Explicit constructors need direct-initialization and trait coverage too.',
++ 'ATL `matrix` has range and dimension constructors; `persistent_ring_backing` tests `constructible_from<Backing, size_t>`, and `top_tree` constrains delegating constructors. Target-selected size/alias types can select another overload or change a constraint without changing user tokens. This needs declaration-specific proofs or a strong new assumption. Splitting overload units, constructor-name/type-name tokens, A12 constructor protocols, the static-name invariant and reverse effects must be redesigned together; merely switching off rule 1 saves nothing for constructors still protected by coarse same-name rules.'),
++ (facilityGain,'Bound A12 by reached standard facilities',
++ f'Rendered estimate after full closure; simply dropping scanned-only names saves {fmt(workerGain)} output bytes. Facility and worker-only savings overlap.',
++ 'The judge’s standard library can name a user member only through an identifier in the macro-expanded or raw declarations of the standard facilities transitively reachable from the facilities used by this TU on the worker, or through an independently protected language/operator/conversion/constructor/destructor protocol. A whole-library scanned name alone is not an additional lookup source.',
++ 'A different library build can choose a dormant implementation path or member protocol that the worker never instantiated. ATL retained range/container APIs (`data`, `size`, `reserve`, `max_size`) and allocator-backed structures are concrete surfaces for such divergence. The recorded facility closure is a broad worker estimate, not an all-implementation reachability proof.'),
++ (freeGain,'Prune unused free declarations and helper groups',
++ f'Direct owned bytes in {freeSummary["closedCount"]} declarations after a lexical dependency fixpoint. The raw no-reference/no-compiler-flag pool is {fmt(freeSummary["original"])} bytes; external kept identifier uses shrink it to this conservative pool.',
++ 'The judge does not select a worker-unreferenced free-function or hidden-friend overload through ADL, operators, constraints or a library-only instantiation absent from the kept worker program, and discarded helper groups have no remaining kept lexical or potential-effect users. This narrows A6 and the unconditional free-operator protection.',
++ 'ATL `mod_int` keeps hidden stream operators and their `uint128_stream` helpers; a different library/target can instantiate those dormant protocols. The raw pool also contains unused `convolution_uint64` overloads retained with referenced overloads. Keep helper-name lookup valid even inside uninstantiated retained templates, and preserve reverse potential effects. A lack of a resolved call alone is insufficient.')]
++
++recommendations.sort(key=lambda r:-r[0])
++rank=['## Ranked recommendation','',
++'The ranking below is by measured/estimated byte opportunity across this 126-example corpus, not by safety or implementation effort. Formatting is the first low-risk implementation choice even if a speculative semantic pool is larger. Gains overlap and must not be added. Gate-waiver and facility values are counterfactual estimates; rule-1/name values are direct owned-byte candidate pools, not approved savings.','',
++'| Rank | Rule | Bytes across corpus | Measurement |','| ---: | --- | ---: | --- |']
++for i,(gain,title,method,assumption,risk)in enumerate(recommendations,1):rank.append(f'| {i} | {title} | {fmt(gain)} | {method} |')
++for i,(gain,title,method,assumption,risk)in enumerate(recommendations,1):rank+=['',f'### {i}. {title}','',f'Proposed assumption (not adopted): **{assumption}**','',risk]
++rank+=['','The all-126 rule-1 evidence-(3) count includes declarations inside flat artifacts. Those remain independently protected by global refusal and are excluded from the actionable rule-1 ranked pool. Constructor explicitness is useful for narrowing the audit, but does not make an observed-unused overload portable to remove.','']
++rank += [f'Name-collision refinement remains a smaller additional opportunity: {fmt(collisions)} owned bytes in R-nondep-other + R-dep(a) + R-cycle. The 1,987-byte `coordinate_compression::ranks` collision in each coordinate-compression example is a concrete case, subject to the prior audit’s target-stable-binding requirement.','']
++text=re.sub(r'## Recommendation \(partial\).*?(?=## Verification and reproducibility)', '\n'.join(rank)+'\n',text,flags=re.S)
++# Record verified supplemental artifacts and cleanup status without implying policy changes.
++replays=[json.loads(p.read_text())for p in O.glob('*/replay.json')];replayPass=sum(c.get('compare')==0 for c in replays)
++text=text.replace('SDK deletion, full totals, final audits and source restoration are pending while this report is partial.',f'SDK deleted after build/test; all 126 artifacts and classifications reconcile. Baseline-worker model equality after sorting/deduplicating unordered graph edges: {replayPass}/{len(replays)} saved models. Production sources are restored after saving the diagnostic patch; only this review and that patch are intended tracked changes.')
++text=text.replace('Those outputs remain in the whole-output denominator; their ordinary units are R-other under global refusal. No refusal was bypassed for the measured artifacts.','Those outputs remain in the whole-output denominator; their ordinary units are R-other under global refusal. No refusal was bypassed for the measured artifacts. The separate gate-waiver experiments retain the source conditional branches and run the production closure after clearing only the bounded refusal reasons; their gains are speculative until proper branch/dependency support is designed.')
++text+='\n## Free functions and hidden-friend candidates\n\n'
++text+=f'The raw declaration-level pool with no kept resolved reference and no compiler used/referenced flag is {fmt(freeSummary["original"])} owned bytes. A lexical fixpoint over kept identifier tokens retains a candidate whenever its name still appears outside the proposed deletion group, including in a kept uninstantiated function body. This leaves {freeSummary["closedCount"]} declarations / {fmt(freeGain)} bytes. Only currently pruned artifacts are included; roots/pins and `main` are excluded. This is a candidate-group estimate requiring the proposed A6/dispatch/effect conditions, not a new production deletion rule.\n\n'
++freeNames=collections.Counter()
++for p in O.glob('*/free-closure-candidates.json'):
++ for d in json.loads(p.read_text()):freeNames[d['location'],d['name']]+=d['bytes']
++text+='| Source declaration | Candidate owned bytes |\n| --- | ---: |\n'
++for(loc,name),size in freeNames.most_common(15):text+=f'| `{esc(loc)}` `{esc(name)}` | {fmt(size)} |\n'
++text+='\n## Supplemental validation\n\nBaseline replay preserves family identities, byte ownership, references, dependent-name sets, inventories and graph connectivity. Raw serialized edge order differs because the diagnostic traversal changes redundant visitation order; sorting/deduplicating unordered graph-edge lists restores equality. No retention decision is changed by that normalization.\n\n'
++text+=f'All {len(eligible)} successfully materialized gate-waiver outputs passed standalone compilation and sample output: {sum(c.get("sample",False)for n,c in eligible)}/{len(eligible)}. This validates the local counterfactual only. The saved counterfactuals occupy {fmt(sum(c["bytes"]for n,c in eligible))} bytes versus {fmt(sum(next(r["bytes"]for r in results if r["name"]==n)for n,c in eligible))} original flat bytes.\n\n'
++text+='| Flat example | Original bytes | Gate-waiver bytes | Estimated gain | Sample |\n| --- | ---: | ---: | ---: | --- |\n'
++for n,c in sorted(eligible):text+=f'| {n} | {fmt(next(r["bytes"]for r in results if r["name"]==n))} | {fmt(c["bytes"])} | {fmt(c["gain"])} | {"pass"if c.get("sample")else"FAIL"} |\n'
++checks=[]
++for p in O.glob('*/supplement.json'):checks.extend(json.loads(p.read_text()))
++targetRows=json.loads((R/'.checks/trim/targets/summary.json').read_text())
++text+=f'\nThe constructor-overload, constructibility-trait and member-alias LP64/ILP32 checks pass all {sum(x["passCheck"]for x in targetRows)}/{len(targetRows)} expected full/deleted syntax-check outcomes. Each worker-unused candidate becomes necessary on i386; these constructed checks illustrate the mechanism, while the real ATL constraint and alias sites are identified in the recommendations.\n'
++text+=f'\nAdditional compacted/candidate artifacts checked: {sum(c.get("sample",False)for c in checks)}/{len(checks)}; details are in the local `supplement.json` records. All compaction measurements preserve the complete lexical-token sequence and directive boundaries. The free-declaration diagnostic was corrected to exclude lambda initializer bodies and to remove full declaration-owned ranges including leading attributes; the final group checks use that corrected extractor. The main sweep used two examples concurrently. Three early supplemental gate checks briefly overlapped that sweep before scheduling was corrected; remaining example checks were deferred until the sweep finished.\n'
++# Full requested top-example category breakdown, with both byte/reach denominators.
++top=sorted(results,key=lambda r:-r['bytes'])[:15]
++text+='\n## Appendix: complete top-15 category breakdown\n\nEach cell is **output bytes / no-positive-AST bytes**. T1–T15 follow the order in the top-15 table above.\n\n'
++text+='| Category | '+' | '.join('T'+str(i)for i in range(1,16))+' |\n| --- | '+' | '.join('---:'for _ in top)+' |\n'
++for c in a.CATS:text+='| '+a.LABELS.get(c,c)+' | '+' | '.join(fmt(r['totals'].get(c,0))+' / '+fmt(r['noref'].get(c,0))for r in top)+' |\n'
++text+='| **Total** | '+' | '.join(fmt(r['bytes'])+' / '+fmt(sum(r['noref'].values()))for r in top)+' |\n'
++text+='\n## Appendix: per-example member retention\n\nCells are units / owned bytes, using the same exclusive classes as the totals. Rule-1 member units are separate.\n\n'
++cols=a.CLASSES+['rule1'];text+='| Example | '+' | '.join(cols)+' |\n| --- | '+' | '.join('---:'for _ in cols)+' |\n'
++for r in results:
++ cs=collections.defaultdict(lambda:[0,0])
++ for c in r['classes']:cs[c['reason']][0]+=1;cs[c['reason']][1]+=c['bytes']
++ text+='| '+r['name']+' | '+' | '.join(cell(cs[k])for k in cols)+' |\n'
++text+='\n## Appendix: per-declaration rule-1 evidence\n\nWritten source declarations are grouped by location, kind and evidence class; occurrences sum their appearance in different example outputs. A source declaration can have multiple evidence rows when examples provide different witnesses. This table includes every counted declaration and reconciles to the kind/evidence totals above.\n\n'
++text+='| Written source declaration | Kind | Evidence | Occurrences | Owned bytes |\n| --- | --- | ---: | ---: | ---: |\n'
++by=collections.defaultdict(lambda:[0,0])
++for d in ds:by[d['location'],d['name'],d['kind'],d['evidence']][0]+=1;by[d['location'],d['name'],d['kind'],d['evidence']][1]+=d['bytes']
++assert sum(v[1]for v in by.values())==sum(d['bytes']for d in ds)
++for(loc,name,kind,e),(count,b)in sorted(by.items()):text+=f'| `{esc(loc)}` `{esc(name)}` | {kind} | {e} | {count} | {fmt(b)} |\n'
++# Explicitly report method limits so counts are not mistaken for proofs.
++traitOnly=[d for d in ds if d.get('traitOnly')]
++text+='\n### Conservative trait-evidence bound\n\n'
++text+=f'Group (2) contains {len(traitOnly)} declarations / {fmt(sum(d["bytes"]for d in traitOnly))} bytes supported only by the conservative record-level trait fallback, without a resolved/unevaluated function reference or original compiler used/referenced flag. Exact overload-selection replay could move some of these bytes to (3); the (3) totals are lower-bound worker candidate pools.\n\n'
++text+='| Kind | Trait-fallback-only declarations | Owned bytes |\n| --- | ---: | ---: |\n'
++for k in a.KINDS:
++ items=[d for d in traitOnly if d['kind']==k]
++ if items:text+=f'| {k} | {len(items)} | {fmt(sum(d["bytes"]for d in items))} |\n'
++text+='\nThe diagnostic records compiler-exposed CTAD/trait evidence plus a conservative record-level fallback for relevant trait kinds; it does not reproduce the preceding analysis’s full Sema overload-selection replay. Consequently group (2) can include additional overloads of a trait-tested record, and group (3) is a conservative candidate inventory rather than a claim that no other target/substitution could inspect the declaration. R-other likewise retains opaque/mixed bindings rather than guessing a narrower class. No trimming assumption above was adopted.\n'
++text+=f'\nFinalized {datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}; no commit or push.\n'
++doc.write_text(text)
++(R/'measurements/trim/final-summary.json').write_text(json.dumps(dict(total=s['bytes'],noref=sum(s['noref'].values()),rule1CandidateAll=sum(d['bytes']for d in ds if d['evidence']==3),rule1CandidateMembers=sum(d['bytes']for d in ds if d['evidence']==3 and d['kind']!='deduction guide'),rule1Eligible=ruleGain,explicitEligible=explicit,rank=[dict(bytes=x[0],rule=x[1])for x in recommendations],replayPass=replayPass),indent=2))
++print('finalized',fmt(s['bytes']),'bytes',len(by),'declaration/evidence rows')
+diff --git a/.checks/trim/make-patch.py b/.checks/trim/make-patch.py
+new file mode 100644
+--- /dev/null
++++ b/.checks/trim/make-patch.py
+@@ -0,0 +1,12 @@
++import pathlib,subprocess,difflib,hashlib
++R=pathlib.Path.cwd();paths=['src/clang/prune_extract.cpp','src/core/pipeline/pipeline.cpp','src/core/report/prune.cpp']
++patch=subprocess.check_output(['git','diff','--',*paths],text=True)
++restored=not patch
++if restored:patch=(R/'docs/reviews/trim-analysis-diag.patch').read_text().split('diff --git a/.checks/trim/')[0]
++new=['src/core/prune/trim_diag.h']+['.checks/trim/'+p for p in ['README.txt','acquire-cross.py','g++','sweep.py','analyze.py','report.py','progress.py','counter.cpp','prepare-counter.py','compact.cpp','compact-run.py','unblock.cpp','unblock-run.py','replay.cpp','replay-run.py','supplement.py','target-check.py','audit.py','analyze-parallel.py','free-pool.py','free-close.py','free-check.py','free-closed-check.py','recheck-replay.py','finalize.py','make-patch.py']]
++for name in new:
++ if restored and name.startswith('src/'):continue
++ p=R/name
++ patch+='diff --git a/'+name+' b/'+name+'\nnew file mode '+('100755'if name.endswith('/g++')else'100644')+'\n'
++ patch+=''.join(difflib.unified_diff([],p.read_text().splitlines(keepends=True),fromfile='/dev/null',tofile='b/'+name))
++out=R/'docs/reviews/trim-analysis-diag.patch';out.write_text(patch);print('patch',len(patch.encode()),'bytes',hashlib.sha256(patch.encode()).hexdigest())
