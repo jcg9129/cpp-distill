@@ -1,0 +1,3 @@
+removed S::operator[] |
+removed S::operator-> |
+removed S::operator* |

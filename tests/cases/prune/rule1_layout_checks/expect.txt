@@ -1,7 +1,9 @@
 contains | Sized() = default;
 contains | explicit Sized(int)
 contains | Sized(int, int)
-absent | operator+(int)
+# A checked function-template name can collide with a trait's library helper.
+# Round 4 deliberately keeps its operand witnesses across overload contexts.
+kept Sized::operator+ | D3e rule 1: overload-sensitive check in system entity
 kept discarded_ctor_helper |
 report | rule1-removed: category=ctor-explicit declarations=0
 report | rule1-removed: category=ctor-multi-arg declarations=0

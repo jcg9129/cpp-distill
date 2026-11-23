@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma GCC system_header
+namespace std {
+template<class H>
+auto probe(H h, int) -> decltype((*h.get())(0), int{}) { return 1; }
+inline int probe(...) { return 0; }
+template<class H> int call(H h) { return probe(h, 0); }
+}

@@ -1,0 +1,2 @@
+kept F::operator() |
+kept F::operator[] |

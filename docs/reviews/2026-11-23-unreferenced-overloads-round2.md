@@ -26,10 +26,10 @@ An unused whole record can still disappear under the existing pruning rules.
 The implementation removes forced implicit-member declaration and its Sema
 consumer, special-member deletion/subobject protection, last/user-provided/
 constexpr constructor guards, inherited-constructor base bookkeeping, and
-constructor-parameter witness traversal. All remaining check evidence is for
+the former constructor-specific parameter witness traversal. All remaining check evidence is for
 operators and guides. Operator/invocability checks, concepts and requires-
 expressions retain conservative bounded subobject/template-argument witnesses.
-Instantiation-to-pattern identities, source-guide CTAD propagation, owner-gated
+Instantiation-to-pattern identities, CTAD protection, owner-gated
 evidence and opt-out/monotonicity checks remain.
 The obsolete constructor flag is removed from worker protocol version 10;
 constructor removal report categories remain present with zero counts, while
@@ -62,8 +62,9 @@ even though their constructors/assignments cannot be removed. Likewise a failed
 `requires(T t) { t.member + 0; }` check needs operator evidence for the field's
 record type. Removing either witness path changed `1 0` to `1 1` under GCC and
 Clang during narrowing. The operator witness walk therefore still follows
-member types, including cv/ref and array element types, but never emits
-constructor evidence or traverses constructor/assignment parameter signatures.
+member types, including cv/ref and array element types. Round 4 extends this
+to the complete bounded interface type graph, including callable signatures;
+none of these witnesses enables constructor or plain-assignment removal.
 
 All 409 Python tests passed: 209 unittest cases and 200 library pytest cases.
 The library modules ran separately with `PYTHONMALLOC=malloc`,
@@ -525,3 +526,132 @@ by policy. Macro/shared spellings and explicitly instantiated records retain
 their existing protections. The original local investigation did not include
 the ATL corpus/reports; the adoption sweep totals above were supplied
 subsequently, and no ATL per-protection-reason breakdown is claimed.
+
+## Review fixes, round 4
+
+The checked-out narrowing branch still had worker-side counterexamples. Before
+changing extraction, separate stdout and `static_assert` fixtures reproduced
+aggregate-deduction suppression (item 1), ambiguous guides and a constrained
+non-viable guide (item 12), and the pointer-field operator check (item 2).
+GCC 15.2 and Clang 22.1.8 compiled the originals and printed `0`. The original
+worker deleted one unselected declaration in each case; both compilers then
+printed `1`, and both rejected the corresponding pruned assertions. Alias CTAD
+and rejected SFINAE/constraint candidates reproduced the same loss of evidence.
+The saved worker and CLI are in `build/before/`; reproduction logs and rendered
+artifacts are in `build/round4-before*`, `build/system-before*` and
+`build/all-before*`.
+
+Any CTAD attempt anywhere in the TU now protects every user guide of the named
+class template. This uses deduced-template types and used/referenced synthesized
+guides, plus a conservative expanded-token fallback for identifiers immediately
+followed by `(` or `{`. Only known record, constructor, destructor and guide
+name declarations are excluded from that fallback. Alias-template names map
+to the underlying class template. Discarded/uninstantiated code, concept bodies,
+requires-expressions, decltype/sizeof/noexcept operands, defaults and alias
+bodies all count, even if the attempt's family disappears. Selected-guide-only
+source-chain protection is subsumed. Guides remain removable when their class
+template has no deduction attempt; unused owners can still disappear.
+
+Operator witnesses now follow pointer/member-pointer and array/reference types,
+function return/parameter types, nested records and aliases, static data members,
+and template arguments throughout that interface graph. The same 128-record,
+4096-work-item/declaration bounds fail closed for operators on the check. The
+existing exhaustion fixture also requires an unrelated no-CTAD guide to remain
+removable; guide protection is independent of operator-witness exhaustion. The traversal only
+adds owner-gated evidence, never ordinary or reverse-effect dependencies.
+Function templates containing signature/constraint checks also register their
+names conservatively across overload contexts. Every naming call supplies
+argument witnesses, including calls selecting another overload, ADL calls and
+calls inside reached system code. Expression template arguments count for
+function-template checks, without marking ordinary class-template trait
+bookkeeping as an operator check.
+
+The new `rule1_round4_*` fixtures cover the review's library functors
+(sort/set/function/ranges), range-for prefix/dereference versus unused postfix,
+structured bindings with removable `[]`/`->`/`*`, address-taking versus
+`addressof`, overloaded versus built-in comma, C++23 static operators,
+instantiation-only uses, hidden friends, direct invocability/SFINAE assertions,
+compound-assignment controls, explicit/specialized guides, and all added
+witness routes. The synthetic standard-header fixture exercises a rejected
+checked template called from kept system code. `witness` expectations require
+an unblocked, unselected operator to receive an actual `rule1Evidence` edge and
+survive. The extraction runner also prints distinct written operator/guide
+removal counts and optionally saves reports/renderings with
+`DISTILL_PRUNE_ARTIFACTS`.
+
+Current constructor-removal claims in `src/core/README.md` and `design.md` were
+corrected; historical measurements above remain historical.
+
+Two existing expectations become more conservative: the selected-guide fixture
+keeps its losing pointer guide, and `rule1_layout_checks` keeps `Sized::operator+`.
+The latter is collateral retention from a checked library helper name shared
+across overload contexts; global name matching deliberately favors retaining a
+candidate over missing an ADL/rejected-template check. The dedicated unused
+operator and no-CTAD guide controls continue to require removal.
+
+Construction expressions receive the same argument witnesses. Two additional
+fixtures use a constrained constructor template and a constrained guide template
+whose check rejects an ambiguous functor. The intermediate guide-wide fix still
+changed `0` to `1` on GCC and Clang in both cases; the completed construction
+path keeps the rejected operator. For checked guides the call name is their
+class template's name. Logs are `build/{constructor,guide}-template-before.log`
+and `build/{constructor,guide}-template-final.log`.
+
+The unit aggregate exceeded its old 120-second deadline in both the initial
+contended run and the subsequent serial run, after reaching pipeline checks.
+Its CTest timeout is now 180 seconds; individual process deadlines are unchanged.
+The extraction aggregate allows 360 seconds for the expanded dual-compiler
+fixture set and per-fixture opt-out extraction.
+
+Removed written declarations within surviving owners, using the saved
+1762f54 worker and the completed worker on the same fixtures:
+
+| Fixture set | Variants | Operators before → after | Guides before → after |
+| --- | ---: | ---: | ---: |
+| Round 4 regressions | 57 | 30 → 8 | 23 → 2 |
+| Entire extraction corpus | 203 | 49 → 26 | 25 → 4 |
+
+The original four runtime counterexamples each previously lost one declaration;
+all now lose zero. Both no-CTAD controls remain removable, including the guide
+in the exhausted-witness fixture. Counts exclude whole-owner removal and count
+written declaration identities once per expectation variant. Per-fixture data
+is in `build/final-counts.json`; expected refusals contribute zero deletions.
+
+All 409 Python tests passed (209 unittest tests and 200 pytest tests). The
+reviewed-baseline pytest case ran alone with capture disabled after an initial
+concurrent run exceeded the VM's memory budget. Results are in
+`build/python-results.json` and `build/python-*.log`.
+
+CLI comparisons passed for 75 sources with line markers omitted (74 accepted,
+one matching rejection for the synthetic standard-header fixture), plus eight
+core sources each in plain and compact modes (seven accepted and the same
+matching rejection). Opt-out rendering is byte-identical to 1762f54 with A13
+disabled; enabled family/declaration retention is monotone. Plain marker growth
+is tracked separately; omitted-marker and compact outputs never grow. Summaries
+are in `build/cli-round4-{nlm,adl,plain,compact}/summary.json`.
+
+A final aggregate-guide fixture showed the same failed-check issue without a
+constructor call node: both compilers changed `0` to `1` even after protecting
+all guides and constructor-call arguments. List and parenthesized aggregate
+initialization now carry the checked class-template name's argument context.
+The regression passes on both compilers; logs are
+`build/aggregate-guide-{before,final}.log`. Final binaries are built separately
+in `build/complete-bin/` using the configured compiler/link commands and unchanged
+objects (`build/build-isolated.py`), so ongoing CTests keep stable executables.
+
+All 109 CTest tests passed across the full run and affected-target reruns.
+The final worker separately passed all 203 extraction variants, including
+dual-compiler stdout/assertion oracles and opt-out physical-declaration
+monotonicity. The long pipeline aggregate passed in 139.39 seconds after
+removing competing verification jobs. Initial relink/interruption and timeout
+logs remain in `build/ctest-final.log`; successful reruns are in
+`build/ctest-rerun.log` and `build/ctest-d3c-isolated.log`.
+
+The final aggregate-only guard was additionally checked with the final CLI
+(`build/cli-aggregate-complete/summary.json`). The earlier completed CLI
+comparisons remain recorded above; a duplicate expanded CLI rerun was stopped
+to release resources and is not counted as a completed comparison. Final
+worker reports/renderings are in `build/complete-artifacts/`, with its full
+oracle log in `build/complete-extraction.log`. Builds used the verified LLVM
+23.1.5 SDK, assertions, `-O0 -g0`, at most two build jobs, virtual-memory
+limits and command timeouts. No commit was made.

@@ -162,6 +162,32 @@ struct Extraction {
   std::map<const Decl*,FamilyId> rule1Identities;
   std::map<std::size_t,std::vector<FamilyId>> rule1Members; // Written record keys, not owner families.
   std::map<const Decl*,unsigned> checkedTemplates;
+  // Call-site lookup must include checked templates rejected before a selected
+  // callee exists, including ADL candidates in another declaration context.
+  std::map<std::string,unsigned> checkedTemplateNames;
+  std::set<const Decl*> ctadTemplates;
+  std::map<std::string,std::set<const TemplateDecl*>> ctadNames;
+  std::vector<std::pair<std::string,unsigned>> ctadTokens;
+  std::set<unsigned> nonCTADNames;
+  void ctad(const TemplateDecl* declaration) {
+    std::set<const TemplateDecl*> seen;
+    while (declaration && seen.insert(declaration).second) {
+      if (const auto* record = dyn_cast<ClassTemplateDecl>(declaration)) {
+        ctadTemplates.insert(record->getCanonicalDecl());
+        return;
+      }
+      const auto* alias = dyn_cast<TypeAliasTemplateDecl>(declaration);
+      if (!alias) return;
+      const auto type = alias->getTemplatedDecl()->getUnderlyingType();
+      if (const auto* specialization = type->getAs<TemplateSpecializationType>()) {
+        declaration = specialization->getTemplateName().getAsTemplateDecl();
+      } else if (const auto* record = type->getAsCXXRecordDecl()) {
+        if (const auto* specialization = dyn_cast<ClassTemplateSpecializationDecl>(record))
+          declaration = specialization->getSpecializedTemplate();
+        else declaration = record->getDescribedClassTemplate();
+      } else return;
+    }
+  }
   std::map<std::pair<const DeclContext*,std::string>,unsigned> checkedCallGroups;
   std::vector<std::pair<const Decl*,FamilyId>> declarations;
   std::map<std::size_t,std::pair<bool,bool>> pasteGroups;
@@ -807,7 +833,15 @@ public:
     // has no such source directive/range, so it needs a separate future audit.
     if (e.user(loc) && kind != PIK_HashPragma) e.disable("unsupported generated user pragma at " + loc.printToString(e.sm));
   }
+  std::string previousIdentifier;
+  unsigned previousIdentifierLocation = 0;
   void finalToken(const clang::Token& token) {
+    if (e.model.assumeUnreferencedOverloads) {
+      if (token.isOneOf(tok::l_brace,tok::l_paren) && !previousIdentifier.empty())
+        e.ctadTokens.emplace_back(previousIdentifier,previousIdentifierLocation);
+      previousIdentifier = token.is(tok::identifier) ? token.getIdentifierInfo()->getName().str() : std::string();
+      previousIdentifierLocation = token.getLocation().getRawEncoding();
+    }
     libraryToken(token); // Full unpruned TU, before filtering to user expansions.
     if (!e.user(token.getLocation())) return;
     attributeToken(token);
@@ -1047,65 +1081,79 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     root = root->getCanonicalDecl();
     auto [cached,fresh] = operatorWitnesses.emplace(root,std::vector<FamilyId>{});
     if (fresh) {
-      // Walk subobjects and template arguments for operator checks (including
-      // failed checks on a member expression). Never add ordinary/effect edges:
-      // evidence only protects surviving owners.
+      // Failed substitution can erase the checked expression. Follow the
+      // complete interface type graph of its operands, without effect edges.
       std::vector<const CXXRecordDecl*> pending{root};
+      std::vector<QualType> types;
+      std::vector<TemplateArgument> arguments;
       std::set<const CXXRecordDecl*> seen;
+      std::set<const Type*> seenTypes;
       unsigned declarations = 0;
       bool exhausted = false;
-      while (!pending.empty() && !exhausted) {
+      while ((!pending.empty() || !types.empty() || !arguments.empty()) && !exhausted) {
+        if (++declarations > 4096) { exhausted = true; break; }
+        if (!arguments.empty()) {
+          auto argument = arguments.back(); arguments.pop_back();
+          if (argument.getKind() == TemplateArgument::Type) types.push_back(argument.getAsType());
+          else if (argument.getKind() == TemplateArgument::Pack)
+            for (const auto& element : argument.pack_elements()) arguments.push_back(element);
+          else if (argument.getKind() == TemplateArgument::Declaration) {
+            if (const auto* value = dyn_cast<ValueDecl>(argument.getAsDecl())) types.push_back(value->getType());
+          } else if (argument.getKind() == TemplateArgument::Template || argument.getKind() == TemplateArgument::TemplateExpansion) {
+            if (const auto* declaration = dyn_cast_or_null<ClassTemplateDecl>(
+                    argument.getAsTemplateOrTemplatePattern().getAsTemplateDecl()))
+              pending.push_back(declaration->getTemplatedDecl());
+          }
+          continue;
+        }
+        if (!types.empty()) {
+          auto q = types.back(); types.pop_back();
+          if (q.isNull() || !seenTypes.insert(q.getTypePtr()).second) continue;
+          const auto* t = q.getTypePtr();
+          if (const auto* record = t->getAsCXXRecordDecl()) pending.push_back(record);
+          if (const auto* p = dyn_cast<PointerType>(t)) types.push_back(p->getPointeeType());
+          else if (const auto* p = dyn_cast<ReferenceType>(t)) types.push_back(p->getPointeeType());
+          else if (const auto* p = dyn_cast<MemberPointerType>(t)) {
+            types.push_back(p->getPointeeType());
+            if (p->getQualifier().getKind() == NestedNameSpecifier::Kind::Type)
+              types.emplace_back(p->getQualifier().getAsType(),0);
+          } else if (const auto* p = dyn_cast<ArrayType>(t)) types.push_back(p->getElementType());
+          else if (const auto* f = dyn_cast<FunctionType>(t)) {
+            types.push_back(f->getReturnType());
+            if (const auto* prototype = dyn_cast<FunctionProtoType>(f))
+              for (auto parameter : prototype->param_types()) types.push_back(parameter);
+          } else if (const auto* specialization = dyn_cast<TemplateSpecializationType>(t)) {
+            for (const auto& argument : specialization->template_arguments()) arguments.push_back(argument);
+          }
+          const auto desugared = t->getLocallyUnqualifiedSingleStepDesugaredType();
+          if (desugared.getTypePtr() != t) types.push_back(desugared);
+          continue;
+        }
         const auto* record = pending.back(); pending.pop_back();
         if (!seen.insert(record->getCanonicalDecl()).second) continue;
         if (seen.size() > 128) { exhausted = true; break; }
         const auto* definition = record->getDefinition();
-        // A type can name the canonical forward declaration; member units
-        // belong to the definition's written record, not that forward spelling.
         if (auto it = e.rule1Members.find(e.recordKey(definition ? definition : record)); it != e.rule1Members.end())
-          for (auto member : it->second)
-            cached->second.push_back(member);
-        // Carry record template arguments, as for a direct checked operand.
-        if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(record)) {
-          std::vector<const TemplateArgument*> arguments;
-          for (const auto& argument : spec->getTemplateArgs().asArray()) {
-            if (++declarations > 4096) { exhausted = true; break; }
-            arguments.push_back(&argument);
-          }
-          while (!arguments.empty() && !exhausted) {
-            const auto* argument = arguments.back(); arguments.pop_back();
-            if (argument->getKind() == TemplateArgument::Type) {
-              const auto type = argument->getAsType().getNonReferenceType().getUnqualifiedType();
-              if (const auto* next = type->getAsCXXRecordDecl()) pending.push_back(next);
-            } else if (argument->getKind() == TemplateArgument::Pack) {
-              for (const auto& element : argument->pack_elements()) {
-                if (++declarations > 4096) { exhausted = true; break; }
-                arguments.push_back(&element);
-              }
-            }
-          }
-        }
-        if (exhausted || !definition) continue;
+          for (auto member : it->second) cached->second.push_back(member);
+        if (const auto* specialization = dyn_cast<ClassTemplateSpecializationDecl>(record))
+          for (const auto& argument : specialization->getTemplateArgs().asArray()) arguments.push_back(argument);
+        if (!definition) continue;
         for (const auto* decl : definition->decls()) {
           if (++declarations > 4096) { exhausted = true; break; }
-          if (const auto* field = dyn_cast<FieldDecl>(decl)) {
-            const auto type = e.compiler.getASTContext().getBaseElementType(
-                field->getType().getNonReferenceType()).getUnqualifiedType();
-            if (const auto* next = type->getAsCXXRecordDecl()) pending.push_back(next);
-          }
+          if (const auto* wrapper = dyn_cast<TemplateDecl>(decl)) decl = wrapper->getTemplatedDecl();
+          if (const auto* value = dyn_cast<ValueDecl>(decl)) types.push_back(value->getType());
+          else if (const auto* alias = dyn_cast<TypedefNameDecl>(decl)) types.push_back(alias->getUnderlyingType());
+          else if (const auto* nested = dyn_cast<CXXRecordDecl>(decl)) pending.push_back(nested);
         }
-        if (exhausted) continue;
-        for (const auto& base : definition->bases()) {
-          if (++declarations > 4096) { exhausted = true; break; }
-          if (const auto* next = base.getType()->getAsCXXRecordDecl())
-            pending.push_back(next);
-        }
+        for (const auto& base : definition->bases()) types.push_back(base.getType());
       }
       if (exhausted) {
-        // A bounded walk must fail closed for this check, including operators
-        // and guides. Retention still gates evidence on the owner's survival.
+        // Fail closed for operators on this check. Guides have independent,
+        // TU-wide CTAD protection; a check without CTAD must not pin them.
+        // Retention still gates evidence on the owner's survival.
         cached->second.clear();
         for (FamilyId id = 0; id < e.model.families.size(); ++id)
-          if (!e.model.families[id].rule1Kind.empty()) cached->second.push_back(id);
+          if (e.model.families[id].rule1Kind.starts_with("operator")) cached->second.push_back(id);
       }
     }
     for (auto member : cached->second) evidence(member);
@@ -1480,8 +1528,37 @@ public:
       if (isa<TypeTraitExpr>(x)) rule1CheckKinds = 0;
       if (const auto* size = dyn_cast<UnaryExprOrTypeTraitExpr>(x)) rule1CheckKinds |= sizeofCheckKinds(size);
     }
-    if (e.model.assumeUnreferencedOverloads) if (const auto* call = dyn_cast<CallExpr>(x))
-      if (const auto* callee = call->getDirectCallee()) rule1CheckKinds |= checkedKinds(e.checkedCallGroups,e.callGroup(callee));
+    if (e.model.assumeUnreferencedOverloads) if (const auto* call = dyn_cast<CallExpr>(x)) {
+      if (const auto* callee = call->getDirectCallee()) {
+        rule1CheckKinds |= checkedKinds(e.checkedCallGroups,e.callGroup(callee));
+        rule1CheckKinds |= checkedKinds(e.checkedTemplateNames,callee->getNameAsString());
+      }
+      const auto* target = call->getCallee()->IgnoreParenImpCasts();
+      if (const auto* lookup = dyn_cast<OverloadExpr>(target))
+        rule1CheckKinds |= checkedKinds(e.checkedTemplateNames,lookup->getName().getAsString());
+      else if (const auto* member = dyn_cast<CXXDependentScopeMemberExpr>(target))
+        rule1CheckKinds |= checkedKinds(e.checkedTemplateNames,member->getMember().getAsString());
+      else if (const auto* reference = dyn_cast<DependentScopeDeclRefExpr>(target))
+        rule1CheckKinds |= checkedKinds(e.checkedTemplateNames,reference->getDeclName().getAsString());
+      // Explicitly witness operands: system declarations can suppress normal
+      // parameter/body traversal, and the rejected candidate has no call AST.
+      const auto savedEvidence = evidenceOnly; evidenceOnly = true;
+      for (const auto* argument : call->arguments()) type(argument->getType());
+      evidenceOnly = savedEvidence;
+    }
+    if (e.model.assumeUnreferencedOverloads) if (const auto* construction = dyn_cast<CXXConstructExpr>(x)) {
+      const auto* constructor = construction->getConstructor();
+      rule1CheckKinds |= checkedKinds(e.checkedCallGroups,e.callGroup(constructor));
+      rule1CheckKinds |= checkedKinds(e.checkedTemplateNames,constructor->getParent()->getNameAsString());
+      const auto savedEvidence = evidenceOnly; evidenceOnly = true;
+      for (const auto* argument : construction->arguments()) type(argument->getType());
+      evidenceOnly = savedEvidence;
+    }
+    // CTAD can initialize an aggregate without a constructor call node.
+    if (e.model.assumeUnreferencedOverloads) if (const auto* initializer = dyn_cast<Expr>(x);
+        initializer && isa<InitListExpr,CXXParenListInitExpr>(initializer) && !initializer->getType().isNull())
+      if (const auto* record = initializer->getType()->getAsCXXRecordDecl())
+        rule1CheckKinds |= checkedKinds(e.checkedTemplateNames,record->getNameAsString());
     const bool result = RecursiveASTVisitor::TraverseStmt(x); rule1CheckKinds = saved; return result;
   }
   bool TraverseTypeLoc(TypeLoc t, bool qualifier = true) {
@@ -1828,6 +1905,13 @@ class MemberUnits final : public RecursiveASTVisitor<MemberUnits> {
       const auto* f = dyn_cast_or_null<FunctionDecl>(t ? t->getTemplatedDecl() : d);
       if (f) {
         e.checkedCallGroups[e.callGroup(f)] |= kinds;
+        if (f->getPrimaryTemplate() || f->getDescribedFunctionTemplate()) {
+          e.checkedTemplateNames[f->getNameAsString()] |= kinds;
+          if (const auto* constructor = dyn_cast<CXXConstructorDecl>(f))
+            e.checkedTemplateNames[constructor->getParent()->getNameAsString()] |= kinds;
+          if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f))
+            e.checkedTemplateNames[guide->getDeducedTemplate()->getNameAsString()] |= kinds;
+        }
         if (const auto* t = f->getPrimaryTemplate()) e.checkedTemplates[e.canonical(t)] |= kinds;
         if (const auto* t = f->getDescribedFunctionTemplate()) e.checkedTemplates[e.canonical(t)] |= kinds;
         // Captures of a lambda/local class need the enclosing callable's
@@ -1848,7 +1932,28 @@ public:
       checkScopes.push_back(cast<NamedDecl>(d));
     const bool result = RecursiveASTVisitor::TraverseDecl(d); checkScopes.resize(saved); return result;
   }
+  bool VisitNamedDecl(NamedDecl* d) {
+    if (isa<CXXRecordDecl,CXXConstructorDecl,CXXDestructorDecl,CXXDeductionGuideDecl>(d))
+      e.nonCTADNames.insert(d->getLocation().getRawEncoding());
+    return true;
+  }
+  bool VisitDeducedTemplateSpecializationType(DeducedTemplateSpecializationType* t) {
+    if (evidenceOnly) e.ctad(t->getTemplateName().getAsTemplateDecl());
+    return true;
+  }
+  bool VisitTemplateSpecializationType(TemplateSpecializationType* t) {
+    // enable_if-style non-type arguments are checks even if no decltype or
+    // requires node survives substitution. This also covers user equivalents.
+    const auto* scope = checkScopes.empty() ? nullptr : checkScopes.back();
+    const auto* wrapper = dyn_cast_or_null<FunctionTemplateDecl>(scope);
+    const auto* function = wrapper ? wrapper->getTemplatedDecl() : dyn_cast_or_null<FunctionDecl>(scope);
+    if (function && (function->getDescribedFunctionTemplate() || function->getPrimaryTemplate()))
+      for (const auto& argument : t->template_arguments())
+        if (argument.getKind() == TemplateArgument::Expression) check();
+    return true;
+  }
   bool VisitTemplateDecl(TemplateDecl* d) {
+    if (isa<ClassTemplateDecl,TypeAliasTemplateDecl>(d)) e.ctadNames[d->getNameAsString()].insert(d);
     if (e.model.assumeUnreferencedOverloads) {
       llvm::SmallVector<AssociatedConstraint,4> constraints;
       if (const auto* parameters = d->getTemplateParameters()) parameters->getAssociatedConstraints(constraints);
@@ -1871,14 +1976,8 @@ public:
       else f->getAssociatedConstraints(constraints);
       if (!constraints.empty()) check();
     }
-    if (e.model.assumeUnreferencedOverloads) if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f);
-        guide && (guide->isUsed() || guide->isReferenced())) {
-      for (auto* source = guide->getSourceDeductionGuide(); source; source = source->getSourceDeductionGuide()) {
-        const auto id = e.owner(source);
-        if (id != noFamily && !e.model.families[id].rule1Kind.empty())
-          e.model.families[id].memberBlocker = "D3e rule 1: CTAD evidence";
-      }
-    }
+    if (evidenceOnly) if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f);
+        guide && (guide->isUsed() || guide->isReferenced())) e.ctad(guide->getDeducedTemplate());
     if (evidenceOnly && e.individualRule1(f)) {
       // Runs before the method-only discovery below: a non-method guide's
       // specialization flags must reach its registered written template too.
@@ -1920,6 +2019,18 @@ public:
       // guides), never additional edit units such as lambda call operators.
       if (e.model.assumeUnreferencedOverloads)
         MemberUnits(e,true).TraverseDecl(context.getTranslationUnitDecl());
+      if (e.model.assumeUnreferencedOverloads) {
+        // Ambiguous/failed attempts may leave no guide or deduced-type node.
+        // Exclude only known declaration names; every uncertain name followed
+        // by '(' or '{' fails closed, including macro-expanded/system tokens.
+        for (const auto& [name,location] : e.ctadTokens) if (!e.nonCTADNames.contains(location))
+          if (auto it = e.ctadNames.find(name); it != e.ctadNames.end())
+            for (const auto* declaration : it->second) e.ctad(declaration);
+        for (const auto& [identity,id] : e.rule1Identities)
+          if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(identity);
+              guide && e.ctadTemplates.contains(guide->getDeducedTemplate()->getCanonicalDecl()))
+            e.model.families[id].memberBlocker = "D3e rule 1: CTAD attempt";
+      }
       e.partitionMembers();
     }
     e.normalizeRanges();

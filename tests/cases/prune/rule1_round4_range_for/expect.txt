@@ -1,0 +1,3 @@
+contains | I& operator++()
+absent | I operator++(int)
+kept I::operator* |

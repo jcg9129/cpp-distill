@@ -1,2 +1,2 @@
 contains | Box(T) -> Box<long>;
-absent | Box(T*) -> Box<char>;
+contains | Box(T*) -> Box<char>;

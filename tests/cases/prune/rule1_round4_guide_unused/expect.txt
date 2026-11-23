@@ -1,0 +1,2 @@
+absent | A(const char*) -> A<const char*>;
+absent | B(long) -> B<long>;

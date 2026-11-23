@@ -1,0 +1,2 @@
+kept S::operator() |
+kept S::operator[] |

@@ -134,7 +134,10 @@ struct Node129 : Node128 {};
 struct Sentinel { int operator()() const { return 1; } };
 struct Dead { int operator()() const { return 2; } };
 template<class T> concept Callable = requires(T t) { t(); };
+template<class T> struct NoCTAD { T value; };
+NoCTAD(long) -> NoCTAD<long>;
 int main() {
+  NoCTAD<int> unused{0}; (void)unused;
   Node129* n = nullptr;
   Sentinel s;
   std::printf("%d\n", Callable<Node129> + (n != nullptr));

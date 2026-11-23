@@ -1,0 +1,2 @@
+contains | friend int operator+
+removed X::operator[] |

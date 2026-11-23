@@ -7,9 +7,11 @@
 #include "core/temporary.h"
 #include "library_features.h"
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <tuple>
 namespace {
@@ -85,6 +87,8 @@ int main(int argc, char** argv) {
           else workerDiagnostics += r.error().message;
           return r;
         };
+        if (name == "rule1_round4_system_call")
+          model.parseArgv.insert(model.parseArgv.begin(),{"-I",pathToUtf8(path)});
         const auto input = model;
         model = take(extractPruning(input,options)); retained = take(computeRetention(model));
         if (input.assumeUnreferencedOverloads) {
@@ -111,13 +115,43 @@ int main(int argc, char** argv) {
                 fail("overload assumption resurrected " + label + " via " + model.families[id].label + ": " + retained.families[id].reason);
           }
         }
+        if (const auto* artifacts = std::getenv("DISTILL_PRUNE_ARTIFACTS")) {
+          const auto prefix = std::filesystem::path(artifacts) / (path.filename().string() + "-" + expectation.filename().string());
+          if (retained.disabledReasons.empty())
+            std::ofstream(prefix.string() + ".cpp") << take(renderSource(model,&retained)).provenance.text;
+          std::ofstream(prefix.string() + ".report") << take(renderPruningReport(model,retained));
+        }
+        std::set<std::size_t> removedOperators, removedGuides;
+        for (FamilyId id = 0; id < model.families.size(); ++id) {
+          const auto& family = model.families[id];
+          if (retained.families[id].kept || family.memberOf == noFamily || !retained.families[family.memberOf].kept) continue;
+          if (family.rule1Kind == "deduction-guide") removedGuides.insert(family.rule1Declaration);
+          if (family.rule1Kind.starts_with("operator")) removedOperators.insert(family.rule1Declaration);
+        }
+        std::cout << "COUNTS " << path.filename().string() << "/" << expectation.filename().string()
+                  << " operators=" << removedOperators.size() << " guides=" << removedGuides.size() << '\n';
         std::istringstream expect(read(expectation)); std::string line; bool disabled = false, a11Exclusion = false;
         while (std::getline(expect,line)) {
           if (line.empty() || line.starts_with('#')) continue;
           const auto bar = line.find('|'); if (bar == line.npos) { fail("invalid expectation: " + line); continue; }
           auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
           if (assertion == "args") continue;
-          if (assertion == "contains" || assertion == "absent") {
+          if (assertion == "witness") {
+            // The rejected declaration has no selected/used flag. It must have
+            // separate check evidence, rather than passing via a blanket pin.
+            for (FamilyId id = 0; id < model.families.size(); ++id) {
+              const auto& family = model.families[id];
+              if (family.rule1Kind.empty() || !family.memberBlocker.empty()) continue;
+              bool spelling = false, evidence = false;
+              for (auto range : family.ranges)
+                spelling |= model.text.substr(range.begin,range.end-range.begin).find(reason) != std::string::npos;
+              for (const auto& source : model.families)
+                evidence |= std::find(source.rule1Evidence.begin(),source.rule1Evidence.end(),id) != source.rule1Evidence.end();
+              for (const auto& source : model.systemEntities)
+                evidence |= std::find(source.rule1Evidence.begin(),source.rule1Evidence.end(),id) != source.rule1Evidence.end();
+              matched |= spelling && evidence && retained.families[id].kept;
+            }
+          } else if (assertion == "contains" || assertion == "absent") {
             const auto output = take(renderSource(model,&retained)).provenance.text;
             matched = (output.find(reason) != std::string::npos) == (assertion == "contains");
           } else if (assertion == "report-absent") {
@@ -176,6 +210,9 @@ int main(int argc, char** argv) {
               { std::ofstream f(source); f << (original ? flat.text : pruned); }
               ProcessSpec spec; spec.cwd = work.path; spec.timeout = std::chrono::seconds(20);
               spec.argv = {compiler,"-std=" + model.dialect,"-O0",pathToUtf8(source),"-o",pathToUtf8(binary)};
+              if (name == "rule1_round4_system_call") {
+                spec.argv.push_back("-I"); spec.argv.push_back(pathToUtf8(path));
+              }
               const auto built = take(runProcess(spec));
               if (built.exitCode || built.timedOut || built.signal) { fail(std::string(compiler) + (original ? " original" : " pruned") + " runtime build: " + built.stderrText); continue; }
               spec.argv = {pathToUtf8(binary)}; spec.timeout = std::chrono::seconds(5);

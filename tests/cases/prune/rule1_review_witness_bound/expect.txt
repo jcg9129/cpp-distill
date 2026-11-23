@@ -1,3 +1,4 @@
 contains | operator()() const { return 1; }
 kept Sentinel::operator() | overload-sensitive check
 removed Dead |
+absent | NoCTAD(long) -> NoCTAD<long>;

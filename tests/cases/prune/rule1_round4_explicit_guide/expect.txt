@@ -1,0 +1,1 @@
+contains | explicit A(const char*)

@@ -189,16 +189,34 @@ these, and only these; the report lists each one an output depended on, and
   base conservatively protects the derived operator. The base walk is bounded
   to 128 records and 4096 declarations/bases; exhaustion protects the operator.
   Operator/invocability traits, concepts, requires-expressions and unevaluated
-  checks retain conservative witnesses through record bases, member types and
-  template arguments. Construction/assignment traits also supply operator
+  checks retain conservative witnesses through record bases, pointer and
+  pointer-to-member fields, member function return and parameter types (including
+  operators and conversions), nested records/aliases, static data member types,
+  and template arguments throughout that type graph. Construction/assignment traits also supply operator
   witnesses: constructor and assignment constraints can test those operators.
   The witness walk is bounded to 128 records and 4096 declarations, bases and
-  template arguments per operand; exhaustion protects all rule-1 declarations for that
+  type nodes and template arguments per operand; exhaustion protects all rule-1 operators for that
   check. Evidence requires both the check's source and an independently retained
   owner; it cannot resurrect a dead owner or introduce reverse effect edges.
-  Instantiations propagate evidence to their written declaration identities;
-  selected deduction-guide specializations also propagate reference flags and
-  CTAD evidence to their source guides.
+  Checked function templates supply argument witnesses at every call naming that
+  template, including rejected candidates, ADL calls and calls in reached system
+  code. Name matching is deliberately conservative across overload contexts;
+  expression SFINAE in signatures, constraints and enable_if-style template
+  arguments count even when substitution leaves no expression tree. Construction
+  expressions also witness arguments to checked constructor/guide templates,
+  including when another constructor or deduction guide wins. Aggregate list
+  and parenthesized initialization carry the same argument-check context.
+  Instantiations propagate evidence to their written declaration identities.
+  Any CTAD attempt anywhere in the TU protects all user guides of the named
+  class template, including failed/ambiguous deduction, discarded code,
+  uninstantiated templates, concepts/requires, unevaluated operands, defaults
+  and aliases. Alias-template CTAD names the underlying class template too.
+  Deduced-template types and used/referenced implicit guides supply semantic
+  evidence. Expanded identifier tokens followed immediately by `{` or `(`
+  supply a conservative fallback; only known record/constructor/destructor/guide
+  declaration names are excluded. This protection is independent of the
+  attempt's retention. Templates with no CTAD attempt keep removable guides;
+  the existing whole-record rules can still remove an unused owner.
   Constructors retain the original D3e rule-1 exclusion. The worker does not
   force implicit-member declarations or inspect constructor/subobject deletion
   dependencies for A13.
@@ -1381,7 +1399,7 @@ through A6 and the never-removed ADL names, member calls through A12 and
 D3e's library/language inventory or whole-record fallback, and user specializations
 of system templates by rule 3 and the roots. AST edges from system code are
 positive evidence. A13 additionally permits removal of individual unreferenced
-constructors, operators and deduction guides under its stated assumption and
+operator functions and deduction guides under its stated assumption and
 structural/check protections; without A13, missing system edges cannot justify
 their removal.
 
@@ -1541,9 +1559,9 @@ pinned. Reports give one row per member unit and kept/removed counts. A12 is
 reported whenever member pruning is enabled, even without a deletion, like A11;
 A13 is likewise reported as `A13 unreferenced-overloads` when enabled with it.
 The `rule1-removed:` summaries count written declarations and bytes by category
-only within surviving records. `rule1-constructors-kept:` summarizes effective
-constructor protection reasons, deduplicating instantiated copies by written
-declaration offset. These complement the member-unit and family-byte summaries.
+only within surviving records. Constructor categories remain zero; constructors
+retain their original structural exclusion. These complement the member-unit
+and family-byte summaries.
 See the [adopted member review](reviews/2026-11-20-member-pruning.md) for the
 critical review and historical prototype measurements.
 

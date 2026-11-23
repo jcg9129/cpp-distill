@@ -787,9 +787,9 @@ kept patterns; lexical and AST edges retain the units, including user-only paste
 names. A same-name unit keeps all its overloads, declarations, definitions and
 specializations. Non-function members, aliases and nested types stay with their
 record. Explicit member-template arguments retain their types through ordinary
-lexical/AST rules. A13 permits individual removal of unreferenced constructors,
-operators and deduction guides under its documented protections; conversion
-functions and the protected special members remain excluded from member removal.
+lexical/AST rules. A13 permits individual removal of unreferenced operator functions
+and deduction guides under its documented protections; conversion
+functions, constructors and the protected special members remain excluded from member removal.
 Base lists preserve records supplying inherited members;
 nested-name chains and `typename Tr::type` follow retained aliases and bases.
 If A12 is disabled or the system-header inventory fails closed, record members
