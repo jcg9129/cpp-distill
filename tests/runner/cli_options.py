@@ -41,10 +41,10 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     (root / 'main.cpp').write_text('// SPDX-License-Identifier: GPL-3.0-or-later\n#if 1\nint main(){}\n#endif\n')
     for args, code, message in [
         (['--help'], 0, 'Usage: distill'),
-        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
-        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
-        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
-        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members'),
+        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
+        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
+        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
+        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
         (['g++', '-std=gnu++20', 'main.cpp'], 0, 'distill: wrote pruned (local)'),
         (['--no-prune'], 1, 'missing compile command'),
         (['--no-prune', '-o'], 1, 'missing value'),
@@ -100,6 +100,35 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                   (not any('instantiation-effects' in flag for flag in flags)), report)
             if flags:
                 check('member pruning disabled: --no-assume=library-spelled-members' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
+    with case('library-macro-values switch reaches resolution and reports A9 scope'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('#include <cfloat>\n#if FLT_EVAL_METHOD != 0\n'
+                                      'constexpr int value = 2;\n#else\nconstexpr int value = 0;\n#endif\n'
+                                      '#include <charconv>\n#if defined(__cpp_lib_to_chars)\n'
+                                      'int main(){return value;}\n#else\n#error missing charconv\n#endif\n')
+        selections = [[], ['--no-assume=library-macro-values'],
+                      ['--no-assume', 'library-macro-values'],
+                      ['--no-assume=instantiation-effects,library-spelled-members,library-macro-values'], []]
+        for flags in selections:
+            result = subprocess.run([binary, *flags, '--no-prune', '--judge', 'cses', '--report', 'report.txt',
+                                     'g++', '-std=c++23', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote flat' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            standard_unknown = '#if FLT_EVAL_METHOD != 0' in result.stdout
+            if flags:
+                check(standard_unknown, result.stdout)
+            elif standard_unknown:
+                # A local ARM compiler has no matching CSES/x86 header capture;
+                # the checked pipeline must then explicitly demote the decision.
+                check('flat: demoted' in report, report)
+            check('#if defined(__cpp_lib_to_chars)' not in result.stdout, result.stdout)
+            scope = 'feature-test macro facts only' if standard_unknown else 'standard-macro facts used'
+            check(f'resolution assumption: A9 ({scope})\n' in report, report)
+            check(('resolution assumption disabled: A9 library-macro-values '
+                   '(--no-assume=library-macro-values); __cpp_lib_* facts retained\n' in report) == bool(flags), report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
     with case('judge list, full names, aliases and collision diagnostics'):

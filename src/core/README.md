@@ -330,6 +330,14 @@ configuration and immediately revoke cached header facts, including writes to an
 underlying alias after the include. Include conflicts and GCC option pragmas keep
 these facts unknown;
 reported uses carry `FactOrigin::library`, A9 and capture provenance.
+A9 was widened on 2026-11-23 to cover the approved standard object-like integer
+macros and their captured compiler dependencies across include sequences.
+`--no-assume=library-macro-values` disables standard-macro header values and
+absence facts: these names become unknown after a standard include, while
+`__cpp_lib_*` facts retain A9. `CliOptions` → `DistillOptions` → `ResolveOptions`
+carries this switch, including local satisfaction reruns. The report records
+that the assumption is disabled; its A9 resolution line distinguishes
+standard-macro use from feature-test-only use.
 
 Generator-5 major agreement requires a compatible target triple and identical
 ordered non-harmless flags in one
@@ -852,9 +860,10 @@ library-hook refusals are unchanged. See the
 [review](../../docs/reviews/2026-11-20-instantiation-effects.md) for the proof,
 A11 exclusions, compiler probes and measurements.
 `--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
-accepts repetition and comma lists; `instantiation-effects` and
-`library-spelled-members` are the switchable names. Other names (including
-assumption IDs) are usage errors (exit 1) listing both names. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
+accepts repetition and comma lists; `instantiation-effects`,
+`library-spelled-members` and `library-macro-values` are the switchable names.
+Other names (including assumption IDs) are usage errors (exit 1) listing all
+three names. For A11 and A12, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
 the worker. Pruning protocol **7** serializes both flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.

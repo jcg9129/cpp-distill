@@ -327,6 +327,7 @@ struct Pipeline {
       try {
         step("resolve conditions");
         ResolveOptions ro; ro.profile = options.profile; ro.deadline = deadline;
+        ro.assumeLibraryMacroValues = options.assumeLibraryMacroValues;
         if (!options.profile) ro.requirements.dialect = local.probe.dialect.name;
         // No profile means no local predefined facts: preserve the D2d rule.
         result.resolution = take(resolveConditions(raw, command, evaluator, ro));
@@ -401,7 +402,8 @@ struct Pipeline {
             }
             changes(c);
             ResolveResult observed;
-            auto satisfied = take(satisfies(c, raw, command, result.resolution, evaluator, deadline, &observed));
+            auto satisfied = take(satisfies(c, raw, command, result.resolution, evaluator, deadline, &observed,
+                                            options.assumeLibraryMacroValues));
             if (Clock::now() >= deadline) throw Error{"configuration satisfaction deadline exceeded"};
             if (!satisfied) {
               result.checks.push_back({"flat", "configuration does not satisfy resolution", c, observed.decisions});
@@ -457,6 +459,8 @@ struct Pipeline {
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
     if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
+    if (!options.assumeLibraryMacroValues)
+      result.diagnostic += "resolution assumption disabled: A9 library-macro-values (--no-assume=library-macro-values); __cpp_lib_* facts retained\n";
     result.report = renderReport(result, command, options.profile);
     return std::move(result);
   }

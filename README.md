@@ -302,6 +302,17 @@ The [trust assumptions A1–A6](docs/design.md#13-trust-assumptions-user-2026-11
 - **A5:** The judge adds no non-reserved macros beyond the profile's operations.
 - **A6:** Standard-library and language-generated lookup of user functions uses the audited ADL/customization names or operators; separate rules protect callbacks and specializations.
 
+A9 assumes that `__cpp_lib_*` and approved standard object-like integer macros
+keep their captured values across standard-header include sequences in default
+library configuration. Conflicting captured values remain unknown.
+`--no-assume=library-macro-values` disables the standard-macro header facts;
+`__cpp_lib_*` facts still use A9. Reports distinguish the facts used and record
+when this part of A9 is off.
+
+`--no-assume=<name>` accepts repeated flags and comma lists. The switchable
+names are `instantiation-effects` (A11), `library-spelled-members` (A12), and
+`library-macro-values` (A9 standard macros). Unknown names are usage errors.
+
 ## Build, license and credits
 
 See [the core/build guide](src/core/README.md) for CMake, LLVM-free tests,

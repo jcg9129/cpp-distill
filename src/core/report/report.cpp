@@ -77,6 +77,9 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
   if (r.assumptions.empty()) out << " none";
   for (const auto& a : r.assumptions) out << ' ' << assumptionLabel(a);
   out << '\n';
+  if (r.assumptions.contains("A9"))
+    out << "resolution assumption: A9 ("
+        << (r.resolution.libraryMacroValuesUsed ? "standard-macro facts used" : "feature-test macro facts only") << ")\n";
   if (r.assumptions.contains("A9")) for (const auto& provenance : r.resolution.libraryProvenance)
     out << "library facts: " << provenance << '\n';
   if (!r.resolution.libraryDisabledReason.empty())

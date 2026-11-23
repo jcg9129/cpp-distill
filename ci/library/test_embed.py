@@ -99,8 +99,12 @@ def test_embed_baseline_round_trip_is_small_and_deterministic():
     names, rows, builds = transitions(data, standard)
     for (key, header), row in rows.items():
         if key.startswith('gcc-'):
-            agreement = get_agreement(data, key[4:], header)
-            assert row == tuple(agreement['defined'].get(n, 0 if n in agreement['absent'] else 1) for n in names)
+            major = key[4:].split('@')[0]
+            feature_agreement = get_agreement(data, major, header)
+            standard_agreement = get_agreement(data, key if '@' in key else major, header)
+            for name, value in zip(names, row):
+                agreement = feature_agreement if name.startswith('__cpp_lib_') else standard_agreement
+                assert value == agreement['defined'].get(name, 0 if name in agreement['absent'] else 1)
         else:
             snapshot = get_snapshot(data, key, header)
             assert all(value == 1 or value == snapshot['macros'].get(n, 0) for n, value in zip(names, row))

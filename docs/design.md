@@ -150,11 +150,15 @@ these, and only these; the report lists each one an output depended on, and
   deletion of unused enums or templates that could otherwise seed an
   evaluation cache. The report lists A7 for every pruned artifact.
 
-- **A9** (L1c, user, 2026-11-18) In default library configuration (§4.3.3),
-  the `__cpp_lib_*` macros defined after any sequence of standard-list includes
-  equal the union of the per-header snapshots, with their recorded values.
+- **A9** (L1c, user, 2026-11-18; widened 2026-11-23) In default library
+  configuration (§4.3.3), the `__cpp_lib_*` macros and the approved standard
+  object-like integer macros (§4.3.3) defined after any sequence of standard-list
+  includes equal the union of the per-header snapshots, with their recorded
+  values: no library header changes such a macro, or a compiler predefine its
+  captured definition depends on, after another header has defined it.
   Different values for a name make that name unknown. The report lists A9
   whenever a resolution relies on these header-derived facts.
+  `--no-assume=library-macro-values` keeps A9 for `__cpp_lib_*` only.
 
 - **A11 (`instantiation-effects`)** (user, 2026-11-20) The program's observable behaviour and its compilation success do not depend on whether the definition of a function friend declared in a template has been instantiated (friend injection / stateful metaprogramming, cf. CWG 2118), nor on the destruction of template parameter objects, of constexpr variables and the temporaries whose lifetime they extend, or of block-scope variables with static or thread storage duration whose declaration control never reached.
   By default every pruned artifact relies on A11; reports print
@@ -194,7 +198,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
-| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11) and `library-spelled-members` (A12) are switchable; any other name is a usage error (exit 1) listing switchable names |
+| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12) and `library-macro-values` (A9 standard macros) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
@@ -607,7 +611,8 @@ Approved 2026-11-18 after two adversarial reviews; see
 [`reviews/2026-11-18-library-feature-macros.md`](reviews/2026-11-18-library-feature-macros.md).
 Part A supplies CI producers, comparisons and diagnostic tooling; part B
 embeds the reviewed baseline and implements resolver header transitions.
-Extended by user decision on 2026-11-22 to **library header integer macros**.
+Extended to **library header integer macros**; A9 widened by user decision on
+2026-11-23 to cover the approved standard object-like integer macros.
 This is an extension of the approved L1c design, with the same include transition,
 default-configuration Boolean, agreement, union rule, invalidation and A9 provenance.
 The embedded universe is `__cpp_lib_*` plus names in
@@ -618,6 +623,11 @@ have presence-only metadata; function-like macros also have presence-only metada
 literals, unary minus, floating literals and expressions are not admitted: the
 motivating `FLT_EVAL_METHOD` captures need only bare `0`/`2` literals. These are
 header facts, separate from the source-entry compiler snapshot and identity registry.
+`--no-assume=library-macro-values` disables all standard-macro header facts,
+including absence and preservation across includes: those names become unknown
+at a standard include as before this extension. `__cpp_lib_*` facts retain A9.
+The report records that the standard-macro assumption is disabled, and its A9
+resolution line distinguishes standard-macro use from feature-test-only use.
 
 **Profile data.** For each profile, CI uses the same snapshot compiler and
 exact `-x c++ -std=<std> <flags>` argv, including ordered macro operations.

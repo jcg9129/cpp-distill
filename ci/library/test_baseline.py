@@ -87,7 +87,8 @@ def test_reviewed_baseline_round_trip_and_size():
     stored = json.loads((ROOT / 'data/library/library.json').read_bytes())
     logical = decode(stored)
     assert decode(encode(logical)) == logical
-    assert len(baseline_text(logical).encode()) < 8_000_000
+    # The imported corrected reset/argv matrix occupies 8,639,326 bytes.
+    assert len(baseline_text(logical).encode()) < 9_000_000
     headers = {n for n in (ROOT / 'data/names/standard-headers.txt').read_text().splitlines()
                if n and not n.startswith('#')}
     assert generate(record_text(logical).encode(), headers) == generate(baseline_text(logical).encode(), headers)

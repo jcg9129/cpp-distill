@@ -340,7 +340,7 @@ struct Engine {
       const LibraryHeader* features = nullptr;
       if (standard && state.defaultLibrary && hit != raw.systemIncludes.end() &&
           hit->found && hit->compilerSystem && options.libraryData) {
-        library = options.libraryData->find(librarySelector, header);
+        if (options.assumeLibraryMacroValues) library = options.libraryData->find(librarySelector, header);
         features = options.libraryData->find(featureLibrarySelector, header);
       }
       for (auto& [name, f] : state) {
@@ -535,9 +535,11 @@ struct Engine {
       const auto key = d.decision == Decision::trueValue ? "true" : d.decision == Decision::falseValue ? "false" : d.decision == Decision::dead ? "dead" : "unknown: " + d.reason;
       ++result.counts[key];
       if (d.decision == Decision::trueValue || d.decision == Decision::falseValue)
-        for (const auto& u : d.external) if (origin(u.fact, FactOrigin::library))
+        for (const auto& u : d.external) if (origin(u.fact, FactOrigin::library)) {
           result.libraryProvenance.insert(std::string(options.libraryData->provenance) + " selector=" +
               (u.name.starts_with("__cpp_lib_") ? featureLibrarySelector : librarySelector));
+          if (!u.name.starts_with("__cpp_lib_")) result.libraryMacroValuesUsed = true;
+        }
       if (d.decision == Decision::unknown) result.unknownInUserCode = true;
     }
     return std::move(result);
