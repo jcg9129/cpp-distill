@@ -106,6 +106,9 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     with case('A13 opt-out and A12 dependency reach the worker and both report formats'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('struct S { S(){} S(int,int){} int operator+(int){return 0;} '
+                                      'S& operator=(int){return *this;} '
+                                      'template<class T> S& operator=(T*){return *this;} '
+                                      'S& operator+=(int){return *this;} '
                                       'int unused(){return 0;} }; int main(){S s;(void)s;}\n')
         selections = [([], True, True),
                       (['--no-assume=unreferenced-overloads'], True, False),
@@ -122,8 +125,11 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                                     cwd=root, capture_output=True, text=True, timeout=120)
             check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
             report = (root / 'report.txt').read_text()
-            check(('S(int,int)' not in result.stdout) == overloads, result.stdout)
-            check(('operator+' not in result.stdout) == overloads, result.stdout)
+            check('S(int,int)' in result.stdout, result.stdout)
+            check('operator=(int)' in result.stdout, result.stdout)
+            check('operator=(T*)' in result.stdout, result.stdout)
+            check(('operator+=' not in result.stdout) == overloads, result.stdout)
+            check(('operator+(int)' not in result.stdout) == overloads, result.stdout)
             check(('int unused' not in result.stdout) == members, result.stdout)
             check(('pruning assumption: A12 library-spelled-members\n' in report) == members, report)
             check(('pruning assumption: A13 unreferenced-overloads\n' in report) == overloads, report)

@@ -192,8 +192,6 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     for (std::size_t j = 0; j < f.rule1Evidence.size(); ++j)
       if (f.rule1Evidence[j] >= n || m.families[f.rule1Evidence[j]].rule1Kind.empty())
         return invalid("invalid rule-1 evidence",field+".rule1Evidence["+std::to_string(j)+"]");
-    if (f.rule1Constructor && (f.rule1Kind.empty() || f.rule1Record >= m.text.size()))
-      return invalid("invalid rule-1 constructor record",field+".rule1Record");
     if (!f.rule1Kind.empty() && (!m.assumeUnreferencedOverloads || f.memberOf == noFamily || f.rule1Declaration >= m.text.size()))
       return invalid("invalid rule-1 declaration",field+".rule1Kind");
     for (std::size_t j = 0; j < f.associatedTypes.size(); ++j) if (f.associatedTypes[j] >= n) return invalid("invalid association",field+".associatedTypes["+std::to_string(j)+"]");
@@ -500,39 +498,21 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     }
   }
   if (!out.disabledReasons.empty()) for (FamilyId id = 0; id < n; ++id) keep(id,"pruning disabled",noFamily);
-  for (;;) {
-    while (!work.empty()) {
-      const auto id = work.front(); work.pop(); const auto& f = m.families[id];
-      if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
-      for (auto member : members[id]) {
-        if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
-        if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
-      }
-      for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
-      for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
-      for (auto target : f.rule1Evidence) keepName(target,"D3e rule 1: overload-sensitive check in " + f.label,id);
-      for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
-      for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
-      for (auto entity : systemUses[id]) system(entity,id);
+  while (!work.empty()) {
+    const auto id = work.front(); work.pop(); const auto& f = m.families[id];
+    if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
+    for (auto member : members[id]) {
+      if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
+      if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
     }
-    // Keep one written constructor identity if all would otherwise disappear.
-    // Do this after closure so an already referenced/protected ctor suffices.
-    bool added = false;
-    if (m.assumeUnreferencedOverloads) {
-      std::map<std::pair<FamilyId,std::size_t>,std::pair<FamilyId,bool>> constructors;
-      for (FamilyId id = 0; id < n; ++id) {
-        const auto& f = m.families[id];
-        if (!f.rule1Constructor || !out.families[f.memberOf].kept) continue;
-        auto [it,fresh] = constructors.emplace(std::pair{f.memberOf,f.rule1Record},std::pair{id,false});
-        (void)fresh;
-        it->second.second |= out.families[id].kept;
-      }
-      for (const auto& [record,state] : constructors) if (!state.second) {
-        keep(state.first,"D3e rule 1: last user-declared constructor",record.first); added = true;
-      }
-    }
-    if (!added) break;
+    for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
+    for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
+    for (auto target : f.rule1Evidence) keepName(target,"D3e rule 1: overload-sensitive check in " + f.label,id);
+    for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
+    for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
+    for (auto entity : systemUses[id]) system(entity,id);
   }
+
   for (FamilyId i = 0; i < n; ++i) {
     std::size_t bytes = 0; for (auto r : m.families[i].ranges) bytes += r.end - r.begin;
     const auto& r = out.families[i];

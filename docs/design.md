@@ -170,48 +170,38 @@ these, and only these; the report lists each one an output depended on, and
   by `--no-assume=library-spelled-members`; only whole-family pruning then remains.
   An unavailable worker raw/expanded header inventory also disables member pruning
   with a reason, without disabling whole-family pruning (§4.7).
-- **A13 (`unreferenced-overloads`)** (user, 2026-11-23) The judge's overload resolution, implicit conversions, constraints, traits, concept checks and class template argument deduction do not select or require a user constructor, operator function or deduction guide that the worker program neither references (including implicit calls and compiler used/referenced flags) nor examines with a relevant trait, concept or unevaluated check.
-  Member pruning never removes destructors; default, copy and move constructors;
-  copy/move assignment; conversion functions; virtual members; operator new/delete
-  and co_await; all comparison operators (`==`, `!=`, `<=>`, `<`, `>`, `<=`, `>=`);
-  defaulted/deleted declarations; inheriting constructors and their bases'
-  constructors; a record's last user-declared constructor (including `=default`
-  and `=delete`); at least one user-provided, explicit or inherited constructor
-  when present before C++20; at least one constexpr non-copy/move constructor
-  when present in any dialect; declarations from macro expansion; or declarations
-  of explicitly instantiated records.
+- **A13 (`unreferenced-overloads`)** (user, 2026-11-23) The judge's overload resolution, implicit conversions, constraints, traits, concept checks and class template argument deduction do not select or require a user operator function or deduction guide that the worker program neither references (including implicit calls and compiler used/referenced flags) nor examines with a relevant trait, concept or unevaluated check.
+  Member pruning never removes constructors of any kind; destructors; any plain
+  `operator=` (including templates, copy/move and other assignments); conversion
+  functions; virtual members; operator new/delete and co_await; comparison
+  operators (`==`, `!=`, `<=>`, `<`, `>`, `<=`, `>=`); defaulted/deleted
+  declarations; macro-produced declarations; declarations of explicitly
+  instantiated records; or member operators that hide a base operator of the
+  same overloaded-operator kind. Compound assignments such as `operator+=`
+  remain eligible for removal.
   Comparison declarations can suppress reversed/rewritten candidates and implicit
   equality generation. Relational operators are conservatively protected too:
   unsuccessful lookup during defaulted comparison synthesis is not captured by
   selected-declaration references.
-  Construction, assignment and conversion checks also witness constructors of
-  records appearing as cv/ref-qualified constructor or assignment parameter types,
-  transitively, including assignment's destination record, instantiated function
-  template signatures and record template arguments (e.g. initializer-list
-  elements). They also walk non-static data members, stripping cv/ref and array
-  extents, including anonymous unions/structs. Assignment checks carry assignment
-  operator evidence as well as constructor evidence through bases and members;
-  revisiting a record with stronger evidence upgrades its cached coverage.
-  The witness walk is bounded to 128 records and 4096 declarations,
-  parameters, bases and template arguments per operand; hitting
-  either bound protects all rule-1 declarations for that check, still conditional
-  on independently retained owners. Selected deduction-guide specializations
-  propagate reference flags to their written template identity.
-  Independently of explicit checks, an implicitly declared or defaulted special
-  member that is deleted protects every constructor and every form of `operator=`
-  (including templates) in its direct/virtual bases and non-static member record
-  types, transitively through their bases/members. These declarations are never
-  individually removed while their owners survive. User-written `=delete` does
-  not trigger this dependency protection. Non-deleted special members need no
-  such protection: removing a non-selected candidate cannot undelete a member
-  that is already non-deleted.
-  The worker uses the parser's Sema to force implicit-member declarations for
-  every complete, non-dependent user record before collecting deletion roots.
-  Dependent patterns cannot be forced; an undeclared implicit special member
-  there conservatively protects any subobject constructor/assignment candidates.
-  Without such candidates this adds no protection. The deletion walk has the
-  same 128-record/4096-declaration bound; exhaustion protects all rule-1
-  declarations in the TU, still without resurrecting dead owners.
+  A hiding operator is protected when any direct, virtual or transitive base
+  declares that operator kind or brings it in with a using-declaration, or the
+  derived record has a using-declaration naming it from a base. Any dependent
+  base conservatively protects the derived operator. The base walk is bounded
+  to 128 records and 4096 declarations/bases; exhaustion protects the operator.
+  Operator/invocability traits, concepts, requires-expressions and unevaluated
+  checks retain conservative witnesses through record bases, member types and
+  template arguments. Construction/assignment traits also supply operator
+  witnesses: constructor and assignment constraints can test those operators.
+  The witness walk is bounded to 128 records and 4096 declarations, bases and
+  template arguments per operand; exhaustion protects all rule-1 declarations for that
+  check. Evidence requires both the check's source and an independently retained
+  owner; it cannot resurrect a dead owner or introduce reverse effect edges.
+  Instantiations propagate evidence to their written declaration identities;
+  selected deduction-guide specializations also propagate reference flags and
+  CTAD evidence to their source guides.
+  Constructors retain the original D3e rule-1 exclusion. The worker does not
+  force implicit-member declarations or inspect constructor/subobject deletion
+  dependencies for A13.
   This does not prevent removal of an unused whole record under the existing rules.
   A13 is enabled by default with A12-enabled member pruning. Reports list
   `A13 unreferenced-overloads` whenever member pruning is enabled with it, even
@@ -1490,12 +1480,12 @@ A unit stays if any of these eight rules applies:
 1. Without A13 (`--no-assume=unreferenced-overloads`), constructors, destructors,
    conversions, operators, deduction guides, or any virtual member (including
    virtualness in known instantiations) are excluded, exactly as before A13.
-   With A13, unreferenced user constructors, operator functions and deduction
+   With A13, unreferenced user operator functions and deduction
    guides may be removed individually unless protected by a relevant retained
    trait, concept or unevaluated check. Implicit calls and compiler used/referenced
    flags count as references, even when the flag originates in discarded code.
-   The structural exclusions listed in A13 always remain, including a surviving
-   record's last user-declared constructor. Rules 4/5 spelling alone do not protect
+   The structural exclusions listed in A13 always remain, including constructors
+   of every kind and every plain `operator=`. Rules 4/5 spelling alone do not protect
    these individual overloads. Check evidence requires both its source and the
    owning record to survive; it cannot resurrect an otherwise dead record.
 2. Any user virtual member anywhere has the same name.
@@ -1715,7 +1705,7 @@ sources and refusal gates still apply. This mode needs A1–A7 and A9 where
 applicable, plus A12 and enabled A13 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The settings are part of serialized worker protocol version 9 and checked as
+The settings are part of serialized worker protocol version 10 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
 model identity distinguishes A11, A12 and A13 flag combinations.
 

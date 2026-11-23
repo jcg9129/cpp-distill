@@ -77,24 +77,6 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     }
     out << "rule1-removed: category=" << kind << " declarations=" << count << " bytes=" << bytes << '\n';
   }
-  std::map<std::string,std::set<std::size_t>> constructorProtections;
-  for (FamilyId id = 0; id < m.families.size(); ++id) {
-    const auto& f = m.families[id];
-    if (!f.rule1Constructor || !r.families[id].kept || !r.families[f.memberOf].kept) continue;
-    auto reason = f.memberBlocker;
-    if (reason.empty()) {
-      auto cause = id;
-      for (std::size_t steps = 0; steps < m.families.size() && r.families[cause].reason == "family aggregation" && r.families[cause].cause != noFamily; ++steps)
-        cause = r.families[cause].cause;
-      reason = r.families[cause].reason;
-      if (reason.starts_with("D3e rule 1: overload-sensitive check")) reason = "D3e rule 1: overload-sensitive check";
-      else if (reason.starts_with("AST:")) reason = "AST reference";
-      else if (reason.starts_with("instantiation effect:")) reason = "instantiation effect";
-    }
-    constructorProtections[reason].insert(f.rule1Declaration);
-  }
-  for (const auto& [reason,declarations] : constructorProtections)
-    out << "rule1-constructors-kept: reason=" << std::quoted(reason) << " declarations=" << declarations.size() << '\n';
   out << "member units kept=" << keptUnits << " removed=" << removedUnits << '\n';
   out << "unique family bytes kept=" << r.keptBytes << " removed=" << r.removedBytes << '\n';
   const auto structural = m.text.size() - r.keptBytes - r.removedBytes;

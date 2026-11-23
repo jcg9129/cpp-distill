@@ -14,6 +14,3 @@ kept Flagged::operator+ |
 removed discarded |
 contains | Base(int, double)
 contains | TemplateBase(int, double)
-report | rule1-constructors-kept: reason="D3e rule 1: inherited constructor base" declarations=4
-report | rule1-constructors-kept: reason="D3e rule 1: structural declaration" declarations=4
-report | rule1-constructors-kept: reason="D3e rule 1: compiler used/referenced evidence" declarations=1

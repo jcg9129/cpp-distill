@@ -22,8 +22,6 @@
 #include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Parse/ParseAST.h"
-#include "clang/Sema/Sema.h"
-#include "clang/Sema/SemaConsumer.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -62,21 +60,22 @@ bool scalarBuiltin(const Decl* d) {
 }
 // Layout and type classification do not select removable overloads. In
 // particular sizeof/alignof must not taint every use of a container template.
-enum Rule1Check : unsigned { constructors = 1, otherOverloads = 2, allOverloads = 3 };
+constexpr unsigned allOverloads = 1;
 unsigned overloadSensitiveTrait(TypeTrait trait) {
   switch (trait) {
   case TT_IsConstructible: case TT_IsNothrowConstructible: case TT_IsTriviallyConstructible:
   case BTT_IsConvertibleTo: case BTT_IsConvertible: case BTT_IsNothrowConvertible:
   case BTT_ReferenceBindsToTemporary: case BTT_ReferenceConstructsFromTemporary:
   case BTT_ReferenceConvertsFromTemporary: case UTT_IsLiteral:
-    return constructors;
+    // Their constraints can still examine removable operators on operands.
+    return allOverloads;
   case BTT_IsAssignable: case BTT_IsNothrowAssignable: case BTT_IsTriviallyAssignable:
-    // Assignment can construct the destination or an operator= parameter.
+    // Plain assignment is protected, but its constraints can examine operators.
     return allOverloads;
   case UTT_IsTriviallyEqualityComparable: case BTT_LtSynthesizesFromSpaceship:
   case BTT_LeSynthesizesFromSpaceship: case BTT_GtSynthesizesFromSpaceship:
   case BTT_GeSynthesizesFromSpaceship:
-    return otherOverloads;
+    return allOverloads;
   case UTT_IsClass: case UTT_IsUnion: case UTT_IsEnum: case UTT_IsEmpty:
   case UTT_IsFinal: case UTT_IsAbstract: case UTT_IsPolymorphic:
   case UTT_IsStandardLayout: case UTT_IsTriviallyCopyable: case UTT_IsTrivial:
@@ -109,8 +108,7 @@ unsigned expressionCheckKinds(const Expr* x) {
   while (!pending.empty()) {
     const auto* s = pending.back(); pending.pop_back();
     if (!s) continue;
-    if (isa<CXXConstructExpr,CXXUnresolvedConstructExpr>(s)) kinds |= constructors;
-    else if (const auto* call = dyn_cast<CallExpr>(s)) {
+    if (const auto* call = dyn_cast<CallExpr>(s)) {
       bool known = false;
       auto callee = [&](const Decl* d) {
         if (const auto* t = dyn_cast<FunctionTemplateDecl>(d)) d = t->getTemplatedDecl();
@@ -120,12 +118,7 @@ unsigned expressionCheckKinds(const Expr* x) {
         if (isa<CXXDestructorDecl>(f)) return; // Always structurally protected.
         if (f->getIdentifier() && f->getName() == "declval" && stdRoot(f->getDeclContext())) return;
         if (f->getReturnType()->isDependentType() || f->getReturnType()->isUndeducedType()) kinds |= allOverloads;
-        if (f->isOverloadedOperator()) kinds |= otherOverloads;
-        for (unsigned i = 0; i < std::min(f->getNumParams(),call->getNumArgs()); ++i) {
-          if (isa<CXXDefaultArgExpr>(call->getArg(i))) continue;
-          auto type = f->getParamDecl(i)->getType().getNonReferenceType();
-          if (type->isRecordType() || (type->isDependentType() && !type->isPointerType())) kinds |= constructors;
-        }
+        if (f->isOverloadedOperator()) kinds |= allOverloads;
       };
       if (const auto* f = call->getDirectCallee()) callee(f);
       else if (const auto* lookup = dyn_cast<UnresolvedLookupExpr>(call->getCallee()->IgnoreParenImpCasts()))
@@ -157,9 +150,6 @@ unsigned sizeofCheckKinds(const UnaryExprOrTypeTraitExpr* x) {
 template<class Map, class Key> unsigned checkedKinds(const Map& map, const Key& key) {
   auto it = map.find(key); return it == map.end() ? 0 : it->second;
 }
-const CXXRecordDecl* elementRecord(ASTContext& context, QualType type) {
-  return context.getBaseElementType(type.getNonReferenceType()).getUnqualifiedType()->getAsCXXRecordDecl();
-}
 struct Extraction {
   PruningModel model;
   CompilerInstance& compiler;
@@ -169,13 +159,7 @@ struct Extraction {
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberGroups;
   std::set<std::string> virtualMemberNames;
   std::set<FamilyId> explicitlyInstantiatedRecords;
-  std::set<std::size_t> inheritedConstructorRecords;
   std::map<const Decl*,FamilyId> rule1Identities;
-  std::set<FamilyId> rule1Assignments;
-  std::set<const FunctionDecl*> ctadConstructors;
-  // One qualifying written identity preserves each constructor-dependent
-  // property; ordinary referenced/structural protection is preferred.
-  std::map<std::pair<std::size_t,bool>,std::set<FamilyId>> constructorProperties;
   std::map<std::size_t,std::vector<FamilyId>> rule1Members; // Written record keys, not owner families.
   std::map<const Decl*,unsigned> checkedTemplates;
   std::map<std::pair<const DeclContext*,std::string>,unsigned> checkedCallGroups;
@@ -341,7 +325,7 @@ struct Extraction {
     const auto* m = dyn_cast<CXXMethodDecl>(f);
     // Lambda/local-record text belongs to its enclosing written declaration.
     if (m && (m->getParent()->isLambda() || m->getParent()->isLocalClass())) return false;
-    return m && (isa<CXXConstructorDecl,CXXDestructorDecl,CXXConversionDecl>(m) ||
+    return m && (isa<CXXDestructorDecl,CXXConversionDecl>(m) ||
                  m->isOverloadedOperator() || m->isVirtual());
   }
   const FunctionDecl* rule1Identity(const FunctionDecl* f) const {
@@ -362,12 +346,6 @@ struct Extraction {
   }
   std::string rule1Category(const FunctionDecl* f) const {
     // Classify written declarations for the rule-1 removal summary.
-    if (const auto* c = dyn_cast<CXXConstructorDecl>(f)) {
-      if (c->isDefaultConstructor() || c->isCopyOrMoveConstructor()) return "protected";
-      if (c->getMinRequiredArguments() <= 1 && c->getNumParams() >= 1)
-        return c->isExplicit() ? "ctor-explicit" : "ctor-implicit-converting";
-      return "ctor-multi-arg";
-    }
     if (isa<CXXDeductionGuideDecl>(f)) return "deduction-guide";
     if (!f->isOverloadedOperator()) return "protected";
     const auto op = f->getOverloadedOperator();
@@ -384,15 +362,55 @@ struct Extraction {
     default: return "operator-other";
     }
   }
+  std::map<std::pair<const CXXRecordDecl*,OverloadedOperatorKind>,bool> hidingOperators;
+  bool hidesBaseOperator(const CXXMethodDecl* method) {
+    if (!method->isOverloadedOperator()) return false;
+    const auto op = method->getOverloadedOperator();
+    const auto* root = method->getParent();
+    const auto key = std::pair{root->getCanonicalDecl(),op};
+    if (auto it = hidingOperators.find(key); it != hidingOperators.end()) return it->second;
+    auto matches = [&](const Decl* decl) {
+      const auto* named = dyn_cast<NamedDecl>(decl);
+      return named && named->getDeclName().getNameKind() == DeclarationName::CXXOperatorName &&
+          named->getDeclName().getCXXOverloadedOperator() == op;
+    };
+    auto inheritedName = [&](const Decl* decl) {
+      return isa<UsingDecl,UsingShadowDecl,UnresolvedUsingValueDecl>(decl) && matches(decl);
+    };
+    // A using-declaration in D can also affect its overload set, including
+    // unresolved dependent using-declarations and operator templates.
+    for (const auto* decl : root->decls()) if (inheritedName(decl))
+      return hidingOperators[key] = true;
+    std::vector<const CXXRecordDecl*> pending{root};
+    std::set<const CXXRecordDecl*> seen;
+    unsigned declarations = 0;
+    while (!pending.empty()) {
+      const auto* record = pending.back(); pending.pop_back();
+      if (!seen.insert(record->getCanonicalDecl()).second) continue;
+      // Bound pathological hierarchies conservatively; this never retains a
+      // dead owner. Direct bases reach virtual and transitive bases as well.
+      if (seen.size() > 128) return hidingOperators[key] = true;
+      const auto* definition = record->getDefinition();
+      if (!definition) return hidingOperators[key] = true;
+      if (record != root) for (const auto* decl : definition->decls()) {
+        if (++declarations > 4096 || matches(decl)) return hidingOperators[key] = true;
+      }
+      for (const auto& base : definition->bases()) {
+        if (++declarations > 4096 || base.getType()->isDependentType()) return hidingOperators[key] = true;
+        const auto* next = base.getType()->getAsCXXRecordDecl();
+        if (!next) return hidingOperators[key] = true;
+        pending.push_back(next);
+      }
+    }
+    return hidingOperators[key] = false;
+  }
   void protectRule1(const FunctionDecl* fn, PruneFamily& f) {
     if (f.rule1Kind.empty()) return;
     bool structural = fn->isDeleted() || fn->isDefaulted();
     if (const auto* m = dyn_cast<CXXMethodDecl>(fn)) {
       structural |= isa<CXXDestructorDecl,CXXConversionDecl>(m) || m->isVirtual() ||
                     m->hasAttr<OverrideAttr>() || m->hasAttr<FinalAttr>() ||
-                    m->isCopyAssignmentOperator() || m->isMoveAssignmentOperator();
-      if (const auto* c = dyn_cast<CXXConstructorDecl>(m))
-        structural |= c->isDefaultConstructor() || c->isCopyOrMoveConstructor() || c->isInheritingConstructor();
+                    m->getOverloadedOperator() == OO_Equal;
     }
     if (fn->isOverloadedOperator()) {
       const auto op = fn->getOverloadedOperator();
@@ -404,22 +422,14 @@ struct Extraction {
       // lookup in defaulted comparison synthesis is not positive AST evidence.
     }
     if (structural) f.memberBlocker = "D3e rule 1: structural declaration";
+    else if (const auto* m = dyn_cast<CXXMethodDecl>(fn); m && hidesBaseOperator(m))
+      f.memberBlocker = "D3e rule 1: hiding base operator";
     else if (fn->isUsed() || fn->isReferenced()) f.memberBlocker = "D3e rule 1: compiler used/referenced evidence";
   }
   void registerRule1(const FunctionDecl* fn, FamilyId id) {
     auto [it,fresh] = rule1Identities.emplace(rule1Identity(fn),id);
     if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
-    if (const auto* method = dyn_cast<CXXMethodDecl>(fn); method && method->getOverloadedOperator() == OO_Equal)
-      rule1Assignments.insert(id);
     protectRule1(fn,model.families[id]);
-    if (const auto* ctor = dyn_cast<CXXConstructorDecl>(fn); ctor && !ctor->isImplicit()) {
-      const auto record = recordKey(ctor->getParent());
-      if (!compiler.getLangOpts().CPlusPlus20 &&
-          (ctor->isUserProvided() || ctor->isExplicit() || ctor->isInheritingConstructor()))
-        constructorProperties[{record,false}].insert(id);
-      if (ctor->isConstexpr() && !ctor->isCopyOrMoveConstructor())
-        constructorProperties[{record,true}].insert(id);
-    }
   }
   void discover(Decl* d) {
     if (!d || d->isImplicit() || !user(d->getBeginLoc())) return;
@@ -535,7 +545,6 @@ struct Extraction {
         // definition. Actual references to the owner still add AST/name edges.
         if (individualRule1(method)) {
           f.rule1Kind = rule1Category(method);
-          f.rule1Constructor = isa<CXXConstructorDecl>(method);
           f.rule1Record = recordKey(method->getParent());
           const FunctionDecl* written = method;
           if (method->getTemplateSpecializationKind() != TSK_ExplicitSpecialization) {
@@ -632,16 +641,6 @@ struct Extraction {
     }
   }
   void partitionMembers() {
-    for (const auto* ctor : ctadConstructors) if (auto it = rule1Identities.find(ctor); it != rule1Identities.end())
-      model.families[it->second].memberBlocker = "D3e rule 1: CTAD evidence";
-    for (const auto& [property,candidates] : constructorProperties) {
-      const auto protectedCtor = std::find_if(candidates.begin(),candidates.end(),[&](auto id) {
-        return !model.families[id].memberBlocker.empty();
-      });
-      if (protectedCtor == candidates.end()) model.families[*candidates.begin()].memberBlocker =
-          property.second ? "D3e rule 1: literal-type constexpr constructor" :
-                            "D3e rule 1: pre-C++20 non-aggregate constructor";
-    }
     // Subtract member spellings before the existing shared-declarator union
     // pass, so keeping a record no longer keeps every method in that record.
     std::vector<EditRange> cuts;
@@ -654,8 +653,6 @@ struct Extraction {
           f.memberBlocker = "D3e rule 2: virtual name clash";
         if (!f.rule1Kind.empty()) {
           if (f.rule1Record != noFamily) rule1Members[f.rule1Record].push_back(&f - model.families.data());
-          if (f.rule1Constructor && inheritedConstructorRecords.contains(f.rule1Record))
-            f.memberBlocker = "D3e rule 1: inherited constructor base";
         }
         if (explicitlyInstantiatedRecords.contains(f.memberOf)) f.memberBlocker = "D3e rule 8: explicitly instantiated record";
       }
@@ -1037,44 +1034,37 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
   bool unresolvedCandidate = false;
   bool evidenceOnly = false;
   void evidence(FamilyId target) {
-    const auto& f = e.model.families[target];
-    if (!(rule1CheckKinds & (f.rule1Constructor ? constructors : otherOverloads))) return;
+    if (!rule1CheckKinds) return;
     if (current != noFamily) e.model.families[current].rule1Evidence.push_back(target);
     else if (systemCurrent != noFamily) e.model.systemEntities[systemCurrent].rule1Evidence.push_back(target);
   }
-  std::map<std::pair<const CXXRecordDecl*,unsigned>,std::vector<FamilyId>> constructorWitnesses;
+  std::map<const CXXRecordDecl*,std::vector<FamilyId>> operatorWitnesses;
   void witnessRecord(const Decl* d) {
     if (!rule1CheckKinds) return;
     if (const auto* t = dyn_cast<ClassTemplateDecl>(d)) d = t->getTemplatedDecl();
     const auto* root = dyn_cast<CXXRecordDecl>(d);
     if (!root) return;
     root = root->getCanonicalDecl();
-    const auto key = std::pair{root,rule1CheckKinds};
-    auto [cached,fresh] = constructorWitnesses.emplace(key,std::vector<FamilyId>{});
+    auto [cached,fresh] = operatorWitnesses.emplace(root,std::vector<FamilyId>{});
     if (fresh) {
-      // Checks depend on conversion into constructor AND assignment parameter
-      // records, even when no candidate is viable. Never add ordinary/effect
-      // edges here: witnesses only protect independently surviving owners.
-      std::vector<std::pair<const CXXRecordDecl*,unsigned>> pending{{root,rule1CheckKinds}};
-      std::map<const CXXRecordDecl*,unsigned> seen;
+      // Walk subobjects and template arguments for operator checks (including
+      // failed checks on a member expression). Never add ordinary/effect edges:
+      // evidence only protects surviving owners.
+      std::vector<const CXXRecordDecl*> pending{root};
+      std::set<const CXXRecordDecl*> seen;
       unsigned declarations = 0;
       bool exhausted = false;
       while (!pending.empty() && !exhausted) {
-        const auto [record,kinds] = pending.back(); pending.pop_back();
-        auto& visitedKinds = seen[record->getCanonicalDecl()];
-        if ((visitedKinds & kinds) == kinds) continue;
-        visitedKinds |= kinds;
+        const auto* record = pending.back(); pending.pop_back();
+        if (!seen.insert(record->getCanonicalDecl()).second) continue;
         if (seen.size() > 128) { exhausted = true; break; }
         const auto* definition = record->getDefinition();
         // A type can name the canonical forward declaration; member units
         // belong to the definition's written record, not that forward spelling.
         if (auto it = e.rule1Members.find(e.recordKey(definition ? definition : record)); it != e.rule1Members.end())
           for (auto member : it->second)
-            if (kinds & (e.model.families[member].rule1Constructor ? constructors : otherOverloads))
-              cached->second.push_back(member);
-        // A parameter such as initializer_list<Arg> can construct Arg while
-        // exposing only pointers in its own constructors. Carry record template
-        // arguments too, just as type() does for a direct checked operand.
+            cached->second.push_back(member);
+        // Carry record template arguments, as for a direct checked operand.
         if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(record)) {
           std::vector<const TemplateArgument*> arguments;
           for (const auto& argument : spec->getTemplateArgs().asArray()) {
@@ -1085,7 +1075,7 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
             const auto* argument = arguments.back(); arguments.pop_back();
             if (argument->getKind() == TemplateArgument::Type) {
               const auto type = argument->getAsType().getNonReferenceType().getUnqualifiedType();
-              if (const auto* next = type->getAsCXXRecordDecl()) pending.emplace_back(next,constructors);
+              if (const auto* next = type->getAsCXXRecordDecl()) pending.push_back(next);
             } else if (argument->getKind() == TemplateArgument::Pack) {
               for (const auto& element : argument->pack_elements()) {
                 if (++declarations > 4096) { exhausted = true; break; }
@@ -1097,38 +1087,17 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
         if (exhausted || !definition) continue;
         for (const auto* decl : definition->decls()) {
           if (++declarations > 4096) { exhausted = true; break; }
-          // Includes the unnamed FieldDecl for an anonymous union/struct.
-          // Assignment checks also depend on the subobject's operator= set.
-          if (const auto* field = dyn_cast<FieldDecl>(decl))
-            if (const auto* next = elementRecord(e.compiler.getASTContext(),field->getType()))
-              pending.emplace_back(next,constructors | (kinds & otherOverloads));
-          const auto* templ = dyn_cast<FunctionTemplateDecl>(decl);
-          const auto* method = dyn_cast_or_null<CXXMethodDecl>(templ ? templ->getTemplatedDecl() : dyn_cast<FunctionDecl>(decl));
-          if (!method || (!isa<CXXConstructorDecl>(method) &&
-              method->getOverloadedOperator() != OO_Equal)) continue;
-          std::vector<const FunctionDecl*> signatures{method};
-          if (templ) {
-            // A dependent written parameter can hide a concrete record in a
-            // deduced/defaulted specialization. Inspect those signatures too.
-            for (const auto* specialization : templ->specializations()) {
-              if (++declarations > 4096) { exhausted = true; break; }
-              signatures.push_back(specialization);
-            }
+          if (const auto* field = dyn_cast<FieldDecl>(decl)) {
+            const auto type = e.compiler.getASTContext().getBaseElementType(
+                field->getType().getNonReferenceType()).getUnqualifiedType();
+            if (const auto* next = type->getAsCXXRecordDecl()) pending.push_back(next);
           }
-          for (const auto* signature : signatures) {
-            for (const auto* parameter : signature->parameters()) {
-              if (++declarations > 4096) { exhausted = true; break; }
-              const auto type = parameter->getType().getNonReferenceType().getUnqualifiedType();
-              if (const auto* next = type->getAsCXXRecordDecl()) pending.emplace_back(next,constructors);
-            }
-            if (exhausted) break;
-          }
-          if (exhausted) break;
         }
+        if (exhausted) continue;
         for (const auto& base : definition->bases()) {
           if (++declarations > 4096) { exhausted = true; break; }
           if (const auto* next = base.getType()->getAsCXXRecordDecl())
-            pending.emplace_back(next,constructors | (kinds & otherOverloads));
+            pending.push_back(next);
         }
       }
       if (exhausted) {
@@ -1139,10 +1108,7 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
           if (!e.model.families[id].rule1Kind.empty()) cached->second.push_back(id);
       }
     }
-    const auto saved = rule1CheckKinds;
-    rule1CheckKinds = allOverloads; // The cached walk already filtered kinds.
     for (auto member : cached->second) evidence(member);
-    rule1CheckKinds = saved;
   }
   void userEdge(FamilyId target, bool potential = false) {
     if (current != noFamily) {
@@ -1501,7 +1467,7 @@ public:
     return true;
   }
   // Keep overload-sensitive witnesses separate from ordinary dependencies.
-  // Construction traits witness constructors, not unrelated operators.
+  // Constructor/assignment constraints can also examine removable operators.
   bool TraverseStmt(Stmt* x) {
     if (!x) return true;
     const auto saved = rule1CheckKinds;
@@ -1845,94 +1811,12 @@ public:
     return true;
   }
 };
-// Deletion is an overload dependency even without a trait or unevaluated check:
-// removing unsuccessful candidates can undelete a defaulted move operation.
-class ImplicitMembers final : public RecursiveASTVisitor<ImplicitMembers> {
-  Extraction& e;
-  Sema& sema;
-  std::set<const CXXRecordDecl*> deletionRoots;
-public:
-  ImplicitMembers(Extraction& extraction, Sema& s) : e(extraction), sema(s) {}
-  bool shouldVisitTemplateInstantiations() const { return true; }
-  bool shouldVisitImplicitCode() const { return true; }
-  bool VisitCXXRecordDecl(CXXRecordDecl* record) {
-    if (!record->isCompleteDefinition() || record->isInvalidDecl()) return true;
-    if (e.user(record->getBeginLoc()) && !record->isDependentType())
-      sema.ForceDeclarationOfImplicitMembers(record);
-    bool deleted = false;
-    for (const auto* method : record->methods()) {
-      const auto* ctor = dyn_cast<CXXConstructorDecl>(method);
-      const bool special = isa<CXXDestructorDecl>(method) ||
-          (ctor && (ctor->isDefaultConstructor() || ctor->isCopyOrMoveConstructor())) ||
-          method->isCopyAssignmentOperator() || method->isMoveAssignmentOperator();
-      deleted |= special && method->isDeleted() && (method->isImplicit() || method->isDefaulted());
-    }
-    // Sema cannot declare concrete special members of dependent patterns.
-    // Only their subobject constructor/assignment candidates are protected;
-    // an absent implicit member with no such candidates has no effect.
-    const bool deferred = record->isDependentType() && e.user(record->getBeginLoc()) &&
-        (record->needsImplicitDefaultConstructor() || record->needsImplicitCopyConstructor() ||
-         record->needsImplicitMoveConstructor() || record->needsImplicitCopyAssignment() ||
-         record->needsImplicitMoveAssignment() || record->needsImplicitDestructor());
-    if (deleted || deferred) deletionRoots.insert(record);
-    return true;
-  }
-  void protect() {
-    for (const auto* root : deletionRoots) {
-      std::vector<const CXXRecordDecl*> pending;
-      std::set<const CXXRecordDecl*> seen;
-      unsigned declarations = 0;
-      bool exhausted = false;
-      auto subobjects = [&](const CXXRecordDecl* definition) {
-        for (const auto* decl : definition->decls()) {
-          if (++declarations > 4096) { exhausted = true; return; }
-          if (const auto* field = dyn_cast<FieldDecl>(decl))
-            if (const auto* next = elementRecord(e.compiler.getASTContext(),field->getType())) pending.push_back(next);
-        }
-        auto bases = [&](auto range) {
-          for (const auto& base : range) {
-            if (++declarations > 4096) { exhausted = true; return; }
-            if (const auto* next = base.getType()->getAsCXXRecordDecl()) pending.push_back(next);
-          }
-        };
-        bases(definition->bases());
-        if (!exhausted) bases(definition->vbases());
-      };
-      subobjects(root);
-      while (!pending.empty() && !exhausted) {
-        const auto* record = pending.back(); pending.pop_back();
-        if (!seen.insert(record->getCanonicalDecl()).second) continue;
-        if (seen.size() > 128) { exhausted = true; break; }
-        const auto* definition = record->getDefinition();
-        if (auto it = e.rule1Members.find(e.recordKey(definition ? definition : record)); it != e.rule1Members.end())
-          for (auto id : it->second)
-            if (e.model.families[id].rule1Constructor || e.rule1Assignments.contains(id))
-              e.model.families[id].memberBlocker = "D3e rule 1: special-member deletion dependency";
-        if (definition) subobjects(definition);
-      }
-      if (exhausted)
-        for (auto& family : e.model.families) if (!family.rule1Kind.empty())
-          family.memberBlocker = "D3e rule 1: special-member deletion walk bound";
-    }
-  }
-};
 // Visit patterns and known instantiations before byte ownership is finalized.
 // Semantic virtualness in an instance can exclude an otherwise nonvirtual pattern.
 class MemberUnits final : public RecursiveASTVisitor<MemberUnits> {
   Extraction& e;
   bool evidenceOnly;
   std::vector<const NamedDecl*> checkScopes;
-  void inherited(const NamedDecl* d, NestedNameSpecifier qualifier) {
-    if (!e.model.assumeUnreferencedOverloads || qualifier.getKind() != NestedNameSpecifier::Kind::Type) return;
-    const auto* type = qualifier.getAsType();
-    const Decl* base = type->getAsCXXRecordDecl();
-    if (!base) if (const auto* spec = dyn_cast<TemplateSpecializationType>(type)) base = spec->getTemplateName().getAsTemplateDecl();
-    const auto* named = dyn_cast_or_null<NamedDecl>(base);
-    if (d->getDeclName().getNameKind() != DeclarationName::CXXConstructorName &&
-        (!named || named->getNameAsString() != d->getNameAsString())) return;
-    const auto id = e.recordKey(base);
-    if (id != noFamily) e.inheritedConstructorRecords.insert(id);
-  }
   void check(unsigned kinds = allOverloads) {
     if (!evidenceOnly) return;
     // A check in a member body belongs to that callable, not every use of
@@ -1980,16 +1864,6 @@ public:
   bool VisitConceptSpecializationExpr(ConceptSpecializationExpr*) { check(); return true; }
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return evidenceOnly; }
-  bool VisitUnresolvedUsingValueDecl(UnresolvedUsingValueDecl* d) { inherited(d,d->getQualifier()); return true; }
-  bool VisitUsingDecl(UsingDecl* d) {
-    inherited(d,d->getQualifier());
-    if (!e.model.assumeUnreferencedOverloads || d->getDeclName().getNameKind() != DeclarationName::CXXConstructorName) return true;
-    for (auto* shadow : d->shadows()) if (const auto* ctor = dyn_cast<CXXConstructorDecl>(shadow->getTargetDecl())) {
-      const auto id = e.recordKey(ctor->getParent());
-      if (id != noFamily) e.inheritedConstructorRecords.insert(id);
-    }
-    return true;
-  }
   bool VisitFunctionDecl(FunctionDecl* f) {
     if (e.model.assumeUnreferencedOverloads) {
       llvm::SmallVector<AssociatedConstraint,4> constraints;
@@ -1999,7 +1873,6 @@ public:
     }
     if (e.model.assumeUnreferencedOverloads) if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f);
         guide && (guide->isUsed() || guide->isReferenced())) {
-      if (const auto* ctor = guide->getCorrespondingConstructor()) e.ctadConstructors.insert(e.rule1Identity(ctor));
       for (auto* source = guide->getSourceDeductionGuide(); source; source = source->getSourceDeductionGuide()) {
         const auto id = e.owner(source);
         if (id != noFamily && !e.model.families[id].rule1Kind.empty())
@@ -2032,20 +1905,14 @@ public:
     return true;
   }
 };
-class Consumer final : public SemaConsumer {
+class Consumer final : public ASTConsumer {
   Extraction& e;
-  Sema* sema = nullptr;
 public:
   Macros& macros;
   explicit Consumer(Extraction& x, Macros& m) : e(x), macros(m) {}
-  void InitializeSema(Sema& s) override { sema = &s; }
-  void ForgetSema() override { sema = nullptr; }
   void HandleTranslationUnit(ASTContext& context) override {
     macros.collectLibraryMemberNames();
     if (e.compiler.getDiagnostics().hasErrorOccurred()) { e.disable("Clang parse error"); return; }
-    ImplicitMembers implicitMembers(e,*sema);
-    if (e.memberUnitsEnabled() && e.model.assumeUnreferencedOverloads)
-      implicitMembers.TraverseDecl(context.getTranslationUnitDecl());
     for (auto* d : context.getTranslationUnitDecl()->decls()) e.discover(d);
     if (e.memberUnitsEnabled()) {
       MemberUnits(e).TraverseDecl(context.getTranslationUnitDecl());
@@ -2054,7 +1921,6 @@ public:
       if (e.model.assumeUnreferencedOverloads)
         MemberUnits(e,true).TraverseDecl(context.getTranslationUnitDecl());
       e.partitionMembers();
-      implicitMembers.protect();
     }
     e.normalizeRanges();
     // Namespaces, redeclarations, overloads and template identities share retention.

@@ -1,0 +1,12 @@
+kept D::operator() | hiding base operator
+kept Transitive::operator() | hiding base operator
+kept TemplateHiding::operator() | hiding base operator
+kept UsingBase::operator() | hiding base operator
+kept UsingDerived::operator() | hiding base operator
+kept Dependent::operator() | hiding base operator
+kept DependentUsing::operator() | hiding base operator
+removed Control::operator() |
+removed Control::operator+= |
+removed Dead |
+removed D::operator+ |
+kept AssignDerived::operator+= | hiding base operator

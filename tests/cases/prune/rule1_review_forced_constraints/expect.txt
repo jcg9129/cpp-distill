@@ -1,0 +1,3 @@
+contains | requires (gate<T>()) Member()
+kept Member::Member |
+report-absent | pruning disabled:

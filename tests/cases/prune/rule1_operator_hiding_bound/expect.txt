@@ -1,0 +1,2 @@
+kept Derived::operator() | hiding base operator
+removed Dead |

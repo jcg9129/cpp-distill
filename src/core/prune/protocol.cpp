@@ -88,7 +88,7 @@ struct Archive {
     field("pinned",x.pinned); field("neverRemoved",x.neverRemoved); field("root",x.root); field("nonMemberOperator",x.nonMemberOperator);
     field("instantiationEffect",x.instantiationEffect);
     field("boundedSystemHooks",x.boundedSystemHooks);
-    field("rule1Kind",x.rule1Kind); field("rule1Constructor",x.rule1Constructor); field("rule1Record",x.rule1Record); field("rule1Declaration",x.rule1Declaration); field("potentialEdges",x.potentialEdges);
+    field("rule1Kind",x.rule1Kind); field("rule1Record",x.rule1Record); field("rule1Declaration",x.rule1Declaration); field("potentialEdges",x.potentialEdges);
     field("rule1Evidence",x.rule1Evidence);
     field("memberOf",x.memberOf); field("memberName",x.memberName); field("memberBlocker",x.memberBlocker);
     field("namespaceUsing",x.namespaceUsing); field("externCDefinition",x.externCDefinition); field("systemSpecialization",x.systemSpecialization);
@@ -114,7 +114,7 @@ struct Archive {
 Result<std::string> serializePruningModel(const PruningModel& m) {
   auto v = validatePruningModel(m); if (!v.ok()) return v.error();
   try {
-    Archive a; a.stream << "DISTILL-PRUNE-9 "; auto copy = m; a.field(copy);
+    Archive a; a.stream << "DISTILL-PRUNE-10 "; auto copy = m; a.field(copy);
     auto s = a.stream.str(); if (s.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit"};
     return s;
   } catch (const Error& e) { return e; }
@@ -123,7 +123,7 @@ Result<PruningModel> parsePruningModel(std::string_view text) {
   if (text.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit at field model, line 1, byte 0"};
   try {
     Archive a; a.reading = true; a.input = text; a.stream.str(std::string(text)); std::string version; a.stream >> version;
-    if (version != "DISTILL-PRUNE-9") { a.path = "version"; a.fail("invalid pruning protocol version"); }
+    if (version != "DISTILL-PRUNE-10") { a.path = "version"; a.fail("invalid pruning protocol version"); }
     PruningModel m; a.field(m); a.stream >> std::ws;
     if (!a.stream.eof()) { a.path = "trailer"; a.fail("trailing pruning protocol bytes"); }
     std::string invalidField;

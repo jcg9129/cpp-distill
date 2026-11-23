@@ -1,0 +1,3 @@
+contains | operator()(unsigned long)
+kept Functor::operator() |
+report | rule1-removed: category=operator() declarations=0

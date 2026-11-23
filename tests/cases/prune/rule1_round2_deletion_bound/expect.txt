@@ -1,4 +1,0 @@
-contains | Live(int, int)
-contains | operator()(int)
-absent | struct Dead
-kept Live::operator() | special-member deletion walk bound

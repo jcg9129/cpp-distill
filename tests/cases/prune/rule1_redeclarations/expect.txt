@@ -1,13 +1,13 @@
-absent | Out(int, double);
-absent | Out::Out(int, double)
+contains | Out(int, double);
+contains | Out::Out(int, double)
 contains | int operator+(int) const;
 contains | Out::operator+(int)
 absent | int operator+(double) const;
 absent | Out::operator+(double)
-absent | Template(int, double);
-absent | Template<T>::Template(int, double)
+contains | Template(int, double);
+contains | Template<T>::Template(int, double)
 contains | Template<T>::operator+(int)
 absent | Template<T>::operator+(double)
 absent | Template<int>::operator+(double)
-report | rule1-removed: category=ctor-multi-arg declarations=4
+report | rule1-removed: category=ctor-multi-arg declarations=0
 report | rule1-removed: category=operator-arithmetic declarations=5

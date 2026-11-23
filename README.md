@@ -313,7 +313,7 @@ when this part of A9 is off.
 names are `instantiation-effects` (A11), `library-spelled-members` (A12),
 `unreferenced-overloads` (A13), and `library-macro-values` (A9 standard macros).
 Unknown names are usage errors. A13 is enabled by default with member pruning:
-it allows removal of unreferenced constructors, operators and deduction guides
+it allows removal of unreferenced operators and deduction guides
 under the [documented exclusions and assumption](docs/design.md#13-trust-assumptions-user-amended-through-2026-11-23).
 `--no-assume=unreferenced-overloads` restores the original D3e rule 1 with
 byte-identical output to the pre-A13 policy. Disabling `library-spelled-members`

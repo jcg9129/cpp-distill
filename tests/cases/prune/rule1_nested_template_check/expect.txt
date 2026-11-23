@@ -1,2 +1,2 @@
-absent | Value(int, int)
-report | rule1-removed: category=ctor-multi-arg declarations=1
+contains | Value(int, int)
+report | rule1-removed: category=ctor-multi-arg declarations=0

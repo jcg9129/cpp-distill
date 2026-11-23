@@ -1,0 +1,7 @@
+kept Assignments::operator= | structural declaration
+contains | operator=(int)
+contains | operator=(long) = delete
+contains | operator=(T*)
+contains | operator=(const T&)
+removed Assignments::operator+= |
+removed Assignments::operator-= |

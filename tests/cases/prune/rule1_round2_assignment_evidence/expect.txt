@@ -1,2 +1,2 @@
 contains | Base& operator=(int)
-kept Base::operator= | overload-sensitive check
+kept Base::operator= | D3e rule 1: structural declaration

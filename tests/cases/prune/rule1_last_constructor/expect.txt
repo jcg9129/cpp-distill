@@ -1,9 +1,8 @@
 contains | Last(int, int)
-absent | Last(int, double)
-report | D3e rule 1: last user-declared constructor
-report | rule1-removed: category=ctor-multi-arg declarations=2
+contains | Last(int, double)
+report | D3e rule 1: excluded kind or virtual
+report | rule1-removed: category=ctor-multi-arg declarations=0
 contains | Nested(char, char)
-absent | Nested(char, double)
+contains | Nested(char, double)
 contains | Local(int, int)
 contains | [](int n) { return n+81; }
-report | rule1-constructors-kept: reason="D3e rule 1: last user-declared constructor" declarations=2

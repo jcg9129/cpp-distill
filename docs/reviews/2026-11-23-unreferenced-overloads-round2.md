@@ -4,6 +4,129 @@ The supplied `.measure/` directory was absent from this worktree, so the
 original investigation and counts below use repository fixtures. The subsequent
 ATL sweep supplied for adoption is recorded next.
 
+## Scope narrowed to operators and guides
+
+The coordinator narrowed A13 after three worker-side review rounds exposed
+constructor dependencies: inherited-constructor hiding, failed conversions in
+checks, implicit special-member deletion, aggregate/literal status, and forced
+implicit declarations instantiating otherwise unused constraints. Constructors
+accounted for only 1,333 B of the measured 65,500 B gain, compared with 35,885 B
+from functor `operator()`, 23,987 B from guides and about 4 KB from other
+operators. These are the adoption sweep's historical measurements, not a rerun
+of the ATL corpus.
+
+A13 now removes only eligible operator functions and deduction guides.
+Constructors of every kind retain the original D3e rule-1 exclusion. Every
+plain `operator=` is protected, including non-special assignments and templates;
+compound assignments such as `operator+=` remain eligible. Comparisons,
+conversions, new/delete/co_await, virtual/defaulted/deleted declarations,
+macro-produced declarations and explicitly instantiated records remain protected.
+An unused whole record can still disappear under the existing pruning rules.
+
+The implementation removes forced implicit-member declaration and its Sema
+consumer, special-member deletion/subobject protection, last/user-provided/
+constexpr constructor guards, inherited-constructor base bookkeeping, and
+constructor-parameter witness traversal. All remaining check evidence is for
+operators and guides. Operator/invocability checks, concepts and requires-
+expressions retain conservative bounded subobject/template-argument witnesses.
+Instantiation-to-pattern identities, source-guide CTAD propagation, owner-gated
+evidence and opt-out/monotonicity checks remain.
+The obsolete constructor flag is removed from worker protocol version 10;
+constructor removal report categories remain present with zero counts, while
+constructor-specific protection counters are dropped.
+
+Member operators also need protection from name hiding. A derived operator is
+kept if any direct, virtual or transitive base declares or imports the same
+operator kind, if the derived record imports it with a using-declaration, or
+if a base is dependent. The bounded base walk fails closed. The new runtime
+fixture keeps the base call operator independently alive: an uncalled derived
+`operator()(long, long)` hides it, so `d(0)` selects a function-pointer conversion.
+Removing that declaration exposes the base operator and changes the result.
+The fixture covers template operators, using-declarations, virtual/transitive
+bases and dependent bases, with removable operator/compound-assignment controls.
+
+Constructor review regressions remain, with unconditional constructor retention
+expectations. New regressions cover inherited `explicit(bool)` hiding, failed
+free-function argument conversions and the otherwise uninstantiated constructor
+constraint. `rule1_round2_deletion_bound` is dropped because it tested only the
+removed deletion-walk fallback, including unrelated functor retention.
+`rule1_review_witness_bound` now uses an operator concept over a deep base
+hierarchy to exercise the still-needed bounded operator witness fallback.
+The constructor properties, deletion controls and all other constructor review
+fixtures keep their original runtime oracles.
+
+Additional operator regressions justify retaining part of the conservative
+check walk. A failed constructor/assignment constraint can test an ambiguous
+`operator+` on a trait operand; those traits must still supply operator evidence
+even though their constructors/assignments cannot be removed. Likewise a failed
+`requires(T t) { t.member + 0; }` check needs operator evidence for the field's
+record type. Removing either witness path changed `1 0` to `1 1` under GCC and
+Clang during narrowing. The operator witness walk therefore still follows
+member types, including cv/ref and array element types, but never emits
+constructor evidence or traverses constructor/assignment parameter signatures.
+
+All 409 Python tests passed: 209 unittest cases and 200 library pytest cases.
+The library modules ran separately with `PYTHONMALLOC=malloc`,
+`MALLOC_ARENA_MAX=2` and a 2.5 GB virtual-memory limit; logs and individual
+results are in `build/python-*.log` and `build/python-results.json`.
+
+All 109 CTest tests passed serially in 997.16 seconds. The full extraction
+suite passed all 146 expectation variants (including runtime oracles and
+opt-out family/physical-declaration monotonicity); the focused A13 run passed
+62 variants. The final `pipeline_cli_d3c` suite took 117.89 seconds, against
+118.90 seconds for the same 14 cases with archived main a653b6c. An earlier
+narrowed build took 112.02 seconds. These runs do not leave reliable headroom
+under 120 seconds, so the aggregate timeout remains 180 seconds; the obsolete
+special-member-analysis explanation was replaced. Per-case timeouts remain
+unchanged. The full CTest log is `build/ctest-all.log`; main timing is in
+`build/d3c-main-timing.json`.
+
+The build used the pinned, release-checksum-verified LLVM 23.1.5 ARM64 SDK,
+assertions, `-O0 -g0`, at most two build jobs, `ulimit -v 5700000` and explicit
+command timeouts. Runtime oracles used GCC 15.2.0 and Clang 22.1.8. SDK files,
+baseline sources/binaries, compiler temporary files and validation artifacts
+stayed inside this worktree. No commit was made.
+
+The default local NLM CLI differential passed on all 120 accepted fixture
+sources, with five matching baseline-gate rejections: `chrono_parse`,
+`generated_line`, `ordinary_pragmas`, `parse_error` and `typical_library`.
+Opt-out output is byte-identical to main a653b6c; enabled retained families and
+declaration bytes are monotone, and NLM output never grows. The run took
+582.03 seconds. Summary: `build/cli-nlm/summary.json`.
+
+Rule-1 removals within surviving records across those 120 accepted fixtures:
+
+| Category | Written declarations | Bytes |
+| --- | ---: | ---: |
+| Constructors (all categories) | 0 | 0 |
+| operator() | 4 | 163 |
+| Comparisons | 0 | 0 |
+| Arithmetic operators (including compound assignments) | 14 | 591 |
+| Other operators | 1 | 40 |
+| Deduction guides | 2 | 62 |
+| Total | 21 | 856 |
+
+All plain `operator=` forms remain protected. NLM rendered savings against
+opt-out total 935 B. The new assignment controls remove two compound assignments
+(108 B), while the hiding fixture removes one call operator and two unrelated
+arithmetic controls (116 B), retaining all required hiding declarations.
+The existing `Checked::operator+` control is now conservatively kept by its
+construction trait; this avoids reintroducing constructor-specific constraint
+dependency analysis. Per-fixture counts and byte differences are in
+`build/scope-counts.json`.
+
+All 18 focused fixtures also passed byte-identical opt-out output and
+family/declaration monotonicity checks in plain and compact modes. Compact
+output never grew. Plain rendering recorded extra `#line` bytes for
+`rule1_all_assignments` (139 B), `rule1_layout_checks` (215 B) and
+`rule1_review_guide_template` (218 B), with monotone retained declaration
+coverage; the long local source paths contribute to marker overhead.
+The focused set includes the seven original A13 controls, all ten new
+narrowing/operator regressions, and the selected-guide template fixture.
+Summaries are in `build/cli-{plain,compact}/summary.json`; all three comparison
+runs exited successfully (`build/comparison-results.json`).
+The later sections document the earlier, broader implementation historically.
+
 ## Adopted round 2: ATL sweep
 
 The user approved round 2 as default-on A13 `unreferenced-overloads` on

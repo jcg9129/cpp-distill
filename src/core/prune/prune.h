@@ -46,7 +46,6 @@ struct PruneFamily {
   // A13 uses a declaration identity rather than a same-name overload unit.
   // Nonempty also on structurally protected rule-1 declarations.
   std::string rule1Kind;
-  bool rule1Constructor = false;
   // Physical record pattern and written declaration; instances share keys.
   // Nested records may share one structural family but have distinct keys.
   std::size_t rule1Record = noFamily, rule1Declaration = noFamily;

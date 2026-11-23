@@ -1,0 +1,3 @@
+contains | explicit(Explicit) Derived(int n)
+contains | Derived(long n)
+kept Derived::Derived<Explicit> |

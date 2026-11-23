@@ -867,7 +867,7 @@ accepts repetition and comma lists; `instantiation-effects`,
 are the switchable names.
 Other names (including assumption IDs) are usage errors (exit 1) listing all
 four names. For A11, A12 and A13, `CliOptions` → `DistillOptions` → `PruningModel`
-carries the setting to the worker. Pruning protocol **9** serializes all three
+carries the setting to the worker. Pruning protocol **10** serializes all three
 flags and the separate overload-check evidence, and the parent rejects a worker
 response that changes a flag. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.
@@ -1423,7 +1423,7 @@ The worker inventories raw included system headers and identifiers emitted by
 the full TU's system macro expansions, including pasted results and user arguments.
 An incomplete inventory disables only member pruning.
 `--no-assume=library-spelled-members` also keeps records whole. The assumption
-flags are immutable protocol-v9 identity fields. Reports list A12 whenever members can be
+flags are immutable protocol-v10 identity fields. Reports list A12 whenever members can be
 pruned, even without a deletion. Units retained with their owner by rules 1–4/8
 share its whole-record effect component and incoming system-dispatch analysis.
 Member spelling is stored separately from namespace-scope names; forward
@@ -1435,16 +1435,17 @@ historical prototype measurements are in
 The obsolete variant sweep script was removed; CI's normal ATL sweep measures D3e.
 
 A13 `unreferenced-overloads` is enabled by default with A12 member pruning.
-It permits individual removal of unreferenced constructors, operator functions
-and deduction guides, with the structural exclusions and check/reference
+It permits individual removal of unreferenced operator functions and deduction
+guides, with the structural exclusions and check/reference
 protections in [the design](../../docs/design.md#13-trust-assumptions-user-amended-through-2026-11-23).
 `--no-assume=unreferenced-overloads` restores original D3e rule 1 exactly,
 including byte-identical output to the pre-A13 policy. Disabling A12 or failing
 the member-inventory gate also disables A13. Both report formats print
 `A13 unreferenced-overloads` whenever member pruning is enabled with it, even
-without a deletion. Reports retain `rule1-removed:` category/byte summaries and
-`rule1-constructors-kept:` effective protection counts for written declarations
-within surviving records; these complement the existing member/family summaries.
+without a deletion. Constructors of every kind and every plain `operator=` are
+protected; compound assignments remain eligible. Reports retain `rule1-removed:`
+category/byte summaries within surviving records; constructor categories remain
+zero. These complement the existing member/family summaries.
 
 CI's `prune_extract_cases` compares enabled and opt-out retention on every
 enabled fixture, including physical declaration coverage. The additional

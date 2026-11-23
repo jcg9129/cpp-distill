@@ -1,2 +1,2 @@
 contains | template<class T, int = 0>
-kept Base::operator= | special-member deletion dependency
+kept Base::operator= | D3e rule 1: structural declaration

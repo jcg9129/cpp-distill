@@ -65,7 +65,7 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-9 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-10 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
@@ -164,12 +164,12 @@ TEST(prune_rule1_evidence_needs_both_source_and_owner) {
 TEST(prune_rule1_keeps_the_old_effect_dispatch_boundary) {
   Model b; b.m.libraryMemberNamesComputed = true; b.m.libraryMemberNames.insert("get");
   const auto owner = b.add("get","struct get {};",FamilyKind::record);
-  const auto member = b.add("get::get","get(int,int){return;}");
+  const auto member = b.add("get::operator+","int operator+(int){return 0;}");
   const auto caller = b.add("caller","void caller(){}");
   const auto dead = b.add("dead","void dead(){}");
   auto& f = b.m.families[member]; f.names.clear(); f.callableNames.clear();
-  f.memberOf = owner; f.memberName = "get"; f.rule1Kind = "ctor-multi-arg";
-  f.rule1Constructor = true; f.rule1Record = b.m.families[owner].ranges.front().begin;
+  f.memberOf = owner; f.memberName = "operator+"; f.rule1Kind = "operator-arithmetic";
+  f.rule1Record = b.m.families[owner].ranges.front().begin;
   f.rule1Declaration = f.ranges.front().begin;
   b.m.families[caller].potentialEdges = {member};
   b.add("main","int main(){caller();}");
@@ -537,18 +537,18 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
   CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
-  CHECK(!parsePruningModel("DISTILL-PRUNE-9").ok());
+  CHECK(!parsePruningModel("DISTILL-PRUNE-10").ok());
   b.m.families[0].edges = {100}; CHECK(!computeRetention(b.m).ok()); b.m.families[0].edges.clear();
   b.m.families[1].ranges = b.m.families[0].ranges; CHECK(!computeRetention(b.m).ok());
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-9 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-10 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-9 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-10 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-9 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-10 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());
