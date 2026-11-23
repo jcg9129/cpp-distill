@@ -26,6 +26,11 @@ std::uint16_t LibraryData::state(const LibraryHeader& h, std::string_view name) 
   if (it == names.end() || *it != name) return 1;
   return h.states[it - names.begin()];
 }
+std::string LibraryData::featureAgreementSelector(const Profile& p) const {
+  auto features = *this;
+  features.exactFlags = false;
+  return features.selector(p, true);
+}
 std::string LibraryData::selector(const Profile& p, bool agreementOnly, std::string* reason) const {
   if (reason) reason->clear();
   if (p.compiler.family != CompilerFamily::gcc ||

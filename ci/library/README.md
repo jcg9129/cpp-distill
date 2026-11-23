@@ -43,6 +43,9 @@ harmless allowlist) for approximate/satisfaction agreement. This rejects both
 borrowing a flagged capture for an unflagged profile and borrowing default values
 for `-m32`/`-mfpmath=387` profiles. Generators 3/4 remain readable with their legacy
 feature-only policy until the widened CI artifact is imported.
+Local satisfaction reruns may retain the legacy coverage specifically for
+`__cpp_lib_*` agreement when exact target/argv coverage fails. The same fallback
+never licenses standard integer values or absences.
 
 DLIB emits integer values normally and `<unsupported>` for recorded noninteger
 replacements, without expanding them in a diagnostic TU. That marker reports

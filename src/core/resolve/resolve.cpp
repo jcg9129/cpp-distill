@@ -56,6 +56,7 @@ struct Engine {
   std::map<std::size_t, SourceLocation> markerAt; // Generated markers by first line.
   PresumedFile presumed; // Of the output, for short markers.
   std::string librarySelector;
+  std::string featureLibrarySelector;
   std::size_t verbatim = 0; // Depth of enclosing demoted blocks.
   Engine(const InlineResult& r, const CompileCommand& c, ConditionEvaluator& e, const ResolveOptions& o)
       : raw(r), cmd(c), evaluator(e), options(o), requirements(o.requirements) {}
@@ -81,6 +82,9 @@ struct Engine {
     if (options.profile && options.libraryData)
       librarySelector = options.libraryData->selector(*options.profile, options.libraryAgreementOnly,
                                                        &result.libraryDisabledReason);
+    featureLibrarySelector = librarySelector;
+    if (options.profile && options.libraryData && options.libraryAgreementOnly && librarySelector.empty())
+      featureLibrarySelector = options.libraryData->featureAgreementSelector(*options.profile);
     if (options.profile) {
       auto inherited = profileRequirements(*options.profile);
       if (!requirements.dialect) requirements.dialect = inherited.dialect;
@@ -333,12 +337,16 @@ struct Engine {
         return h.location == includeLocation && h.spelling == header;
       });
       const LibraryHeader* library = nullptr;
-      if (standard && state.defaultLibrary && !librarySelector.empty() && hit != raw.systemIncludes.end() &&
-          hit->found && hit->compilerSystem && options.libraryData)
+      const LibraryHeader* features = nullptr;
+      if (standard && state.defaultLibrary && hit != raw.systemIncludes.end() &&
+          hit->found && hit->compilerSystem && options.libraryData) {
         library = options.libraryData->find(librarySelector, header);
+        features = options.libraryData->find(featureLibrarySelector, header);
+      }
       for (auto& [name, f] : state) {
         if (name.starts_with("__cpp_lib_") || isStandardMacroName(name)) {
-          const auto value = library ? options.libraryData->state(*library, name) : 1;
+          const auto* facts = name.starts_with("__cpp_lib_") ? features : library;
+          const auto value = facts ? options.libraryData->state(*facts, name) : 1;
           if (value == 0) {
             // Keeping a known binding across this include also relies on the
             // header's absence evidence, and must carry A9 into the report.
@@ -528,7 +536,8 @@ struct Engine {
       ++result.counts[key];
       if (d.decision == Decision::trueValue || d.decision == Decision::falseValue)
         for (const auto& u : d.external) if (origin(u.fact, FactOrigin::library))
-          result.libraryProvenance.insert(std::string(options.libraryData->provenance) + " selector=" + librarySelector);
+          result.libraryProvenance.insert(std::string(options.libraryData->provenance) + " selector=" +
+              (u.name.starts_with("__cpp_lib_") ? featureLibrarySelector : librarySelector));
       if (d.decision == Decision::unknown) result.unknownInUserCode = true;
     }
     return std::move(result);

@@ -839,6 +839,14 @@ scanned-build flags. Thus an unflagged profile cannot borrow `-m32` or
 `-mfpmath=387` values, and a flagged profile cannot borrow a default capture.
 Reproduced snapshots still require their complete exact argv and build identity.
 
+Local satisfaction retains the legacy coverage rule specifically for
+`__cpp_lib_*` when strict generator-5 selection fails. These values already
+require config independence and agreement across every target/argv of the
+major. Rejecting them solely because the local target has no exact capture
+would demote otherwise valid feature decisions (including Codeforces
+`__cpp_lib_to_chars`). Standard integer names retain strict target/ordered-flag
+selection; the feature fallback cannot supply their values or absences.
+
 The embedder enforces a 1,000,000-byte generated-source budget. The complete
 14-build generator-5 input matrix measured on 2026-11-22 produces a 74,900,608-byte
 baseline and 1,654,630 source bytes before integer-only standard-name selection.

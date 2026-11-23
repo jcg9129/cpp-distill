@@ -30,6 +30,9 @@ struct LibraryData {
   const LibraryHeader* find(std::string_view selector, std::string_view header) const;
   std::uint16_t state(const LibraryHeader&, std::string_view name) const;
   std::string selector(const Profile&, bool agreementOnly = false, std::string* reason = nullptr) const;
+  // Feature-only major agreement predates target-sensitive standard values.
+  // Satisfaction may use it across targets, retaining scanned flag coverage.
+  std::string featureAgreementSelector(const Profile&) const;
 };
 const LibraryData& embeddedLibraryData();
 } // namespace distill

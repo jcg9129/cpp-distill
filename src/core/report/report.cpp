@@ -80,7 +80,8 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
   if (r.assumptions.contains("A9")) for (const auto& provenance : r.resolution.libraryProvenance)
     out << "library facts: " << provenance << '\n';
   if (!r.resolution.libraryDisabledReason.empty())
-    out << "library facts: none (" << r.resolution.libraryDisabledReason << ")\n";
+    out << (r.resolution.libraryProvenance.empty() ? "library facts: none (" : "standard library macro facts: unavailable (")
+        << r.resolution.libraryDisabledReason << ")\n";
   if (r.pruningModel && r.retention) {
     auto pruning = renderPruningReport(*r.pruningModel,*r.retention);
     if (pruning.ok()) out << pruning.value();
