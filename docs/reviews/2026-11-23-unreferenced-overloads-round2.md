@@ -33,6 +33,143 @@ to 8 reparses. All 43 flag-protected constructors examined there had real
 references from retained code. Round 2's compiler used/referenced protection
 remains; none of the round 3 logic is adopted.
 
+## Review fixes
+
+The worker-side review was reproduced before changing extraction, against
+35d1ce4. These are worker invariants; A13 only constrains the judge and cannot
+justify changing a locally checked result. The `rule1_review_*` fixtures use
+the existing original/pruned GCC and Clang runtime oracle, now with optional
+`dialect.txt` and `exit.txt` metadata (and compiler/original/pruned diagnostics).
+All original programs print `0` and exit 0.
+
+| Review finding | Unfixed pruned result | Fix |
+| --- | --- | --- |
+| 1, reversed equality suppression | GCC 15 and Clang 22 print `1`, exit 1 | Keep `==`, `!=` and `<=>` structurally. |
+| 2, implicit equality generation | Both print `1`, exit 1 | Same comparison protection, independent of viability or references. |
+| 3, assignability and destination constructors | Both print `1`, exit 1 | Assignment traits witness constructors as well as other overloads. |
+| 4, constructor parameter records | Both print `1`, exit 1 | Recursively witness constructor/assignment parameter records, stripping cv/ref qualifiers. |
+| 5, C++17 aggregate classification | Both print `1`, exit 1 | Preserve one user-provided, explicit or inherited constructor before C++20. |
+| 6, constexpr parameter's literal type | Clang rejects the pruned definition; GCC 15 accepts it | Preserve one constexpr non-copy/move constructor in every dialect. |
+| 7, selected guide template | Already prints `0`, exit 0 with both compilers | Register written guides in the same identity map as methods, so specialization used/referenced flags explicitly reach the written template. Retain the review example as a regression, with an unused guide-template control. |
+
+All seven comparison operators are now protected, including `<`, `>`, `<=`
+and `>=`. This is conservative: defaulted comparison synthesis can depend on
+unsuccessful lookup, which selected-call AST references do not model. Removal
+of a whole unused record remains possible. Functor `operator()` and unused
+deduction guides remain individually removable.
+
+The constructor witness walk also follows assignment operator parameter types
+and bases, and works from a forward declaration's definition. Instantiated
+constructor and assignment template signatures are inspected as well as their
+written patterns:
+a defaulted template argument can supply a concrete record absent from the
+pattern's dependent parameter type. Both additional template-parameter fixtures
+reproduced `0` to `1` changes under GCC and Clang before this extension. A third
+fixture checks the same negative result without any constructor call. Each
+operand walk is bounded to 128 distinct records and 4096 declarations (including
+specialization signatures), parameters, bases and template arguments. Record
+specialization arguments are witnesses too: `initializer_list<Arg>` constructs
+`Arg` elements even though its own constructor signatures only expose pointers.
+A list-construction concept fixture also reproduced `0` to `1` changes under
+both compilers before this extension. If a
+bound is reached, the check witnesses every rule-1 unit, including guides and
+operators. Evidence remains separate from ordinary/effect edges and is gated
+on independently retained owners. The bound fixture checks both the fallback
+and removal of a dead owner.
+
+The expanded fixtures cover cv/ref assignment parameters, standard construction
+and assignment traits, requires/concepts, unevaluated SFINAE checks, forward
+records, all comparison spellings, the traversal bound, C++17/C++20 literal
+constructors, and the conservative C++23 literal guard. A C++23 property fixture
+also verifies that `=default` and `=delete` count as user-declared constructors:
+the structural declaration survives while the other constructor is removed.
+One qualifying constructor is enough for each type-property guard; an already
+protected qualifying declaration is preferred.
+
+The standard assignment fixture exposed another evidence gap:
+`std::is_assignable_v` can have its initializer folded to a boolean before the
+dependency walk. System variable-template specializations now propagate the
+written pattern's check classification to their actual arguments even when
+there is no current user family.
+
+The existing expectation changes are limited to two files:
+
+- `rule1_overloads/expect.txt`: require the unused `Overloads::operator==` to
+  remain and change the comparison-removal report count from 1 to 0.
+- `rule1_evidence/expect.txt`: require `Compared::operator!=` to remain with
+  structural protection rather than be removed.
+
+Existing fixture stdout/exit expectations and opt-out expectations are unchanged.
+The 21 new review fixtures add explicit retention/removal checks and runtime
+oracles, including an unused guide template and functor removal controls.
+
+For the 75 existing fixtures accepted by the local CLI baseline compiler, the
+rule-1 removal counters within surviving records change as follows (counts
+exclude the newly added review fixtures):
+
+| Category | Before declarations / bytes | Fixed declarations / bytes |
+| --- | ---: | ---: |
+| Explicit constructors | 2 / 94 | 2 / 94 |
+| Implicit converting constructors | 1 / 32 | 1 / 32 |
+| Multi-argument constructors | 11 / 291 | 11 / 291 |
+| operator() | 2 / 86 | 2 / 86 |
+| Comparison operators | 2 / 126 | 0 / 0 |
+| Arithmetic operators | 11 / 447 | 11 / 447 |
+| Other operators | 1 / 40 | 1 / 40 |
+| Deduction guides | 1 / 23 | 1 / 23 |
+| Total | 31 / 1,139 | 29 / 1,013 |
+
+NLM rendered savings against opt-out change from 1,326 B to 1,194 B: retaining
+the two declarations adds 126 declaration bytes and 6 indentation/newline bytes.
+The only
+existing fixtures with different removed bytes are `rule1_overloads` (572 to
+515 B) and `rule1_evidence` (69 to 0 B); their respective comparison declarations
+now survive. All 14 constructor removals and all functor/guide removals remain.
+The ATL corpus is absent here, so the adopted 35,885 B functor and 23,987 B guide
+sweep totals were not remeasured; no blanket functor/guide protection was added.
+
+The SDK worker is LLVM 23.1.5; runtime oracles use GCC 15.2.0 and Clang
+22.1.8. The assertion-enabled build uses `-O0 -g0`, at most two build jobs,
+`ulimit -v 5700000` and command timeouts. All SDK downloads, compiler temporary
+files and logs remain inside this worktree.
+
+All 409 Python tooling tests passed: 209 unittest cases across extensions,
+profiles, drift, LLVM CI, release, retry, measurement and matrix smoke tests,
+and 200 library pytest cases. Library modules ran in separate processes;
+the large reviewed-baseline round trip ran with `PYTHONMALLOC=malloc` and
+`MALLOC_ARENA_MAX=2` under `ulimit -v 2500000` after combined runs were killed
+under memory pressure.
+
+All 109 CTest tests passed: the final 107-test batch includes all 122 extraction
+expectation variants (21 new review fixtures), model checks, member review,
+CLI options, pipeline suites and 81 caide cases. Every enabled extraction
+fixture also checks family/provenance and physical declaration coverage against
+opt-out; runtime fixtures compare expected stdout/exit for original and pruned
+programs under both GCC and Clang. The unit suite and `pipeline_cli_d3c` passed
+in isolation after loaded runs hit their existing 120-second deadlines: 97.23 s
+for the unchanged unit executable and 109.69 s for the final D3c CLI rerun.
+No checked-in timeout was increased.
+
+The final NLM CLI differential passed on 96 accepted fixtures (75 existing and
+21 new), with five matching baseline-gate rejections: `chrono_parse`,
+`generated_line`, `ordinary_pragmas`, `parse_error` and `typical_library`.
+Opt-out rendering is byte-identical to archived 35d1ce4 with A13 disabled;
+enabled families/declaration bytes are monotone and NLM output never grows
+against opt-out. The seven existing focused fixtures also pass CSES comparisons
+in plain, NLM and compact rendering; plain marker growth is reported separately.
+Only the two existing outputs listed above differ from 35d1ce4 with A13 enabled.
+
+Reproduction and final logs are under ignored `build/`: `review-before.log`,
+`template-parameters-before.log`, `assignment-template-before.log`,
+`negative-template-before.log`, `list-parameter-before.log`, `ctest-final.log`,
+`ctest-isolated-final.log`, `ctest-d3c-final.log`, `cli-final/summary.json`,
+`focused-results.json`, `python-library-results.json` and `review-counts.json`.
+The before CLI/worker snapshot is in `build/before/`; the final stable snapshot
+is in `build/verified-bin/`. The focused oracle is reproducible with
+`timeout 240s build/current/tests/runner/distill_prune_cases
+build/verified-bin/distill_prune_worker rule1_review` (set `TMPDIR` inside this
+worktree and apply the memory limit above). No commit was made.
+
 ## Original round 2 investigation
 
 The reproduced causes and changes are:

@@ -16,10 +16,10 @@ namespace {
 using namespace distill;
 template<class T> T take(Result<T> r) { if (!r.ok()) throw Error{r.error().message}; return std::move(r.value()); }
 std::string read(const std::filesystem::path& p) { std::ifstream f(p,std::ios::binary); if (!f) throw Error{"cannot read " + pathToUtf8(p)}; return {std::istreambuf_iterator<char>(f),{}}; }
-std::string trim(std::string s) { auto a = s.find_first_not_of(" \t\r"); if (a == s.npos) return {}; return s.substr(a,s.find_last_not_of(" \t\r")-a+1); }
+std::string trim(std::string s) { auto a = s.find_first_not_of(" \t\r\n"); if (a == s.npos) return {}; return s.substr(a,s.find_last_not_of(" \t\r\n")-a+1); }
 }
 int main(int argc, char** argv) {
-  if (argc != 2) return 1;
+  if (argc < 2 || argc > 3) return 1;
   try {
     const auto cwd = std::filesystem::current_path();
     TemporaryDirectory work(".prune-cases-",cwd);
@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
     std::sort(cases.begin(),cases.end()); std::size_t count = 0, failed = 0;
     for (const auto& expectation : cases) {
       const auto path = expectation.parent_path();
+      if (argc == 3 && path.filename().string().find(argv[2]) == std::string::npos) continue;
       PruningModel model; PruningResult retained; bool caseFailed = false; std::string workerDiagnostics;
       auto fail = [&](const std::string& why) {
         std::cerr << "FAIL " << path.filename() << "/" << expectation.filename() << ": " << why << '\n'; caseFailed = true;
@@ -71,6 +72,11 @@ int main(int argc, char** argv) {
             model.parseArgv.insert(model.parseArgv.begin(),{"-isystem",pathToUtf8(header)});
             std::cout << "MODEL " << name << ": local library lacks " << feature << "\n";
           }
+        }
+        if (std::filesystem::exists(path / "dialect.txt")) {
+          const auto dialect = trim(read(path / "dialect.txt"));
+          for (auto& arg : model.parseArgv) if (arg == "-std=" + model.dialect) arg = "-std=" + dialect;
+          model.dialect = dialect;
         }
         PruneWorkerOptions options; options.executable = std::filesystem::absolute(argv[1]); options.temporaryRoot = work.path;
         options.runner = [&](const ProcessSpec& spec) {
@@ -159,6 +165,7 @@ int main(int argc, char** argv) {
             take(renderingInvariant(model,&retained,pruned));
           }
           const auto expected = read(path / "stdout.txt");
+          const auto expectedExit = std::filesystem::exists(path / "exit.txt") ? std::stoi(read(path / "exit.txt")) : 0;
           for (const auto* compiler : {"g++","clang++"}) {
             if (!resolveExecutable(compiler,work.path).ok()) {
               std::cout << "SKIP runtime " << compiler << ": unavailable\n"; continue;
@@ -170,12 +177,12 @@ int main(int argc, char** argv) {
               ProcessSpec spec; spec.cwd = work.path; spec.timeout = std::chrono::seconds(20);
               spec.argv = {compiler,"-std=" + model.dialect,"-O0",pathToUtf8(source),"-o",pathToUtf8(binary)};
               const auto built = take(runProcess(spec));
-              if (built.exitCode || built.timedOut || built.signal) { fail(std::string(compiler) + " runtime build: " + built.stderrText); continue; }
+              if (built.exitCode || built.timedOut || built.signal) { fail(std::string(compiler) + (original ? " original" : " pruned") + " runtime build: " + built.stderrText); continue; }
               spec.argv = {pathToUtf8(binary)}; spec.timeout = std::chrono::seconds(5);
               const auto ran = take(runProcess(spec));
-              if (ran.exitCode || ran.timedOut || ran.signal || ran.stdoutTruncated || ran.stderrTruncated ||
+              if (ran.exitCode != expectedExit || ran.timedOut || ran.signal || ran.stdoutTruncated || ran.stderrTruncated ||
                   ran.stdoutText != expected || !ran.stderrText.empty())
-                fail(std::string(compiler) + (original ? " original" : " pruned") + " runtime output: " + ran.stdoutText + ran.stderrText);
+                fail(std::string(compiler) + (original ? " original" : " pruned") + " runtime exit=" + std::to_string(ran.exitCode) + " output: " + ran.stdoutText + ran.stderrText);
             }
           }
         }

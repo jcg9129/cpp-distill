@@ -69,6 +69,8 @@ unsigned overloadSensitiveTrait(TypeTrait trait) {
   case BTT_ReferenceConvertsFromTemporary: case UTT_IsLiteral:
     return constructors;
   case BTT_IsAssignable: case BTT_IsNothrowAssignable: case BTT_IsTriviallyAssignable:
+    // Assignment can construct the destination or an operator= parameter.
+    return allOverloads;
   case UTT_IsTriviallyEqualityComparable: case BTT_LtSynthesizesFromSpaceship:
   case BTT_LeSynthesizesFromSpaceship: case BTT_GtSynthesizesFromSpaceship:
   case BTT_GeSynthesizesFromSpaceship:
@@ -165,6 +167,9 @@ struct Extraction {
   std::set<std::size_t> inheritedConstructorRecords;
   std::map<const Decl*,FamilyId> rule1Identities;
   std::set<const FunctionDecl*> ctadConstructors;
+  // One qualifying written identity preserves each constructor-dependent
+  // property; ordinary referenced/structural protection is preferred.
+  std::map<std::pair<std::size_t,bool>,std::set<FamilyId>> constructorProperties;
   std::map<std::size_t,std::vector<FamilyId>> rule1Members; // Written record keys, not owner families.
   std::map<const Decl*,unsigned> checkedTemplates;
   std::map<std::pair<const DeclContext*,std::string>,unsigned> checkedCallGroups;
@@ -385,10 +390,28 @@ struct Extraction {
     }
     if (fn->isOverloadedOperator()) {
       const auto op = fn->getOverloadedOperator();
-      structural |= op == OO_New || op == OO_Array_New || op == OO_Delete || op == OO_Array_Delete || op == OO_Coawait;
+      structural |= op == OO_New || op == OO_Array_New || op == OO_Delete || op == OO_Array_Delete || op == OO_Coawait ||
+                    op == OO_EqualEqual || op == OO_ExclaimEqual || op == OO_Spaceship ||
+                    op == OO_Less || op == OO_Greater || op == OO_LessEqual || op == OO_GreaterEqual;
+      // Comparison declarations suppress rewritten/reversed candidates and
+      // implicit equality generation. Also retain relational operators: failed
+      // lookup in defaulted comparison synthesis is not positive AST evidence.
     }
     if (structural) f.memberBlocker = "D3e rule 1: structural declaration";
     else if (fn->isUsed() || fn->isReferenced()) f.memberBlocker = "D3e rule 1: compiler used/referenced evidence";
+  }
+  void registerRule1(const FunctionDecl* fn, FamilyId id) {
+    auto [it,fresh] = rule1Identities.emplace(rule1Identity(fn),id);
+    if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
+    protectRule1(fn,model.families[id]);
+    if (const auto* ctor = dyn_cast<CXXConstructorDecl>(fn); ctor && !ctor->isImplicit()) {
+      const auto record = recordKey(ctor->getParent());
+      if (!compiler.getLangOpts().CPlusPlus20 &&
+          (ctor->isUserProvided() || ctor->isExplicit() || ctor->isInheritingConstructor()))
+        constructorProperties[{record,false}].insert(id);
+      if (ctor->isConstexpr() && !ctor->isCopyOrMoveConstructor())
+        constructorProperties[{record,true}].insert(id);
+    }
   }
   void discover(Decl* d) {
     if (!d || d->isImplicit() || !user(d->getBeginLoc())) return;
@@ -539,6 +562,8 @@ struct Extraction {
     const auto physical = sm.getLineNumber(sm.getMainFileID(),r->begin);
     if (physical && physical <= model.lineMap.size()) f.original = model.lineMap[physical-1];
     model.families.push_back(std::move(f)); declarations.emplace_back(d,id); bind(d,id);
+    if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(base);
+        guide && !model.families[id].rule1Kind.empty()) registerRule1(guide,id);
     // An out-of-line member specialization can have a distinct canonical Decl
     // and no primary function template. Whole-record retention still includes
     // it, even when only the judge instantiates that specialization's class.
@@ -588,9 +613,7 @@ struct Extraction {
     const auto* pattern = record->getTemplateInstantiationPattern();
     const auto at = offset((pattern ? pattern : record)->getBeginLoc());
     if (!f.rule1Kind.empty()) {
-      auto [it,fresh] = rule1Identities.emplace(rule1Identity(method),id);
-      if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
-      protectRule1(method,f); // Union flags/protection across every instantiation.
+      registerRule1(method,id); // Union flags/protection across every instantiation.
     } else {
       auto [it,fresh] = memberGroups.emplace(std::pair{at,f.memberName},id);
       if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
@@ -603,6 +626,14 @@ struct Extraction {
   void partitionMembers() {
     for (const auto* ctor : ctadConstructors) if (auto it = rule1Identities.find(ctor); it != rule1Identities.end())
       model.families[it->second].memberBlocker = "D3e rule 1: CTAD evidence";
+    for (const auto& [property,candidates] : constructorProperties) {
+      const auto protectedCtor = std::find_if(candidates.begin(),candidates.end(),[&](auto id) {
+        return !model.families[id].memberBlocker.empty();
+      });
+      if (protectedCtor == candidates.end()) model.families[*candidates.begin()].memberBlocker =
+          property.second ? "D3e rule 1: literal-type constexpr constructor" :
+                            "D3e rule 1: pre-C++20 non-aggregate constructor";
+    }
     // Subtract member spellings before the existing shared-declarator union
     // pass, so keeping a record no longer keeps every method in that record.
     std::vector<EditRange> cuts;
@@ -1003,6 +1034,100 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     if (current != noFamily) e.model.families[current].rule1Evidence.push_back(target);
     else if (systemCurrent != noFamily) e.model.systemEntities[systemCurrent].rule1Evidence.push_back(target);
   }
+  std::map<std::pair<const CXXRecordDecl*,unsigned>,std::vector<FamilyId>> constructorWitnesses;
+  void witnessRecord(const Decl* d) {
+    if (!rule1CheckKinds) return;
+    if (const auto* t = dyn_cast<ClassTemplateDecl>(d)) d = t->getTemplatedDecl();
+    const auto* root = dyn_cast<CXXRecordDecl>(d);
+    if (!root) return;
+    root = root->getCanonicalDecl();
+    const auto key = std::pair{root,rule1CheckKinds};
+    auto [cached,fresh] = constructorWitnesses.emplace(key,std::vector<FamilyId>{});
+    if (fresh) {
+      // Checks depend on conversion into constructor AND assignment parameter
+      // records, even when no candidate is viable. Never add ordinary/effect
+      // edges here: witnesses only protect independently surviving owners.
+      std::vector<std::pair<const CXXRecordDecl*,unsigned>> pending{{root,rule1CheckKinds}};
+      std::set<const CXXRecordDecl*> seen;
+      unsigned declarations = 0;
+      bool exhausted = false;
+      while (!pending.empty() && !exhausted) {
+        const auto [record,kinds] = pending.back(); pending.pop_back();
+        if (!seen.insert(record->getCanonicalDecl()).second) continue;
+        if (seen.size() > 128) { exhausted = true; break; }
+        const auto* definition = record->getDefinition();
+        // A type can name the canonical forward declaration; member units
+        // belong to the definition's written record, not that forward spelling.
+        if (auto it = e.rule1Members.find(e.recordKey(definition ? definition : record)); it != e.rule1Members.end())
+          for (auto member : it->second)
+            if (kinds & (e.model.families[member].rule1Constructor ? constructors : otherOverloads))
+              cached->second.push_back(member);
+        // A parameter such as initializer_list<Arg> can construct Arg while
+        // exposing only pointers in its own constructors. Carry record template
+        // arguments too, just as type() does for a direct checked operand.
+        if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(record)) {
+          std::vector<const TemplateArgument*> arguments;
+          for (const auto& argument : spec->getTemplateArgs().asArray()) {
+            if (++declarations > 4096) { exhausted = true; break; }
+            arguments.push_back(&argument);
+          }
+          while (!arguments.empty() && !exhausted) {
+            const auto* argument = arguments.back(); arguments.pop_back();
+            if (argument->getKind() == TemplateArgument::Type) {
+              const auto type = argument->getAsType().getNonReferenceType().getUnqualifiedType();
+              if (const auto* next = type->getAsCXXRecordDecl()) pending.emplace_back(next,constructors);
+            } else if (argument->getKind() == TemplateArgument::Pack) {
+              for (const auto& element : argument->pack_elements()) {
+                if (++declarations > 4096) { exhausted = true; break; }
+                arguments.push_back(&element);
+              }
+            }
+          }
+        }
+        if (exhausted || !definition) continue;
+        for (const auto* decl : definition->decls()) {
+          if (++declarations > 4096) { exhausted = true; break; }
+          const auto* templ = dyn_cast<FunctionTemplateDecl>(decl);
+          const auto* method = dyn_cast_or_null<CXXMethodDecl>(templ ? templ->getTemplatedDecl() : dyn_cast<FunctionDecl>(decl));
+          if (!method || (!isa<CXXConstructorDecl>(method) &&
+              method->getOverloadedOperator() != OO_Equal)) continue;
+          std::vector<const FunctionDecl*> signatures{method};
+          if (templ) {
+            // A dependent written parameter can hide a concrete record in a
+            // deduced/defaulted specialization. Inspect those signatures too.
+            for (const auto* specialization : templ->specializations()) {
+              if (++declarations > 4096) { exhausted = true; break; }
+              signatures.push_back(specialization);
+            }
+          }
+          for (const auto* signature : signatures) {
+            for (const auto* parameter : signature->parameters()) {
+              if (++declarations > 4096) { exhausted = true; break; }
+              const auto type = parameter->getType().getNonReferenceType().getUnqualifiedType();
+              if (const auto* next = type->getAsCXXRecordDecl()) pending.emplace_back(next,constructors);
+            }
+            if (exhausted) break;
+          }
+          if (exhausted) break;
+        }
+        for (const auto& base : definition->bases()) {
+          if (++declarations > 4096) { exhausted = true; break; }
+          if (const auto* next = base.getType()->getAsCXXRecordDecl()) pending.emplace_back(next,constructors);
+        }
+      }
+      if (exhausted) {
+        // A bounded walk must fail closed for this check, including operators
+        // and guides. Retention still gates evidence on the owner's survival.
+        cached->second.clear();
+        for (FamilyId id = 0; id < e.model.families.size(); ++id)
+          if (!e.model.families[id].rule1Kind.empty()) cached->second.push_back(id);
+      }
+    }
+    const auto saved = rule1CheckKinds;
+    rule1CheckKinds = allOverloads; // The cached walk already filtered kinds.
+    for (auto member : cached->second) evidence(member);
+    rule1CheckKinds = saved;
+  }
   void userEdge(FamilyId target, bool potential = false) {
     if (current != noFamily) {
       auto& f = e.model.families[current];
@@ -1018,13 +1143,10 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     // arguments/result types are still traversed by type()/argument().
     if (isa<BuiltinTemplateDecl>(d)) return;
     if (const auto* shadow = dyn_cast<UsingShadowDecl>(d)) edge(shadow->getTargetDecl());
+    witnessRecord(d);
     const auto target = e.owner(d);
     if (target != noFamily) {
       if (!evidenceOnly) userEdge(target,unresolvedCandidate && !e.model.families[target].rule1Kind.empty());
-      // Nested records can share their owner's structural family. A witness
-      // for one record must not protect constructors of all its siblings.
-      if (rule1CheckKinds) if (auto it = e.rule1Members.find(e.recordKey(d)); it != e.rule1Members.end())
-        for (auto member : it->second) evidence(member);
       return;
     }
     if (evidenceOnly) return;
@@ -1501,15 +1623,22 @@ public:
     return true;
   }
   bool VisitVarDecl(VarDecl* v) {
-    if (current == noFamily) return true;
+    // A system variable-template initializer can already be folded to bool.
+    // Carry the written pattern's checks to actual arguments even when there
+    // is no user family here (e.g. std::is_assignable_v<X&, int>).
     if (auto* s = dyn_cast<VarTemplateSpecializationDecl>(v)) {
       const auto saved = rule1CheckKinds;
       rule1CheckKinds |= checkedKinds(e.checkedTemplates,e.canonical(s->getSpecializedTemplate()));
-      for (const auto& a : s->getTemplateArgs().asArray()) argument(a,&e.model.families[current].associatedTypes,0);
+      const bool savedEvidence = evidenceOnly;
+      if (current == noFamily) evidenceOnly = true;
+      for (const auto& a : s->getTemplateArgs().asArray())
+        argument(a,current != noFamily ? &e.model.families[current].associatedTypes : nullptr,0);
+      evidenceOnly = savedEvidence;
       rule1CheckKinds = saved;
-      if (e.user(s->getSpecializedTemplate()->getBeginLoc()) && e.owner(s->getSpecializedTemplate()) != noFamily)
+      if (current != noFamily && e.user(s->getSpecializedTemplate()->getBeginLoc()) && e.owner(s->getSpecializedTemplate()) != noFamily)
         e.model.unions.emplace_back(current,e.owner(s->getSpecializedTemplate()));
     }
+    if (current == noFamily) return true;
     if (!v->hasGlobalStorage() || (v->isStaticDataMember() && !v->isThisDeclarationADefinition())) return true;
     const bool inert = (inertType(v->getType()) && safeSystemMacros(v) && inertExpr(v->getInit())) || inertConstexpr(v);
     if (!inert) {

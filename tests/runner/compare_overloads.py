@@ -61,7 +61,9 @@ def main():
                 command += ['--judge', args.judge]
             if mode == 'off':
                 command.append('--no-assume=unreferenced-overloads')
-            command += ['g++', '-std=gnu++23', str(source.resolve())]
+            dialect_file = source.parent / 'dialect.txt'
+            dialect = dialect_file.read_text().strip() if dialect_file.exists() else 'gnu++23'
+            command += ['g++', '-std=' + dialect, str(source.resolve())]
             try:
                 run = subprocess.run(command, capture_output=True, timeout=45)
                 (directory / (mode + '.log')).write_bytes(run.stdout + run.stderr)

@@ -1,0 +1,7 @@
+contains | constexpr Literal(int) {}
+absent | constexpr Literal(int, int)
+contains | Defaulted() = default;
+absent | Defaulted(int)
+contains | Deleted() = delete;
+absent | Deleted(int)
+report | D3e rule 1: literal-type constexpr constructor

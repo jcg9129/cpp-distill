@@ -173,9 +173,26 @@ these, and only these; the report lists each one an output depended on, and
 - **A13 (`unreferenced-overloads`)** (user, 2026-11-23) The judge's overload resolution, implicit conversions, constraints, traits, concept checks and class template argument deduction do not select or require a user constructor, operator function or deduction guide that the worker program neither references (including implicit calls and compiler used/referenced flags) nor examines with a relevant trait, concept or unevaluated check.
   Member pruning never removes destructors; default, copy and move constructors;
   copy/move assignment; conversion functions; virtual members; operator new/delete
-  and co_await; defaulted/deleted declarations; inheriting constructors and their
-  bases' constructors; a record's last user-declared constructor; declarations
-  from macro expansion; or declarations of explicitly instantiated records.
+  and co_await; all comparison operators (`==`, `!=`, `<=>`, `<`, `>`, `<=`, `>=`);
+  defaulted/deleted declarations; inheriting constructors and their bases'
+  constructors; a record's last user-declared constructor (including `=default`
+  and `=delete`); at least one user-provided, explicit or inherited constructor
+  when present before C++20; at least one constexpr non-copy/move constructor
+  when present in any dialect; declarations from macro expansion; or declarations
+  of explicitly instantiated records.
+  Comparison declarations can suppress reversed/rewritten candidates and implicit
+  equality generation. Relational operators are conservatively protected too:
+  unsuccessful lookup during defaulted comparison synthesis is not captured by
+  selected-declaration references.
+  Construction, assignment and conversion checks also witness constructors of
+  records appearing as cv/ref-qualified constructor or assignment parameter types,
+  transitively, including assignment's destination record, instantiated function
+  template signatures and record template arguments (e.g. initializer-list
+  elements). The witness walk is bounded to 128 records and 4096 declarations,
+  parameters, bases and template arguments per operand; hitting
+  either bound protects all rule-1 declarations for that check, still conditional
+  on independently retained owners. Selected deduction-guide specializations
+  propagate reference flags to their written template identity.
   This does not prevent removal of an unused whole record under the existing rules.
   A13 is enabled by default with A12-enabled member pruning. Reports list
   `A13 unreferenced-overloads` whenever member pruning is enabled with it, even
