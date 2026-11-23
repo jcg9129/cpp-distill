@@ -76,6 +76,23 @@ int main() try {
   CHECK(scope.starts_with("gcc-13@"));
   CHECK(embeddedLibraryData().featureAgreementSelector(profile) == "gcc-13");
   CHECK(embeddedLibraryData().find(scope, "cmath") == embeddedLibraryData().find("gcc-13", "cmath"));
+  // Satisfaction reruns use check argv, including the user's optimization
+  // option followed by the judge's -O2. Agreement must survive that duplication.
+  const auto capturedFlags = profile.flags;
+  options.libraryAgreementOnly = true;
+  for (const auto& flags : {std::vector<std::string>{"-O2", "-O2", "-Wall"},
+                           std::vector<std::string>{"-O3", "-O2", "-Wall"}}) {
+    profile.flags = flags;
+    CHECK(embeddedLibraryData().selector(profile, true) == scope);
+    const auto rerun = run("#include <cfloat>\n");
+    CHECK(rerun.decisions.at(0).decision == Decision::falseValue);
+    CHECK(rerun.text.find("#if") == std::string::npos);
+    CHECK(rerun.libraryProvenance == result.libraryProvenance);
+  }
+  profile.flags = {"-O2", "-O3", "-Wall"};
+  unknown("#include <cfloat>\n");
+  profile.flags = capturedFlags;
+  options.libraryAgreementOnly = false;
   const auto* majorFloat = embeddedLibraryData().find("gcc-13", "cfloat");
   CHECK(majorFloat && embeddedLibraryData().state(*majorFloat, "FLT_EVAL_METHOD") == 1);
   const auto capturedEval = profile.snapshotFacts.at("__FLT_EVAL_METHOD__");
@@ -143,6 +160,34 @@ int main() try {
   CHECK(data.selector(profile) == "gcc-13");
   profile.flags = {"-mfpmath=387", "-O2"};
   CHECK(data.selector(profile).empty());
+  const auto selects = [&](const std::vector<std::string_view>& buildFlags,
+                           std::vector<std::string> profileFlags, bool exact = true) {
+    const LibraryBuild captures[]{{"", "13", "13.3.0", "c++23", "x86_64-linux-gnu", "", buildFlags}};
+    auto candidate = profile;
+    candidate.flags = std::move(profileFlags);
+    auto library = data;
+    library.builds = captures;
+    library.exactFlags = exact;
+    return library.selector(candidate) == "gcc-13";
+  };
+  for (const bool exact : {true, false}) {
+    CHECK(selects({"-O2", "-Wall"}, {"-O2", "-O2", "-Wall"}, exact));
+    CHECK(selects({"-O2", "-Wall"}, {"-O3", "-O2"}, exact));
+    CHECK(!selects({"-O2", "-Wall"}, {"-O2", "-O3"}, exact));
+    CHECK(selects({"-O3", "-O2", "-Wall"}, {"-O2"}, exact));
+    CHECK(!selects({"-O2", "-O3", "-Wall"}, {"-O2"}, exact));
+    CHECK(!selects({"-O2", "-Wall"}, {"-Oother", "-O2"}, exact));
+  }
+  for (const auto level : {"-O", "-O0", "-O1", "-O2", "-O3", "-O42", "-Os", "-Ofast", "-Og", "-Oz"}) {
+    CHECK(selects({"-O2", "-Wall"}, {level, "-O2"}));
+    CHECK(selects({level}, {"-O2", level}));
+    CHECK(selects({"-fno-inline", level}, {"-O2", "-fno-inline", level}));
+    CHECK(!selects({level, "-fno-inline"}, {"-O2", "-fno-inline", level}));
+  }
+  for (const auto flag : {"-Oother", "-O2extra", "-O-1", "-O2.0", "-O²", "-O٢"}) {
+    CHECK(!selects({"-O2"}, {flag, "-O2"}));
+    CHECK(selects({flag, flag, "-O2"}, {flag, "-O3", flag, "-O2"}));
+  }
   if (test::failures) return 1;
   std::cout << "library macro capture/resolver regression passed\n";
   return 0;

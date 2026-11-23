@@ -3,6 +3,7 @@
 import argparse
 from difflib import unified_diff
 from pathlib import Path
+import re
 import sys
 import tempfile
 from time import perf_counter
@@ -16,7 +17,7 @@ from baseline import canonical, digest, delta_sets, baseline_text, decode
 
 def harmless_flag(flag):
     # Keep aligned with LibraryData::selector. In particular -Wp, can write
-    # macros, and optimization options change compiler predefines.
+    # macros, and the last optimization level changes compiler predefines.
     return (flag.startswith('-W') and not flag.startswith('-Wp,') or
             flag.startswith(('-g', '-fdiagnostics-', '-fconstexpr-depth=',
                              '-fconstexpr-cache-depth=', '-fconstexpr-loop-limit=',
@@ -27,8 +28,19 @@ def standard_scope(build):
     triple = build['triple'].split('-')
     if len(triple) >= 4 or len(triple) == 3 and triple[-1] == 'mingw32':
         del triple[1]
+    # Keep aligned with LibraryData::selector: retain only the last -O level
+    # at its own position. Explicit -f options remain relevant in any order.
+    flags = []
+    seen_optimization = False
+    for flag in reversed(build['flags']):
+        if re.fullmatch(r'-O(?:[0-9]+|s|fast|g|z)?', flag):
+            if seen_optimization:
+                continue
+            seen_optimization = True
+        if not harmless_flag(flag):
+            flags.append(flag)
     return (build['major'], build['std'], '-'.join(triple),
-            tuple(f for f in build['flags'] if not harmless_flag(f)))
+            tuple(reversed(flags)))
 
 
 def merge(reports, expected, progress=None):

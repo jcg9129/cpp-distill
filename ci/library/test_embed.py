@@ -10,7 +10,7 @@ import pytest
 
 from audit import classify, VERSION
 from embed import generate, transitions, ROOT, MAX_SOURCE_BYTES
-from merge import merge, baseline_text, get_agreement, get_snapshot
+from merge import merge, baseline_text, get_agreement, get_snapshot, standard_scope, harmless_flag
 from member_inventory import inventory
 from baseline import decode, record_text
 
@@ -227,6 +227,33 @@ def test_embed_standard_integer_values_agreement_and_reproduced_argv():
     data = combined(standard_report(), standard_report('other', reproduced=False))
     _, rows, _ = transitions(data, {'cfloat'})
     assert rows['gcc-14', 'cfloat'] == ('0',)
+
+
+@pytest.mark.parametrize('level', ['-O', '-O0', '-O1', '-O2', '-O3', '-O42',
+                                  '-Os', '-Ofast', '-Og', '-Oz'])
+def test_standard_scope_keeps_only_last_optimization_level(level):
+    build = report()
+    build['flags'] = [level, '-O2', '-Wall']
+    assert standard_scope(build)[-1] == ('-O2',)
+    build['flags'] = ['-O2', '-fno-inline', level, '-Wall']
+    assert standard_scope(build)[-1] == ('-fno-inline', level)
+    build['flags'] = [level, '-fno-inline', '-O2', '-fno-inline']
+    assert standard_scope(build)[-1] == ('-fno-inline', '-O2', '-fno-inline')
+
+
+@pytest.mark.parametrize('flag', ['-Oother', '-O2extra', '-O-1', '-O2.0', '-O²', '-O٢'])
+def test_standard_scope_preserves_non_level_optimization_spellings(flag):
+    build = report()
+    build['flags'] = [flag, '-O3', flag, '-O2', '-Wall']
+    assert standard_scope(build)[-1] == (flag, flag, '-O2')
+
+
+def test_standard_scope_current_build_keys_unchanged():
+    data = json.loads((ROOT / 'data/library/library.json').read_bytes())
+    for build in data['builds'].values():
+        # The previous scope key kept every non-harmless flag in order.
+        old_flags = tuple(f for f in build['flags'] if not harmless_flag(f))
+        assert standard_scope(build)[-1] == old_flags
 
 
 def test_standard_scopes_separate_native_target_and_ordered_argv():
