@@ -6,14 +6,14 @@ from pathlib import Path
 import re
 import sys
 
-from merge import canonical, get_agreement, get_classification, get_snapshot
+from merge import canonical, digest, get_agreement, get_classification, get_snapshot, standard_scope
 from audit import INTEGER, library_macro
 from member_inventory import validate_names
 from baseline import decode, record_text
 
 ROOT = Path(__file__).resolve().parents[2]
-# Full 14-build generator-5 matrix: 916,768 bytes after integer-only
-# standard-name selection (1,654,630 before). Leave ~9% measured headroom.
+# Reviewed baseline: 912,724 bytes. The corrected 14-build reset/argv
+# projection emits 989,083 bytes; share scoped selector spellings below.
 MAX_SOURCE_BYTES = 1_000_000
 VALUE = INTEGER
 NAME = re.compile(r'[A-Za-z_][A-Za-z_0-9]*\Z')
@@ -69,8 +69,8 @@ def transitions(data, standard):
         require(isinstance(data[table], dict) and bool(data[table]), 'empty or malformed ' + table)
         for key, record in data[table].items():
             content = macro_set(key, set()) if table == 'macro_sets' else record
-            digest = hashlib.sha256(canonical(content).encode()).hexdigest()[:16]
-            require(key == digest, 'bad content address in ' + table)
+            address = hashlib.sha256(canonical(content).encode()).hexdigest()[:16]
+            require(key == address, 'bad content address in ' + table)
     for record in data['macro_classifications'].values():
         classification(record)
     for root in data['classifications'].values():
@@ -128,6 +128,31 @@ def transitions(data, standard):
             a = get_agreement(data, major, header)
             if standard_header(header, standard):
                 rows['gcc-' + major, header] = tuple(a['defined'].get(n, 0 if n in a['absent'] else 1) for n in names)
+    scopes = data.get('standard_scopes', {})
+    require(not scopes or data['generator'] >= 5, 'standard scopes require generator 5')
+    for selector, scope in scopes.items():
+        keys = scope['builds']
+        require(bool(keys) and keys == sorted(set(keys)), 'invalid standard scope builds')
+        inputs = standard_scope(data['builds'][keys[0]])
+        require(selector == 'gcc-' + inputs[0] + '@' + digest(inputs)[:16] and
+                keys == sorted(k for k, b in data['builds'].items() if standard_scope(b) == inputs),
+                'standard scope does not match target/dialect/argv')
+        roots = data['root_classifications'][scope['roots']]
+        agreements = data['root_agreements'][scope['agreement']]
+        require(roots.keys() == agreements.keys(), 'incomplete standard scope agreement')
+        for header in roots:
+            get_classification(data, selector, header)
+            a = get_agreement(data, selector, header)
+            require(all(not n.startswith('__cpp_lib_') for n in
+                        (*a['defined'], *a['absent'], *a['unknown'])), 'feature in standard scope')
+            base = rows.get(('gcc-' + inputs[0], header))
+            if base is not None:
+                row = tuple(old if n.startswith('__cpp_lib_') else
+                            a['defined'].get(n, 0 if n in a['absent'] else 1)
+                            for n, old in zip(names, base))
+                # C++ lookup falls back to the major row for identical headers.
+                if row != base:
+                    rows[selector, header] = row
     for key, build in sorted(data['builds'].items()):
         require(build['schema'] == 2 and build['generator'] == data['generator'] and build['build'] == key and
                 isinstance(build['reproduced'], bool), 'invalid build metadata')
@@ -162,8 +187,16 @@ def transitions(data, standard):
             require(isinstance(build['provenance']['build'], str), 'invalid build provenance')
         # Agreement coverage needs every scanned build, including approximate
         # profiles and extension scans. Only reproduced profiles have snapshots.
+        scope = build.get('standard_scope', '')
+        require(not scope or scope in scopes and key in scopes[scope]['builds'], 'invalid build standard scope')
+        require(all(key not in s['builds'] or scope == k for k, s in scopes.items()), 'missing build standard scope')
+        inputs = build.get('standard_inputs', {})
+        require(isinstance(inputs, dict) and (not inputs or data['generator'] >= 5) and
+                all(NAME.fullmatch(n) and (v is None or isinstance(v, str) and
+                    re.match(r'#define ' + re.escape(n) + r'(?:\s|\(|$)', v)) for n, v in inputs.items()),
+                'invalid standard compiler inputs')
         builds.append((key if own else '', major, build['gcc'], build['std'], build['triple'],
-                       build['provenance']['build'] if own else '', build['flags']))
+                       build['provenance']['build'] if own else '', scope, inputs, build['flags']))
     require(rows, 'no library transitions')
     return names, rows, builds
 
@@ -247,18 +280,28 @@ def generate(raw, standard):
         out.append('constexpr std::uint16_t s' + str(i) + '[] = {' +
                    ','.join(str(indexes[v] if isinstance(v, str) else v) for v in row) + '};'
                    if row else 'constexpr std::array<std::uint16_t,0> s' + str(i) + '{};')
+    # Scoped selectors repeat across headers. Share their spelling while keeping
+    # legacy baseline output byte-identical and preserving the 1 MB source cap.
+    selectors = {s: 'q' + str(i) for i, s in enumerate(sorted({s for s, _ in rows if '@' in s}))}
+    for selector, symbol in selectors.items():
+        out.append('constexpr std::string_view ' + symbol + '=' + quote(selector) + ';')
     out.append('constexpr LibraryHeader headers[] = {')
     for (selector, header), row in sorted(rows.items()):
-        out.append('{' + quote(selector) + ',' + quote(header) + ',s' + str(record_ids[row]) + '},')
+        out.append('{' + selectors.get(selector, quote(selector)) + ',' + quote(header) + ',s' + str(record_ids[row]) + '},')
     out.append('};')
     for i, b in enumerate(builds):
         # GCC accepts zero-sized arrays only as an extension; an empty span is portable.
         if b[-1]:
             out.append('constexpr std::string_view f' + str(i) + '[] = {' + ','.join(map(quote, b[-1])) + '};')
+        if b[-2]:
+            out.append('constexpr LibraryInput r' + str(i) + '[] = {' +
+                       ','.join('{' + quote(n) + ',' + quote(v or '') + '}' for n, v in sorted(b[-2].items())) + '};')
     if builds:
         out.append('constexpr LibraryBuild builds[] = {')
     for i, b in enumerate(builds):
-        out.append('{' + ','.join(map(quote, b[:-1])) + ',' + ('f' + str(i) if b[-1] else '{}') + '},')
+        out.append('{' + ','.join(map(quote, b[:-3])) + ',' + ('f' + str(i) if b[-1] else '{}') +
+                   (',' + quote(b[-3]) if b[-3] or b[-2] else '') +
+                   (',r' + str(i) if b[-2] else '') + '},')
     provenance = (f'ci/library generator={data["generator"]} schema=2 embed=1 sha256:' + hashlib.sha256(source_raw).hexdigest())
     if builds:
         out.append('};')

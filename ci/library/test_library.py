@@ -194,6 +194,7 @@ def report(build='a', value='1L', status='ok', independent=True):
     if not independent:
         text = '#if _GLIBCXX_HAS_GTHREADS\n' + text + '\n#endif'
     return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
+                std='c++23', triple='x86_64-linux-gnu', flags=[],
                 member_inventory=inventory({'0/charconv': text}),
                 headers={'charconv': dict(status=status, macros={} if value is None else {'__cpp_lib_test': value})},
                 audit=classify({'0/charconv': text}, (), roots=['charconv']))
@@ -615,6 +616,7 @@ def trust_files():
 def trust_report(files, build='a', hosted='1', present=True):
     audit_ = classify(files, (), roots=['charconv', 'syncstream', 'thread'])
     data = dict(schema=2, generator=VERSION, build=build, major='15', gcc='15.2.0',
+                std='c++23', triple='x86_64-linux-gnu', flags=[],
                 member_inventory=inventory(files),
                 headers={'charconv': dict(status='ok', macros={'__cpp_lib_to_chars': '201611L'})},
                 audit=audit_, observations=dict(hosted=hosted,
@@ -787,6 +789,7 @@ def test_fourteen_build_compact_size_and_classifications_survive_sharing():
                                        for n, v in values.items()}
             roots[header] = dict(macros=source_records[key], taint=[])
         reports.append(dict(schema=2, generator=VERSION, build=f'build-{i}', major=major,
+                            std='c++23', triple='x86_64-linux-gnu', flags=[],
                             member_inventory=inventory({}),
                             headers={h: dict(status='ok', macros=values) for h in headers},
                             audit=dict(generator=VERSION, macros=dict.fromkeys(names, []), roots=roots)))
@@ -901,6 +904,49 @@ def test_standard_macro_compiler_alias_and_float_header_reset():
     changed['0/cfloat'] += '\n#include <other>'
     entry = classify(changed, predefines, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
     assert all(not p['independent'] for p in entry['pairs'].values())
+
+
+def test_float_reset_with_forwarding_fallback_keeps_all_real_inputs():
+    files = {'0/cfloat': '#include <float.h>\n#if __cplusplus >= 201103L\n'
+                         '#ifndef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#endif\n#endif',
+             '1/float.h': '#undef FLT_EVAL_METHOD\n#ifdef __STDC_WANT_IEC_60559_TYPES_EXT__\n'
+                          '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD_TS_18661_3__\n#else\n'
+                          '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#endif'}
+    predefines = {'__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ 0',
+                  '__FLT_EVAL_METHOD_TS_18661_3__': '#define __FLT_EVAL_METHOD_TS_18661_3__ 0'}
+    result = classify(files, predefines, roots=['cfloat'])
+    entry = result['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert entry['pairs']['0']['independent']
+    assert entry['pairs']['0']['dependencies'] == ['__FLT_EVAL_METHOD_TS_18661_3__',
+        '__FLT_EVAL_METHOD__', '__STDC_WANT_IEC_60559_TYPES_EXT__', '__cplusplus']
+    assert not entry['independent']  # A reset still cannot license absence.
+    assert result['macros']['FLT_EVAL_METHOD'][1]['value'] is None
+    # Missing/native/overridden aliases and locally written opt-ins still block.
+    for blocked, extra in [({'__FLT_EVAL_METHOD__'}, ''),
+                           ({'__STDC_WANT_IEC_60559_TYPES_EXT__'}, ''),
+                           (set(), '\n#define __STDC_WANT_IEC_60559_TYPES_EXT__ 1')]:
+        changed = dict(files)
+        changed['1/float.h'] += extra
+        e = classify(changed, predefines, blocked, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+        assert not e['pairs']['0']['independent']
+    # A later undef in any file remains a possible final write.
+    changed = dict(files, **{'2/other': '#undef FLT_EVAL_METHOD'})
+    changed['0/cfloat'] += '\n#include <other>'
+    e = classify(changed, predefines, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert not e['pairs']['0']['independent']
+
+
+@pytest.mark.parametrize('definitions', [
+    '#if SWITCH\n#define FLT_EVAL_METHOD 0\n#endif',
+    '#if A\n#define FLT_EVAL_METHOD 0\n#elif B\n#define FLT_EVAL_METHOD 0\n#endif',
+    '#define FLT_EVAL_METHOD 0\n#undef FLT_EVAL_METHOD',
+    '#define FLT_EVAL_METHOD (0)',
+])
+def test_uncovered_reset_or_unsupported_definition_stays_blocked(definitions):
+    entry = classify({'0/cfloat': '#include <earlier>\n#undef FLT_EVAL_METHOD\n' + definitions,
+                      '0/earlier': '#define FLT_EVAL_METHOD 0'},
+                     {'SWITCH', 'A', 'B'}, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert not any(p['independent'] for p in entry['pairs'].values())
 
 
 def test_standard_macro_capture_uses_exact_profile_argv_and_merge_disagrees(tmp_path):

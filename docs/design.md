@@ -695,13 +695,38 @@ dependencies so reproduced snapshots cannot hide native inputs behind them. No w
 undef/redefine sequences retain the final compiler definition; command/startup
 writes still revoke compiler-input status.
 
-GCC `float.h` explicitly undefs `FLT_EVAL_METHOD` before its definitions. For a
-standard-list macro only, a prefix of undefinitions preceding every definition
-in its sole writer file may be ignored for **observed positive literal pairs**.
-Every remaining definition and condition must still pass the audit. All raw
-writes and per-root `reset_prefixes` remain in evidence. A later undefinition,
-another writer file or unsupported replacement invalidates the pairs. This rule
-does not prove absence/identity for a header that resets the name.
+GCC `float.h` explicitly undefs `FLT_EVAL_METHOD` before its definitions, and
+`cfloat` adds a fallback definition in another file. For a standard-list macro
+only, the established sole-writer initial-undef rule licenses **observed positive
+literal pairs**. When there are additional writer files, a reset prefix may
+also be ignored when subsequent definitions in that same file cover every reset
+path. The additional proof resolves complementary lexical branch atoms; it
+does not evaluate configuration expressions. Other writer files are audited
+separately. Every remaining definition and condition must still pass the audit.
+All raw writes and per-root `reset_prefixes` remain in evidence. A later undef,
+an uncovered reset path or unsupported replacement still invalidates the pairs.
+This rule does not prove absence/identity for a header that resets the name.
+
+Standard integer agreement additionally partitions each major's captures by
+compatible target triple, dialect and ordered non-harmless argv. All captures
+in that partition must independently justify the value; every capture of the
+major must still observe the same value/presence with an available header. Thus a native
+MinGW Timus capture cannot block or license a CSES Linux `-O2` value. Native
+compiler inputs remain untrusted, including both evaluation-method predefines.
+Scoped refinement adds positive values only; absence/identity proofs retain the
+existing major-wide rules, including omitted-write blockers.
+The compact baseline retains these optional `standard_scopes`, their root
+classifications/agreements and each build's `standard_scope`. Feature macros
+continue to use the complete major matrix. At embedding, a scoped row combines
+its standard values with the existing major feature agreement; identical rows
+fall back to the major row. The selector checks target, dialect and exact ordered
+non-harmless flags before selecting a scope. Each build's `standard_inputs`
+also records compiler definitions and source-entry absences needed by approved
+standard facts. The selector compares these with the profile's raw snapshot
+compiler facts (including provenance), without promoting them to general
+source-entry facts. Default-library invalidation still protects against later
+reserved-name or standard-macro writes. Old baselines without these fields keep
+their existing major agreement and selection behavior.
 
 The embedded candidate allowlist in `ci/library/audit.py` is exactly
 `_GLIBCXX_FLOAT_IS_IEEE_BINARY32` and `_GLIBCXX_DOUBLE_IS_IEEE_BINARY64`.
@@ -811,21 +836,23 @@ acyclic base-plus-delta records. One table entry occupies one JSON line. The
 format and expansion helpers are documented in `ci/library/README.md`; compact
 records are reviewable without duplicating library-wide evidence for every
 header/build. An approximate profile may use a positive (H, name, value) only
-if that literal pair is independent for H in every build of its major and all
-snapshots agree. All dialects/flags participate. Absence requires all possible
+if that literal pair is independent for H in every participating build and all
+snapshots agree. Features use the entire major; standard names use the compatible
+target/dialect/ordered-argv partition and checked snapshot inputs described above.
+Absence requires all possible
 definitions reachable from H to be independent; a complete untainted closure
 with no definition also proves absence. Unknown, dependent, unavailable or
 disagreeing entries remain explicit. A reproduced profile uses its own snapshot,
 including build-dependent facts, subject to the native model's uncertainty.
 
 Part B generates a compact, interned table at CMake configuration time and
-rejects missing/malformed baseline data. It embeds per-major agreement and
+rejects missing/malformed baseline data. It embeds per-major/scoped agreement and
 per-reproduced-profile snapshots for standard-list headers, rather than full
 JSON. Reproduced lookup checks the profile's recorded build/command identity;
-native-dependent entries remain unknown. Local satisfaction reruns use major
+native-dependent entries remain unknown. Local satisfaction reruns use audited
 agreement, since compiler observations alone do not reproduce a named judge's
 library build. Reports include generator/schema, the baseline SHA-256 and the
-selected profile build or GCC major when a resolved decision uses a fact.
+selected profile build, GCC major or standard scope when a resolved decision uses a fact.
 Major agreement (including satisfaction reruns) requires a dialect scanned for
 that major and one scanned build of that major and dialect containing every
 profile/configuration flag outside the explicit harmless

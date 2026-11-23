@@ -543,7 +543,9 @@ TEST(resolve_library_all_bundled_profiles) {
     std::string reason;
     const auto selector = data.selector(p, false, &reason);
     CHECK(!selector.empty()); CHECK(reason.empty());
-    CHECK_EQ(selector, p.reproduced ? "profile-" + p.name : "gcc-" + std::to_string(p.compiler.major));
+    if (p.reproduced) CHECK_EQ(selector, "profile-" + p.name);
+    else CHECK(selector == "gcc-" + std::to_string(p.compiler.major) ||
+               selector.starts_with("gcc-" + std::to_string(p.compiler.major) + "@"));
     ResolveOptions o; o.profile = &p; o.requirements.integers = integers;
     auto r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
     CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
@@ -552,7 +554,7 @@ TEST(resolve_library_all_bundled_profiles) {
     CHECK(header); if (!header) continue;
     const auto value = data.state(*header, "FLT_EVAL_METHOD");
     // Captured integers still require audited independence/native coverage.
-    // The real generator-5 matrix currently marks this fact unknown.
+    // This also works before CI imports the corrected audit/argv agreements.
     const auto literal = value >= 2 ? std::string(data.values[value]) : "0";
     r = libraryResolve("#include <cfloat>\n#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == " + literal + "\nx\n#endif\n", *e, o);
     CHECK_EQ(r.decisions.at(0).decision, value >= 2 ? Decision::trueValue : value == 0 ? Decision::falseValue : Decision::unknown);

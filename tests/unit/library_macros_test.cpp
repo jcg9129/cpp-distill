@@ -72,6 +72,26 @@ int main() try {
   const auto report = renderReport(pipeline, command, &profile);
   CHECK(report.find("FLT_EVAL_METHOD: A9 library") != std::string::npos);
   CHECK(report.find("selector=gcc-13") != std::string::npos);
+  const auto scope = embeddedLibraryData().selector(profile);
+  CHECK(scope.starts_with("gcc-13@"));
+  CHECK(embeddedLibraryData().featureAgreementSelector(profile) == "gcc-13");
+  CHECK(embeddedLibraryData().find(scope, "cmath") == embeddedLibraryData().find("gcc-13", "cmath"));
+  const auto* majorFloat = embeddedLibraryData().find("gcc-13", "cfloat");
+  CHECK(majorFloat && embeddedLibraryData().state(*majorFloat, "FLT_EVAL_METHOD") == 1);
+  const auto capturedEval = profile.snapshotFacts.at("__FLT_EVAL_METHOD__");
+  profile.snapshotFacts.at("__FLT_EVAL_METHOD__").definition->replacement = "2";
+  unknown("#include <cfloat>\n");
+  profile.snapshotFacts.at("__FLT_EVAL_METHOD__") = capturedEval;
+  profile.snapshotFacts.erase("__FLT_EVAL_METHOD__");
+  unknown("#include <cfloat>\n");
+  profile.snapshotFacts["__FLT_EVAL_METHOD__"] = capturedEval;
+  profile.snapshotFacts["__STDC_WANT_IEC_60559_TYPES_EXT__"] = {
+      MacroState::known, Macro{false, {}, false, "1"}, {FactOrigin::compilerBuiltin}};
+  unknown("#include <cfloat>\n");
+  profile.snapshotFacts.erase("__STDC_WANT_IEC_60559_TYPES_EXT__");
+  profile.flags.push_back("-march=native");
+  unknown("#include <cfloat>\n");
+  profile.flags.pop_back();
   // A nonzero capture retains the volatile store, irrespective of worker predefines.
   result = run("#include <float.h>\n");
   CHECK(result.decisions.at(0).decision == Decision::trueValue);
@@ -86,7 +106,9 @@ int main() try {
                             "#undef FLT_EVAL_METHOD\n", "#define NDEBUG 1\n"})
     unknown(std::string(change) + "#include <cfloat>\n");
   for (const auto change : {"#define __FLT_EVAL_METHOD__ 2\n", "#undef __FLT_EVAL_METHOD__\n",
-                            "#define __STDC_WANT_IEC_60559_TYPES_EXT__ 1\n", "#undef __X\n"})
+                            "#define __STDC_WANT_IEC_60559_TYPES_EXT__ 1\n",
+                            "#define __STDC_WANT_IEC_60559_EXT__ 1\n",
+                            "#define __STDC_VERSION__ 202311L\n", "#undef __X\n"})
     unknown("#include <cfloat>\n" + std::string(change));
   result = run("#include <cfloat>\n#define local 1\n");
   CHECK(result.decisions.at(0).decision == Decision::falseValue);

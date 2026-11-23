@@ -8,8 +8,9 @@ integer literal is usable; parentheses, unary minus and other expressions stay
 unknown, and function-like definitions supply no values. The source compiler and
 ordered argv are always the profile's own. Standard value aliases to compiler
 predefines are audited against those exact inputs, including native uncertainty.
-The narrow sole-writer initial-undef rule handles GCC `float.h`; later undefs and
-multiple writer files still fail closed. Full evidence retains `function_like`
+The sole-writer initial-undef rule also handles GCC `float.h` with `cfloat`'s
+fallback when subsequent definitions in each reset's own file cover every reset path. Later undefs,
+uncovered paths and unsupported definitions still fail closed. Full evidence retains `function_like`
 write metadata and per-root `reset_prefixes`. The finite source-entry absence
 rule for `__STDC_VERSION__` and `__STDC_WANT_IEC_60559_TYPES_EXT__` handles GCC
 13's C++ version gate and IEC opt-in; command/startup overrides and any reachable
@@ -43,6 +44,22 @@ harmless allowlist) for approximate/satisfaction agreement. This rejects both
 borrowing a flagged capture for an unflagged profile and borrowing default values
 for `-m32`/`-mfpmath=387` profiles. Generators 3/4 remain readable with their legacy
 feature-only policy until the widened CI artifact is imported.
+Standard-macro agreement is partitioned by major, compatible target, dialect and
+ordered non-harmless flags. All builds in a partition must independently approve
+the same value, and the complete major must still agree on observed
+presence/value and header availability. Native inputs remain blockers. Optional `standard_scopes` entries
+reference the existing root classification/agreement pools. Each build's
+`standard_scope` selects its partition, and `standard_inputs` records compiler
+definitions/entry absences required by approved standard facts. C++ compares
+these with the profile snapshot's compiler facts. Scoped header rows retain
+the complete major's feature agreement and fall back to major rows when identical.
+These optional fields preserve the storage schema and capture generator; old
+reviewed baselines remain readable.
+Scoped refinement adds positive values only. Absence/identity facts retain their
+major-wide proof and every omitted-write blocker. Scoped selector spellings are
+shared in generated C++ to retain the existing 1 MB source cap.
+The reviewed baseline embeds to 912,724 bytes; the corrected 14-build reset/argv
+projection embeds to 989,083 bytes without increasing the cap.
 Local satisfaction reruns may retain the legacy coverage specifically for
 `__cpp_lib_*` agreement when exact target/argv coverage fails. The same fallback
 never licenses standard integer values or absences.
@@ -268,9 +285,11 @@ absence claims; unreachable failures are listed without affecting it.
 Each literal (root, name, value) is audited separately, retaining all matching
 definitions and paths. Undefinitions/unsupported replacements invalidate its
 pairs. Absence requires every reachable definition to be independent, or a
-complete untainted closure containing no definition. Agreement still requires
-all builds of the major, with their actual dialects/flags, to report the same
-presence/value and an available header.
+complete untainted closure containing no definition. Feature agreement requires
+all builds of the major to report the same presence/value and an available header.
+Standard independence requires every build in the compatible target/dialect/argv
+partition, while observed presence/value and availability still require the whole
+major; compiler inputs must additionally match the profile snapshot.
 
 Failed acquisition or audit leaves incomplete inputs and fails the check. A
 baseline difference still uploads the generated output and prints a unified
@@ -294,8 +313,8 @@ containing these changes, with **no dispatch inputs**. It calls `profiles.yml`
 with `profiles: all`, `artifact_prefix: library-snapshot`, `cold_start: false`,
 and `extensions.yml` with its complete default matrix. Do not dispatch only a
 single profile or combine generator-3/4 artifacts with generator-5 captures. The
-first comparison will fail because the committed generator-4 baseline has only
-feature-macro facts; `library-generated` is uploaded on this expected difference.
+comparison will fail until corrected reset proofs and standard argv agreements
+are imported; `library-generated` is uploaded on this expected difference.
 
 Review the failed check's compact diff and both files: per-build status,
 per-root independent pairs, dependencies, full evidence and unknown reasons.
@@ -370,5 +389,6 @@ member-name union, independently of resolver profile selection, and reports
 `library member inventory: worker headers + N scanned builds (generator 5)`.
 Generator 3 remains accepted without an inventory and reports
 `library member inventory: worker headers; scanned-build inventory unavailable`.
-The committed facts remain at generator 4 until the full generator-5 CI matrix
-is captured, reviewed and imported; do not regenerate capture facts locally.
+The committed generator-5 facts retain the old reset proofs and major-wide
+standard agreement until the corrected full CI matrix is reviewed and imported.
+Do not regenerate capture facts locally.

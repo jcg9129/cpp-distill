@@ -371,6 +371,44 @@ def grounded_macros(start, includes, intrinsic, writers, invalid):
     return proven
 
 
+def reset_prefix(ws, *, require_coverage=True):
+    """A file-local reset followed by definitions on every reset path.
+
+    This proof is independent of writer-file order. A C++ forwarding header
+    may add a fallback definition without making the C header's reset a final
+    undef. Resolve complementary lexical branch atoms, never evaluate a user
+    configuration expression or discard a dependency.
+    """
+    first = next((i for i, w in enumerate(ws) if w['value'] is not None), len(ws))
+    if not (0 < first < len(ws)) or any(w['value'] is None for w in ws[first:]):
+        return 0
+    if not require_coverage:
+        # The established sole-writer rule licenses only observed positive
+        # pairs: a value cannot survive this file except through its audited
+        # definitions. With another writer, a surviving earlier value could
+        # instead be erased on an uncovered reset path, so coverage is needed.
+        return first
+    for reset in ws[:first]:
+        prefix = set(reset['conditions'])
+        cubes = {frozenset(set(w['conditions']) - prefix) for w in ws[first:]
+                 if prefix <= set(w['conditions'])}
+        # A || !A covers the enclosing path. Keep the proof deliberately
+        # syntactic and bounded; complicated conditions simply fail closed.
+        while frozenset() not in cubes:
+            added = set()
+            for cube in cubes:
+                for atom in cube:
+                    opposite = atom[2:-1] if atom.startswith('!(') and atom.endswith(')') else '!(' + atom + ')'
+                    other = (cube - {atom}) | {opposite}
+                    if other in cubes:
+                        added.add(cube - {atom})
+            added -= cubes
+            if not added or len(cubes) + len(added) > 256:
+                return 0
+            cubes.update(added)
+    return first
+
+
 def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inputs=None,
              integer_names=None):
     """Audit fresh TUs rooted at the requested search-relative header spellings.
@@ -534,18 +572,19 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
         for file in sorted(reached):
             for w in file_writes[file]:
                 local.setdefault(w['name'], []).append(w)
-        # GCC float.h resets FLT_EVAL_METHOD (and other standard names) before
-        # defining it. A prefix of undefs in the sole writer file cannot erase
-        # a subsequent positive definition observed by -dM. Retain all writes
-        # in the evidence; ignore only this prefix for positive-value proofs.
-        # Later undefs, or writers in another file, still invalidate all pairs.
+        # Prove resets separately in each writer file. In particular cfloat's
+        # fallback must not invalidate float.h's covered initial reset.
         resets = []
         for name, ws in local.items():
-            if name not in STANDARD_MACROS or len({w['file'] for w in ws}) != 1:
+            if name not in STANDARD_MACROS:
                 continue
-            first = next((i for i, w in enumerate(ws) if w['value'] is not None), len(ws))
-            if first and first < len(ws) and all(w['value'] is not None for w in ws[first:]):
-                local[name] = ws[first:]
+            removed = set()
+            writer_files = {w['file'] for w in ws}
+            for file in writer_files:
+                own = [w for w in ws if w['file'] == file]
+                removed.update(id(w) for w in own[:reset_prefix(own, require_coverage=len(writer_files) > 1)])
+            if removed:
+                local[name] = [w for w in ws if id(w) not in removed]
                 resets.append(name)
         requests = {n for n in request_roles
                     if all(w['value'] in ('', None) for w in local.get(n, []))}

@@ -21,8 +21,9 @@ audits. Review that artifact; do not commit it. The A12 member inventory is
 unchanged in purpose and remains independent of macro fact selection.
 
 Captures use each profile's own snapshot compiler and exact argv. Approximate
-facts require config independence and agreement across every scanned build of
-the GCC major. Generator-5 selection additionally requires a compatible captured target and matching ordered
+feature facts require config independence and agreement across every scanned
+build of the GCC major. Corrected standard facts use every build of the matching
+target/dialect/argv partition. Generator-5 selection requires a compatible captured target and matching ordered
 non-harmless flags in one scanned build; target-specific values never come from
 a default argv. Reproduced snapshots retain their exact build identity and
 native uncertainty. Generators 3/4 remain readable using their feature-only
@@ -34,8 +35,11 @@ supply standard integer values or absence facts. In the current baseline,
 all nine profile captures report `FLT_EVAL_METHOD=0`, but every major's
 `cfloat` agreement marks it `config-dependent` with no approved value. Native
 dependencies also block AtCoder's own snapshot. These entries remain unknown;
-integer observations alone do not override the audit. Enabling this fact for
-CSES requires corrected CI audit evidence and a reviewed baseline import.
+integer observations alone do not override the audit. The corrected audit proves
+file-local resets even with a forwarding fallback, and standard agreement uses
+compatible target/dialect/argv partitions with snapshot compiler-input checks.
+Enabling this fact for CSES still requires corrected CI audit evidence and a
+reviewed baseline import; `library.json` is not rewritten locally.
 
 The resolver applies the [§4.3.3](../../docs/design.md#433-library-feature-test-macro-facts-l1c)
 default-library Boolean, compiler-header identity and A9 union/conflict rules.
@@ -44,6 +48,6 @@ unsupported/function-like presence markers that license no facts.
 
 Run the complete [library workflow](../../.github/workflows/library.yml), review
 both generated artifacts, then import only `library-generated/library.json` into
-this directory. The first comparison fails because the universe and generator
-changed; no workflow commits data. Exact commands, review coverage and format
+this directory. The next comparison fails for corrected audit and standard
+agreement evidence; no workflow commits data. Exact commands, review coverage and format
 details are in [ci/library/README.md](../../ci/library/README.md).

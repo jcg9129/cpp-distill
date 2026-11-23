@@ -225,6 +225,98 @@ def test_embed_standard_integer_values_agreement_and_reproduced_argv():
     assert rows['gcc-14', 'cfloat'] == ('0',)
 
 
+def test_standard_scopes_separate_native_target_and_ordered_argv():
+    ordinary = standard_report('profile-ordinary', reproduced=False)
+    ordinary['flags'] = ['-O2', '-Wall']
+    native = standard_report('profile-native', reproduced=False)
+    native['flags'] = ['-O2', '-march=native']
+    native['volatile'] = ['__FLT_EVAL_METHOD__']
+    native['audit'] = classify({'0/cfloat': '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__'},
+                               {}, {'__FLT_EVAL_METHOD__'}, roots=['cfloat'])
+    x87 = standard_report('other', '2', reproduced=False)
+    x87['flags'] = ['-O2', '-m32', '-mfpmath=387']
+    data = combined(ordinary, native)
+    names, rows, builds = transitions(data, {'cfloat'})
+    assert names == ['FLT_EVAL_METHOD']
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    for key, expected in [('profile-ordinary', '0'), ('profile-native', 1)]:
+        scope = data['builds'][key]['standard_scope']
+        assert rows.get((scope, 'cfloat'), rows['gcc-14', 'cfloat']) == (expected,)
+        assert get_agreement(data, scope, 'cfloat')['defined'].get('FLT_EVAL_METHOD', 1) == expected
+    assert {b[-3] for b in builds} == set(data['standard_scopes'])
+    assert data['builds']['profile-ordinary']['standard_inputs'] == {
+        '__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ 0'}
+    assert 'standard_scope' not in json.dumps(data['snapshots'])
+    # A different observed value still revokes all approximate agreements,
+    # including those with a matching argv and an independent own proof.
+    disagrees = combined(ordinary, native, x87)
+    for scope in disagrees['standard_scopes']:
+        assert get_agreement(disagrees, scope, 'cfloat')['unknown']['FLT_EVAL_METHOD'] == 'cross-build-disagreement'
+    # Metadata edits cannot borrow a scope captured with different flags.
+    data['builds']['profile-ordinary']['flags'].append('-m32')
+    with pytest.raises(ValueError, match='standard scope does not match'):
+        transitions(data, {'cfloat'})
+
+
+def test_standard_scope_keeps_major_feature_agreement():
+    a, b = report(reproduced=False), report('other', '2L', reproduced=False)
+    b['flags'] = ['-O2']
+    a['headers']['charconv']['macros']['FLT_EVAL_METHOD'] = '0'
+    a['audit'] = classify({'0/charconv': '#define __cpp_lib_test 1L\n#define FLT_EVAL_METHOD 0'},
+                          (), roots=['charconv'])
+    b['headers']['charconv']['macros']['FLT_EVAL_METHOD'] = '0'
+    b['audit'] = classify({'0/charconv': '#define __cpp_lib_test 1L\n#if CONFIG\n'
+                          '#define FLT_EVAL_METHOD 0\n#endif'}, (), roots=['charconv'])
+    data = combined(a, b)
+    names, rows, _ = transitions(data, {'charconv'})
+    scope = data['builds']['profile-test']['standard_scope']
+    assert rows[scope, 'charconv'][names.index('FLT_EVAL_METHOD')] == '0'
+    assert rows[scope, 'charconv'][names.index(NAME)] == 1
+
+
+def test_native_alternative_write_blocks_an_independent_positive_pair():
+    a = standard_report(reproduced=False)
+    a['flags'] = ['-march=native']
+    a['volatile'] = ['__AVX2__']
+    a['audit'] = classify({'0/cfloat': '#define FLT_EVAL_METHOD 0\n#if __AVX2__\n'
+                          '#define FLT_EVAL_METHOD 1\n#endif'}, {}, {'__AVX2__'}, roots=['cfloat'])
+    assert a['audit']['roots']['cfloat']['macros']['FLT_EVAL_METHOD']['pairs']['0']['independent']
+    data = combined(a)
+    assert get_agreement(data, '14', 'cfloat')['unknown']['FLT_EVAL_METHOD'] == 'config-dependent'
+    _, rows, _ = transitions(data, {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == (1,)
+
+
+def test_compiler_input_missing_from_another_capture_remains_a_snapshot_requirement():
+    a = standard_report('first', reproduced=False)
+    b = standard_report('second', reproduced=False)
+    b['audit'] = classify({'0/cfloat': '#define FLT_EVAL_METHOD 0'}, {}, roots=['cfloat'])
+    data = combined(a, b)
+    assert data['builds']['first']['standard_inputs']['__FLT_EVAL_METHOD__'] == '#define __FLT_EVAL_METHOD__ 0'
+    assert data['builds']['second']['standard_inputs']['__FLT_EVAL_METHOD__'] is None
+
+
+def test_standard_scope_absence_uses_major_name_universe_but_keeps_omitted_blocker():
+    a = standard_report('first', reproduced=False)
+    a['flags'] = ['-O2']
+    b = standard_report('second', reproduced=False)
+    b['headers']['cfloat']['macros'] = {}
+    b['audit'] = classify({'0/cfloat': ''}, {}, roots=['cfloat'], integer_names=set())
+    for build in (a, b):
+        build['headers']['cmath'] = dict(status='ok', macros={})
+        build['audit']['roots']['cmath'] = dict(macros={}, taint=[])
+    data = combined(a, b)
+    scope = data['builds']['second']['standard_scope']
+    assert get_agreement(data, scope, 'cmath')['absent'] == ['FLT_EVAL_METHOD']
+    b['audit'] = classify({'0/cfloat': '', '0/cmath': '#if __AVX2__\n#define FLT_EVAL_METHOD(x) x\n#endif'},
+                          {}, {'__AVX2__'}, roots=['cfloat', 'cmath'], integer_names=set())
+    b['volatile'] = ['__AVX2__']
+    data = combined(a, b)
+    assert get_agreement(data, scope, 'cmath')['unknown']['FLT_EVAL_METHOD'] == 'config-dependent'
+    other_scope = data['builds']['first']['standard_scope']
+    assert get_agreement(data, other_scope, 'cmath')['unknown']['FLT_EVAL_METHOD'] == 'config-dependent'
+
+
 @pytest.mark.parametrize('value', ['(0)', '-1', '0 + 0', '__unknown', '0.0', '08', '1uu'])
 def test_embed_standard_noninteger_replacements_stay_unknown(value):
     data = combined(standard_report(value=value))
