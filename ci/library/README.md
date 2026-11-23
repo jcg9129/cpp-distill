@@ -34,7 +34,8 @@ Optional `audit.root_records` shares identical root macro evidence. Root maps
 contain integer indexes into this array; `audit.root_macros(audit, root)` expands
 them for inspection. IDs are local indexes, not content addresses. Matrix trust
 is reapplied to the shared records' unfiltered requirements. Captures and merged
-evidence use compact JSON; the reviewed baseline format is unchanged.
+evidence use compact JSON. Reviewed baseline storage is versioned separately
+from these capture and audit formats (see schema 3 below).
 
 Generator 5 also requires a compatible captured target and strict ordered flag
 matching (apart from the existing
@@ -83,14 +84,14 @@ PR and manual captures use the AtCoder compiler cache by default. Only the weekl
 scheduled L1c drift call passes `cold_start: true`; monthly reproduction retains
 its separate cold capture.
 
-The generated artifact contains two files (schema 2, generator 5):
+The generated artifact contains two files (generator 5):
 
-- `library.json`: the compact, deterministic baseline to import into
+- `library.json` (storage schema 3): the compact, deterministic baseline to import into
   `data/library/`. It retains build metadata, per-header snapshot facts/status,
   per-major/root classifications and cross-build agreement. Sorted JSON has one
   record per line. A successful empty snapshot proves no selected object-like macros;
   `missing`, `error` and `disabled` snapshots prove nothing.
-- `library-evidence.json`: complete build reports, including installed-header
+- `library-evidence.json` (schema 2): complete build reports, including installed-header
   candidate definitions, lexical conditions, include edges/targets, request/value support,
   compiler definitions, per-root/per-value audit results and parse failures.
   Review this uploaded file; do not commit it. Each compact build contains
@@ -139,7 +140,7 @@ The unchanged generator-4 baseline still embeds to 588,498 bytes. These measured
 artifacts are not imported into the reviewed baseline. Compiled round trips
 check every shipped member name when C++ compilation is enabled.
 
-The compact file shares repeated records using content-address tables (the first
+The logical baseline shares repeated records using content-address tables (the first
 16 hexadecimal SHA-256 digits, with collision detection). Build `headers` refer
 through `build_headers` to `snapshots`; version `roots` refer through
 `root_classifications` to `classifications`; `agreement` refers through
@@ -152,8 +153,57 @@ Entries reference `macro_classifications` records with `independent`, `values`
 names. Union these with the root's common dependencies. The default applies only
 to omitted names and has its own dependencies. The `get_snapshot`,
 `get_classification` and `get_agreement` helpers in `merge.py` expand these tables
-for inspection. Macro-set IDs hash their expanded entry map. Bases are
-deterministic and acyclic; unrelated additions do not renumber records.
+for inspection. These helpers accept either storage schema; for repeated reads,
+decode once with `baseline.decode(json.loads(raw))`. Macro-set IDs hash their
+expanded entry map. Bases are deterministic and acyclic; content addresses
+remain unchanged by the storage encoding.
+
+### Baseline storage schema 3
+
+`baseline.py` supplies the converter-free `encode` / `decode` pair. The merger
+works with logical schema-2 objects and `baseline_text` writes schema 3;
+`source_schema: 2` restores the logical schema on decode. Capture, audit and
+full-evidence formats remain schema 2, generator 5. Legacy baseline generators
+3/4/5 are still readable. The committed generator-4 baseline is re-encoded
+without importing new capture facts.
+
+- `dependency_names` is a sorted global name table. A dependency set is an
+  integer bitset: bit *i* corresponds to name *i*. Distinct sets sort by numeric
+  bitset value. Each `dependency_sets` row encodes the XOR against the preceding
+  set (initially zero). Ascending changed indexes become nonnegative gaps
+  (`index - previous_index - 1`, initial index -1), unsigned LEB128 bytes, then
+  canonical padded base64. This shares similar sets even when nearly every
+  complete dependency list differs, without a quadratic nearest-base search.
+- `macro_classifications` retains its original content-address keys; each value
+  is `[independent, values, dependency_set_index]`. In `macro_sets.entries`, keys
+  are decimal indexes into sorted `macro_names`; values index the sorted
+  `macro_classifications` keys. `removed` lists likewise use macro-name indexes.
+  Existing macro-set bases and expanded-map hashes are preserved.
+- `field_sets` shares `agreements.defined`, `.absent`, `.unknown` and
+  `snapshots.macros`, `.function_like`, `.noninteger` independently. Each field
+  becomes a reference to its pool. Pool keys hash the original map or sorted
+  name list; lists use name-to-true maps internally. Each pool uses the same
+  deterministic base/entries/removed encoding as macro sets. Optional fields
+  stay absent, and all other snapshot metadata stays literal.
+
+JSON stays sorted, with one record per line, including dependency deltas and
+field-pool records. Numeric indexes can shift when their sorted universe grows;
+decoded content addresses and evidence digests do not change. Decode rejects
+out-of-range indexes, noncanonical deltas, cycles and bad field-pool hashes;
+embedding then validates every original content address and reference.
+`merge.py --check` and drift reporting still compare the complete stored bytes,
+including evidence-only changes. Runtime C++ reads generated tables, never JSON;
+CMake tracks `baseline.py` as an embedding input.
+
+On the supplied full generator-5 capture, schema-2 storage is 85,684,933 bytes.
+Schema 3 reduces it to 6,534,401 bytes (6.53 MB). The committed generator-4
+baseline shrinks from 4,488,958 to 1,793,922 bytes with its facts unchanged.
+Decoding the re-encoded capture gives exactly the original Python object, and
+all 912,724 bytes of embedded C++ source are identical. XOR gap encoding measured
+smaller than raw dependency bitsets and shared fixed-width bitset blocks.
+Offline tests exercise `decode(encode(x)) == x` directly, deterministic ordering,
+malformed encodings, old generators, inspection helpers, and entire-source
+equality across storage schemas.
 
 The audit's unit is a fresh TU containing only `#include <H>`. For each root H,
 a definition inherits its own conditions and the conditions on **all** include
@@ -306,11 +356,16 @@ union. Feature transitions cover standard-list headers. Values dependent on
 volatile native inputs remain unknown, using conservative per-major dependency closures even
 for own-build snapshots. Missing/malformed data fails configuration; edits to
 the baseline or generator trigger regeneration. Runtime needs no data files.
-The embedded provenance records schema 2, generator 3 or 4, embedding format 1
-and the SHA-256 of the exact baseline bytes. Generator 4 also embeds the global
+The embedded provenance records logical schema 2, generator 3/4/5 and embedding
+format 1. Legacy inputs retain the SHA-256 of their exact baseline bytes;
+schema-3 inputs hash the decoded baseline serialized in the original sorted,
+record-per-line schema-2 format. This preserves the entire generated C++ source,
+including provenance, across a storage-only migration. Stored-byte differences
+are still caught independently by `merge.py --check` and drift reporting.
+Generator 4 also embeds the global
 member-name union, independently of resolver profile selection, and reports
 `library member inventory: worker headers + N scanned builds (generator 5)`.
 Generator 3 remains accepted without an inventory and reports
 `library member inventory: worker headers; scanned-build inventory unavailable`.
-The committed data is intentionally left at generator 3 until the full CI
-matrix is captured, reviewed and imported; do not regenerate it locally.
+The committed facts remain at generator 4 until the full generator-5 CI matrix
+is captured, reviewed and imported; do not regenerate capture facts locally.

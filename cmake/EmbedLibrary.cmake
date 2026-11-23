@@ -4,6 +4,7 @@ set(library_generator "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/embed.py")
 set(library_input "${CMAKE_CURRENT_SOURCE_DIR}/data/library/library.json")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${library_input}" "${library_generator}" "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/merge.py"
+  "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/baseline.py"
   "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/audit.py"
   "${CMAKE_CURRENT_SOURCE_DIR}/ci/library/member_inventory.py"
   "${CMAKE_CURRENT_SOURCE_DIR}/data/names/standard-macros.txt"

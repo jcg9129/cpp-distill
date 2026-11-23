@@ -18,6 +18,7 @@ from merge import (merge, check, expected_builds, baseline_text, digest,
                    get_snapshot, get_agreement, get_classification)
 from probe import compare, source, build_inputs, trusted_build_inputs
 from member_inventory import inventory
+from baseline import decode
 
 
 def audit(text, extra=None, predefines=()):
@@ -264,7 +265,7 @@ def test_compact_digest_determinism_and_evidence_only_check(tmp_path, capsys):
     original = merge([a, b], ['a', 'b'])
     text = baseline_text(original)
     assert text == baseline_text(merge([b, a], ['b', 'a']))
-    assert json.loads(text) == original
+    assert decode(json.loads(text)) == original
     assert 'audit' not in original['builds']['a']
     assert original['builds']['a']['evidence_sha256'] == digest(a)
     assert len(original['builds']['a']['evidence_sha256']) == 64

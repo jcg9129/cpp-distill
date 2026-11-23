@@ -9,6 +9,7 @@ import sys
 from merge import canonical, get_agreement, get_classification, get_snapshot
 from audit import INTEGER, library_macro
 from member_inventory import validate_names
+from baseline import decode, record_text
 
 ROOT = Path(__file__).resolve().parents[2]
 # Full 14-build generator-5 matrix: 916,768 bytes after integer-only
@@ -37,6 +38,7 @@ def standard_header(header, standard):
 
 
 def transitions(data, standard):
+    data = decode(data)
     require(data['schema'] == 2 and data['generator'] in (3, 4, 5), 'unsupported library schema/generator')
     member_names(data)
     # Validate every content-address record, including unused audit records. Macro
@@ -209,7 +211,11 @@ def member_chunks(names):
 
 
 def generate(raw, standard):
-    data = json.loads(raw, object_pairs_hook=unique_object)
+    stored = json.loads(raw, object_pairs_hook=unique_object)
+    data = decode(stored)
+    # Preserve the original generated source, including provenance, across a
+    # storage-only migration. Legacy inputs still identify their exact bytes.
+    source_raw = record_text(data).encode() if stored["schema"] == 3 else raw
     names, rows, builds = transitions(data, standard)
     if data['generator'] >= 5:
         # The standard-name registry also contains functions, floating values,
@@ -253,7 +259,7 @@ def generate(raw, standard):
         out.append('constexpr LibraryBuild builds[] = {')
     for i, b in enumerate(builds):
         out.append('{' + ','.join(map(quote, b[:-1])) + ',' + ('f' + str(i) if b[-1] else '{}') + '},')
-    provenance = (f'ci/library generator={data["generator"]} schema=2 embed=1 sha256:' + hashlib.sha256(raw).hexdigest())
+    provenance = (f'ci/library generator={data["generator"]} schema=2 embed=1 sha256:' + hashlib.sha256(source_raw).hexdigest())
     if builds:
         out.append('};')
     inventory = member_names(data)

@@ -12,6 +12,7 @@ from audit import classify, VERSION
 from embed import generate, transitions, ROOT, MAX_SOURCE_BYTES
 from merge import merge, baseline_text, get_agreement, get_snapshot
 from member_inventory import inventory
+from baseline import decode, record_text
 
 NAME = '__cpp_lib_test'
 
@@ -92,7 +93,7 @@ def test_embed_approximate_build_never_emits_own_snapshot():
 
 def test_embed_baseline_round_trip_is_small_and_deterministic():
     raw = (ROOT / 'data/library/library.json').read_bytes()
-    data = json.loads(raw)
+    data = decode(json.loads(raw))
     standard = {s for s in (ROOT / 'data/names/standard-headers.txt').read_text().splitlines()
                 if s and not s.startswith('#')}
     names, rows, builds = transitions(data, standard)
@@ -113,12 +114,13 @@ def test_embed_baseline_round_trip_is_small_and_deterministic():
     # Widened header facts can add standard names and distinct header rows.
     # CI's next reviewed capture determines the actual new baseline size.
     assert len(text.encode('utf-8')) <= MAX_SOURCE_BYTES
-    assert hashlib.sha256(raw).hexdigest() in text
+    source_hash = hashlib.sha256(record_text(data).encode() if json.loads(raw)['schema'] == 3 else raw).hexdigest()
+    assert source_hash in text
     # Dictionary order is irrelevant to table layout; exact bytes still identify
     # distinct baselines in provenance.
     reordered = json.dumps(data, sort_keys=True).encode()
     other = generate(reordered, standard)
-    assert text.replace(hashlib.sha256(raw).hexdigest(), '') == other.replace(hashlib.sha256(reordered).hexdigest(), '')
+    assert text.replace(source_hash, '') == other.replace(hashlib.sha256(reordered).hexdigest(), '')
 
 
 @pytest.mark.parametrize('baseline', [False, True])
@@ -126,7 +128,7 @@ def test_embed_compiled_member_inventory_round_trip(tmp_path, baseline):
     compiler = shutil.which('g++') or shutil.which('clang++')
     if compiler is None:
         pytest.skip('C++20 compiler unavailable')
-    data = json.loads((ROOT / 'data/library/library.json').read_bytes()) if baseline else combined(report())
+    data = decode(json.loads((ROOT / 'data/library/library.json').read_bytes())) if baseline else combined(report())
     if not baseline:
         # Short suffixes, long prefixes, UTF-8 prefixes, and multiple chunks.
         data['member_names'] = sorted({'a', 'aa', 'café', 'caféine', '𐐀', '𐐀x',

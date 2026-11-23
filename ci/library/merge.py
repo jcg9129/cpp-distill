@@ -2,8 +2,6 @@
 """Regenerate reviewed L1c data from the complete CI matrix; compare, never union old facts."""
 import argparse
 from difflib import unified_diff
-import hashlib
-import json
 from pathlib import Path
 import sys
 import tempfile
@@ -13,14 +11,7 @@ from audit import ROOT, VERSION, apply_trust, root_macros
 from probe import trusted_build_inputs
 from member_inventory import validate_inventory
 from report_store import ReportStore, report_digest, write_evidence
-
-
-def canonical(data):
-    return json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
-
-
-def digest(data):
-    return hashlib.sha256(canonical(data).encode('utf-8')).hexdigest()
+from baseline import canonical, digest, delta_sets, baseline_text, decode
 
 
 def merge(reports, expected, progress=None):
@@ -156,46 +147,18 @@ def merge(reports, expected, progress=None):
                 versions=versions, agreement=agreement, **tables)
 
 
-def delta_sets(sets):
-    """Share repeated name maps with deterministic, acyclic base-plus-deltas."""
-    result, previous = {}, []
-    # JSON object size is additive in its encoded key/value pairs. Avoid
-    # serializing every candidate in this quadratic search; preserve the exact
-    # old cost and tie-breaking (including optional removed lists).
-    names = {n for entries in sets.values() for n in entries}
-    weights = {n: len(canonical(n)) for n in names}
-    pairs = {item for entries in sets.values() for item in entries.items()}
-    pair_sizes = {(n, v): weights[n] + 1 + len(canonical(v)) for n, v in pairs}
-    def map_size(items):
-        return 2 + sum(map(pair_sizes.__getitem__, items)) + len(items) - bool(items)
-    for key, entries in sorted(sets.items(), key=lambda kv: (len(kv[1]), canonical(kv[1]))):
-        best = dict(entries=entries)
-        items = set(entries.items())
-        cost = 12 + map_size(items)  # {"entries":...}
-        for base, old, old_items, overhead in previous:
-            changes = items - old_items
-            removed = sorted(old.keys() - entries.keys())
-            size = overhead + map_size(changes)
-            if removed:
-                size += 12 + sum(map(weights.__getitem__, removed)) + len(removed)
-            if size < cost:
-                best, cost = dict(base=base, entries=dict(changes)), size
-                if removed:
-                    best['removed'] = removed
-        result[key] = best
-        previous.append((key, entries, items, 20 + len(canonical(key))))
-    return result
-
-
 def get_snapshot(data, build, header):
+    data = decode(data)
     return data['snapshots'][data['build_headers'][data['builds'][build]['headers']][header]]
 
 
 def get_agreement(data, major, header):
+    data = decode(data)
     return data['agreements'][data['root_agreements'][data['agreement'][major]][header]]
 
 
 def get_classification(data, major, header):
+    data = decode(data)
     root = data['classifications'][data['root_classifications'][data['versions'][major]['roots']][header]]
     def entries(key):
         chain = []
@@ -216,18 +179,6 @@ def get_classification(data, major, header):
         entry = data['macro_classifications'][key]
         macros[name] = dict(entry, dependencies=sorted(set(root['dependencies']) | set(entry['dependencies'])))
     return dict(default=root['default'], macros=macros)
-
-
-def baseline_text(data):
-    """Sorted JSON with one record per line, including content-address tables."""
-    sections = []
-    for key, value in sorted(data.items()):
-        if isinstance(value, dict):
-            entries = [f'    {json.dumps(k)}: {canonical(v)}' for k, v in sorted(value.items())]
-            sections.append(f'  {json.dumps(key)}: {{\n' + ',\n'.join(entries) + '\n  }')
-        else:
-            sections.append(f'  {json.dumps(key)}: {canonical(value)}')
-    return '{\n' + ',\n'.join(sections) + '\n}\n'
 
 
 def inventory_bytes(data):
