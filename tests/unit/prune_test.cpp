@@ -65,7 +65,7 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-8 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-9 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
@@ -99,6 +99,59 @@ TEST(prune_unreferenced_overloads_worker_identity) {
   const auto mixed = extractPruning(b.m,o).value();
   CHECK(!mixed.assumeUnreferencedOverloads);
   CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
+TEST(prune_rule1_evidence_needs_both_source_and_owner) {
+  Model b; b.m.libraryMemberNamesComputed = true;
+  const auto main = b.add("main","int main(){}");
+  const auto source = b.add("check","void check(){}");
+  const auto owner = b.add("Record","struct Record {};",FamilyKind::record);
+  const auto member = b.add("Record::operator+","int operator+(int){return helper();}");
+  const auto helper = b.add("helper","int helper(){return 7;}");
+  auto& f = b.m.families[member]; f.names.clear(); f.callableNames.clear();
+  f.memberOf = owner; f.memberName = "operator+"; f.rule1Kind = "operator-arithmetic";
+  f.rule1Declaration = f.ranges.front().begin; f.edges = {helper};
+  b.m.families[source].rule1Evidence = {member};
+  b.m.families[main].edges = {source};
+  auto r = b.run(); CHECK(!r.families[owner].kept); CHECK(!r.families[member].kept); CHECK(!r.families[helper].kept);
+  b.m.families[main].edges = {owner};
+  r = b.run(); CHECK(!r.families[source].kept); CHECK(!r.families[member].kept);
+  b.m.families[main].edges = {source,owner};
+  r = b.run(); CHECK(r.families[member].kept); CHECK(r.families[helper].kept);
+  CHECK(r.families[member].reason.starts_with("D3e rule 1: overload-sensitive check"));
+  auto decoded = parsePruningModel(serializePruningModel(b.m).value()).value();
+  CHECK(decoded.families[source].rule1Evidence == std::vector<FamilyId>{member});
+  b.m.families[source].rule1Evidence.clear();
+  b.m.systemEntities.push_back({"construction trait",{},{},{member}});
+  b.m.systemUses.push_back({source,0});
+  r = b.run(); CHECK(r.families[member].kept);
+  b.m.families[main].edges = {source};
+  r = b.run(); CHECK(!r.families[owner].kept); CHECK(!r.families[member].kept);
+  b.m.families[main].edges.clear();
+  b.m.families[member].instantiationEffect = "dependent storage";
+  r = b.run(); CHECK(r.families[member].kept); CHECK(!r.families[source].kept);
+  decoded = parsePruningModel(serializePruningModel(b.m).value()).value();
+  CHECK(decoded.systemEntities[0].rule1Evidence == std::vector<FamilyId>{member});
+  b.m.families[source].rule1Evidence = {source}; CHECK(!validatePruningModel(b.m).ok());
+}
+
+TEST(prune_rule1_keeps_the_old_effect_dispatch_boundary) {
+  Model b; b.m.libraryMemberNamesComputed = true; b.m.libraryMemberNames.insert("get");
+  const auto owner = b.add("get","struct get {};",FamilyKind::record);
+  const auto member = b.add("get::get","get(int,int){return;}");
+  const auto caller = b.add("caller","void caller(){}");
+  const auto dead = b.add("dead","void dead(){}");
+  auto& f = b.m.families[member]; f.names.clear(); f.callableNames.clear();
+  f.memberOf = owner; f.memberName = "get"; f.rule1Kind = "ctor-multi-arg";
+  f.rule1Constructor = true; f.rule1Record = b.m.families[owner].ranges.front().begin;
+  f.rule1Declaration = f.ranges.front().begin;
+  b.m.families[caller].potentialEdges = {member};
+  b.add("main","int main(){caller();}");
+  auto r = b.run(); CHECK(!r.families[member].kept); CHECK(!r.families[owner].kept);
+  b.m.families[member].instantiationEffect = "dependent storage";
+  r = b.run(); CHECK(r.disabledReasons.empty());
+  CHECK(r.families[caller].kept); CHECK(r.families[member].kept); CHECK(r.families[owner].kept);
+  CHECK(!r.families[dead].kept);
 }
 
 TEST(prune_library_spelled_members_identity_fallback_and_report) {
@@ -211,7 +264,7 @@ TEST(prune_static_tokens_literals_macros_and_self_exclusion) {
 }
 TEST(prune_system_edges_transitive_cycles_positive_only) {
   Model b; auto main = b.add("main","int main(){}"); auto hook = b.add("hook","void hook(){}"); b.add("unused","void unused(){}");
-  b.m.systemEntities = {{"instantiate",{}, {1}}, {"body",{hook}, {0}}}; b.m.systemUses = {{main,0}};
+  b.m.systemEntities = {{"instantiate",{}, {1},{}}, {"body",{hook}, {0},{}}}; b.m.systemUses = {{main,0}};
   auto r = b.run(); CHECK(r.families[hook].kept); CHECK(!r.families.back().kept);
   b.m.systemUses.clear(); CHECK(!b.run().families[hook].kept);
   b.m.systemUses = {{noFamily,0}}; CHECK(b.run().families[hook].kept);
@@ -225,7 +278,7 @@ TEST(prune_instantiation_effects_preserve_reverse_transitive_triggers) {
   auto pasted = b.add("Pasted","struct Pasted {};",FamilyKind::record);
   b.m.families[pasted].edges = {effect}; // Expanded name, absent from raw text.
   auto system = b.add("Default","struct Default {};",FamilyKind::record);
-  b.m.systemEntities = {{"library default",{}, {1}}, {"library alias",{effect}, {0}}};
+  b.m.systemEntities = {{"library default",{}, {1},{}}, {"library alias",{effect}, {0},{}}};
   b.m.systemUses = {{system,0}};
   auto paired = b.add("Paired","struct Paired {};",FamilyKind::record);
   b.m.unions = {{paired,trigger}};
@@ -464,12 +517,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-8 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-9 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-8 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-9 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-8 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-9 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

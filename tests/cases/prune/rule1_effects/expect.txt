@@ -1,3 +1,4 @@
 contains | Candidate(int, double)
 kept observe |
 report | instantiation effect: possible trigger
+report | rule1-constructors-kept: reason="instantiation effect" declarations=1

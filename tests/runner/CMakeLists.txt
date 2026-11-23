@@ -68,7 +68,8 @@ target_compile_definitions(distill_prune_cases PRIVATE DISTILL_PRUNE_CASES="${PR
 if(TARGET distill_prune_worker)
   add_dependencies(distill_prune_cases distill_prune_worker)
   add_test(NAME prune_extract_cases COMMAND distill_prune_cases $<TARGET_FILE:distill_prune_worker>)
-  set_tests_properties(prune_extract_cases PROPERTIES TIMEOUT 120)
+  # Each enabled fixture also extracts opt-out for the monotonicity check.
+  set_tests_properties(prune_extract_cases PROPERTIES TIMEOUT 240)
 endif()
 
 add_executable(distill_prune_extract_tests prune_extract_tests.cpp)

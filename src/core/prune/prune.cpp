@@ -189,6 +189,9 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     }
     for (std::size_t j = 0; j < f.edges.size(); ++j) if (f.edges[j] >= n) return invalid("invalid AST edge",field+".edges["+std::to_string(j)+"]");
     for (std::size_t j = 0; j < f.potentialEdges.size(); ++j) if (f.potentialEdges[j] >= n) return invalid("invalid potential AST edge",field+".potentialEdges["+std::to_string(j)+"]");
+    for (std::size_t j = 0; j < f.rule1Evidence.size(); ++j)
+      if (f.rule1Evidence[j] >= n || m.families[f.rule1Evidence[j]].rule1Kind.empty())
+        return invalid("invalid rule-1 evidence",field+".rule1Evidence["+std::to_string(j)+"]");
     if (f.rule1Constructor && (f.rule1Kind.empty() || f.rule1Record >= m.text.size()))
       return invalid("invalid rule-1 constructor record",field+".rule1Record");
     if (!f.rule1Kind.empty() && (!m.assumeUnreferencedOverloads || f.memberOf == noFamily || f.rule1Declaration >= m.text.size()))
@@ -213,6 +216,9 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     const auto field = "model.systemEntities["+std::to_string(i)+"]";
     for (std::size_t j = 0; j < e.userEdges.size(); ++j) if (e.userEdges[j] >= n) return invalid("invalid system-user edge",field+".userEdges["+std::to_string(j)+"]");
     for (std::size_t j = 0; j < e.systemEdges.size(); ++j) if (e.systemEdges[j] >= m.systemEntities.size()) return invalid("invalid system edge",field+".systemEdges["+std::to_string(j)+"]");
+    for (std::size_t j = 0; j < e.rule1Evidence.size(); ++j)
+      if (e.rule1Evidence[j] >= n || m.families[e.rule1Evidence[j]].rule1Kind.empty())
+        return invalid("invalid system rule-1 evidence",field+".rule1Evidence["+std::to_string(j)+"]");
   }
   for (std::size_t i = 0; i < m.systemUses.size(); ++i) {
     auto u = m.systemUses[i];
@@ -339,7 +345,10 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   std::vector<bool> ownerDispatch(n);
   for (FamilyId i = 0; i < n; ++i) {
     const auto& f = m.families[i];
-    if (f.memberOf != noFamily && !memberReasons[i].empty())
+    // Rule-1 units were owner-dispatched before the assumption. Removing a
+    // forward-retention blocker must not add member-name effect paths or turn
+    // a previously bounded operator into an unbounded library hook.
+    if (f.memberOf != noFamily && (!memberReasons[i].empty() || !f.rule1Kind.empty()))
       for (auto unit : groups[find(i)])
         if (m.families[unit].memberOf == f.memberOf) ownerDispatch[unit] = true;
   }
@@ -416,6 +425,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     while (!pending.empty()) {
       auto id = pending.back(); pending.pop_back(); if (seen[id]) continue; seen[id] = true;
       for (auto user : m.systemEntities[id].userEdges) keep(user, "AST: system entity " + m.systemEntities[id].label, cause);
+      for (auto user : m.systemEntities[id].rule1Evidence) keepName(user, "D3e rule 1: overload-sensitive check in system entity " + m.systemEntities[id].label, cause);
       for (auto next : m.systemEntities[id].systemEdges) pending.push_back(next);
     }
   };
@@ -500,6 +510,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
       }
       for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
       for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
+      for (auto target : f.rule1Evidence) keepName(target,"D3e rule 1: overload-sensitive check in " + f.label,id);
       for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
       for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
       for (auto entity : systemUses[id]) system(entity,id);

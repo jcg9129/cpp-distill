@@ -9,14 +9,14 @@ removed operator_helper |
 contains | Sole(int, double)
 contains | Copies(const Copies&)
 contains | Checked(int, double)
-kept Checked::operator+ |
+removed Checked::operator+ |
 absent | Box(long) -> Box<long>;
 report | rule1-removed: category=ctor-explicit declarations=1
 report | rule1-removed: category=ctor-implicit-converting declarations=1
 report | rule1-removed: category=ctor-multi-arg declarations=1
 report | rule1-removed: category=operator() declarations=1
 report | rule1-removed: category=operator-comparison declarations=1
-report | rule1-removed: category=operator-arithmetic declarations=3
+report | rule1-removed: category=operator-arithmetic declarations=4
 report | rule1-removed: category=operator-other declarations=1
 report | rule1-removed: category=deduction-guide declarations=1
 removed Shared::operator+ |

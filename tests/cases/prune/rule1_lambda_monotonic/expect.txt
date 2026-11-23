@@ -1,0 +1,6 @@
+kept live_helper |
+removed discarded_helper |
+removed DiscardedFunctor |
+removed Live::discarded |
+contains | [] { return live_helper(); }
+report-absent | D3e rule 1: excluded kind or virtual

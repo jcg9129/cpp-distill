@@ -51,6 +51,9 @@ struct PruneFamily {
   std::size_t rule1Record = noFamily, rule1Declaration = noFamily;
   // Unresolved overload candidates participate only in reverse effects.
   std::vector<FamilyId> potentialEdges;
+  // Overload-sensitive checks protect members of surviving owners. These are
+  // not instantiation triggers and cannot resurrect an otherwise dead record.
+  std::vector<FamilyId> rule1Evidence;
 };
 struct PruneMacroExpansion {
   std::size_t offset = 0;
@@ -72,6 +75,7 @@ struct SystemEntity {
   std::string label;
   std::vector<FamilyId> userEdges;
   std::vector<std::size_t> systemEdges;
+  std::vector<FamilyId> rule1Evidence;
 };
 struct SystemUse { FamilyId family = noFamily; std::size_t entity = 0; };
 // A construct in user code whose behaviour may depend on presumed source

@@ -1,0 +1,8 @@
+contains | Sized() = default;
+absent | explicit Sized(int)
+absent | Sized(int, int)
+absent | operator+(int)
+removed discarded_ctor_helper |
+report | rule1-removed: category=ctor-explicit declarations=1
+report | rule1-removed: category=ctor-multi-arg declarations=1
+report | rule1-constructors-kept: reason="D3e rule 1: structural declaration" declarations=1

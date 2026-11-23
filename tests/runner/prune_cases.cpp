@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
+#include <tuple>
 namespace {
 using namespace distill;
 template<class T> T take(Result<T> r) { if (!r.ok()) throw Error{r.error().message}; return std::move(r.value()); }
@@ -77,7 +79,32 @@ int main(int argc, char** argv) {
           else workerDiagnostics += r.error().message;
           return r;
         };
-        model = take(extractPruning(model,options)); retained = take(computeRetention(model));
+        const auto input = model;
+        model = take(extractPruning(input,options)); retained = take(computeRetention(model));
+        if (input.assumeUnreferencedOverloads) {
+          auto oldInput = input; oldInput.assumeUnreferencedOverloads = false;
+          const auto old = take(extractPruning(oldInput,options));
+          const auto oldRetained = take(computeRetention(old));
+          auto identity = [](const PruneFamily& f) {
+            return std::tuple{f.label,f.original ? f.original->file : std::string(),f.original ? f.original->line : 0};
+          };
+          std::map<decltype(identity(PruneFamily{})),bool> oldLabels;
+          for (FamilyId id = 0; id < old.families.size(); ++id)
+            oldLabels[identity(old.families[id])] |= oldRetained.families[id].kept;
+          // Declaration labels need not be unique (overloads, lambdas and
+          // redeclarations). Compare physical coverage as well as labels: no
+          // byte owned by a removed old declaration may be retained now.
+          std::vector<std::pair<EditRange,std::string>> removed;
+          for (FamilyId id = 0; id < old.families.size(); ++id) if (!oldRetained.families[id].kept)
+            for (auto range : old.families[id].ranges) removed.emplace_back(range,old.families[id].label);
+          for (FamilyId id = 0; id < model.families.size(); ++id) if (retained.families[id].kept) {
+            if (!oldLabels[identity(model.families[id])])
+              fail("overload assumption resurrected family " + model.families[id].label);
+            for (auto range : model.families[id].ranges) for (const auto& [prior,label] : removed)
+              if (range.begin < prior.end && prior.begin < range.end)
+                fail("overload assumption resurrected " + label + " via " + model.families[id].label + ": " + retained.families[id].reason);
+          }
+        }
         std::istringstream expect(read(expectation)); std::string line; bool disabled = false, a11Exclusion = false;
         while (std::getline(expect,line)) {
           if (line.empty() || line.starts_with('#')) continue;

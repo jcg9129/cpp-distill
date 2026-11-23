@@ -1,0 +1,6 @@
+absent | Outer(int, double)
+absent | Sibling(char, double)
+contains | Checked(int, int)
+contains | Base(char, double)
+report | rule1-removed: category=ctor-multi-arg declarations=2
+report | rule1-constructors-kept: reason="D3e rule 1: inherited constructor base" declarations=2
