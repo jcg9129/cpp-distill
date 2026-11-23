@@ -3,9 +3,9 @@
 
 Generator 5 extends the approved L1c design to `__cpp_lib_*` and object-like
 names in `data/names/standard-macros.txt`. Capture expands complete identifier
-chains, retaining noninteger replacements as unusable evidence. Only a single
+chains, retaining noninteger presence as unusable evidence. Only a single
 integer literal is usable; parentheses, unary minus and other expressions stay
-unknown, and function-like definitions are not captured. The source compiler and
+unknown, and function-like definitions supply no values. The source compiler and
 ordered argv are always the profile's own. Standard value aliases to compiler
 predefines are audited against those exact inputs, including native uncertainty.
 The narrow sole-writer initial-undef rule handles GCC `float.h`; later undefs and
@@ -16,7 +16,25 @@ rule for `__STDC_VERSION__` and `__STDC_WANT_IEC_60559_TYPES_EXT__` handles GCC
 header write revoke it. The evidence records `source_entry_absences`.
 Snapshot `function_like` lists retain presence only, so a name that is object-like
 in another capture cannot be misclassified as absent. They supply no values and
-function-only names do not enlarge the resolver's universe.
+function-only names do not enlarge the resolver's universe. `noninteger` snapshot
+lists likewise prevent unsupported object definitions from becoming absence
+claims. Only standard names observed as integers in at least one snapshot enter
+the embedded universe; all `__cpp_lib_*` candidates remain eligible.
+
+Capture preprocesses headers before selecting integer candidates for the audit.
+Standard names with no observed integer retain only per-root possible-write
+presence (`noninteger`), including function-only writes. Another build cannot
+borrow these omitted audits to establish absence or independence. Native inputs
+conservatively block their reproduced absence too. Dependencies on omitted names
+stay unrecognised. Selected candidates retain all writes, unsupported forms,
+conditions, aliases, resets and per-value proofs. The A12 inventory still scans
+every reachable file without this macro filter.
+
+Optional `audit.root_records` shares identical root macro evidence. Root maps
+contain integer indexes into this array; `audit.root_macros(audit, root)` expands
+them for inspection. IDs are local indexes, not content addresses. Matrix trust
+is reapplied to the shared records' unfiltered requirements. Captures and merged
+evidence use compact JSON; the reviewed baseline format is unchanged.
 
 Generator 5 also requires a compatible captured target and strict ordered flag
 matching (apart from the existing
@@ -52,6 +70,15 @@ collisions. The merger reads both matrix sources and requires exactly one
 report per eligible row. It fails for missing, duplicate, extra or unsupported
 reports; additions cannot silently be excluded. It regenerates the entire data
 set without merging committed facts and compares it byte for byte.
+The merger uses the pinned `ijson` parser and a temporary SQLite store beside its
+output to keep only one decoded root resident at a time. Stored canonical roots
+stream directly into evidence hashes and output; the complete matrix is never
+loaded as Python objects. Exact delta costs use cached encoded sizes and set
+differences, preserving existing content addresses and tie-breaking. Expanded
+legacy captures produce byte-identical baselines. Loading, classification,
+hashing and compaction print progress. Scratch storage is removed on exit.
+For local benchmarks only, `--allow-subset` accepts fewer builds; it cannot be
+combined with `--check`. Production matrix completeness rules are unchanged.
 PR and manual captures use the AtCoder compiler cache by default. Only the weekly
 scheduled L1c drift call passes `cold_start: true`; monthly reproduction retains
 its separate cold capture.
@@ -64,7 +91,7 @@ The generated artifact contains two files (schema 2, generator 5):
   record per line. A successful empty snapshot proves no selected object-like macros;
   `missing`, `error` and `disabled` snapshots prove nothing.
 - `library-evidence.json`: complete build reports, including installed-header
-  definitions, lexical conditions, include edges/targets, request/value support,
+  candidate definitions, lexical conditions, include edges/targets, request/value support,
   compiler definitions, per-root/per-value audit results and parse failures.
   Review this uploaded file; do not commit it. Each compact build contains
   `evidence_sha256`, the full SHA-256 of its complete report serialized as ASCII
@@ -103,10 +130,14 @@ decoded once on first use into one reserved string and a sorted span of views;
 the views remain valid for the process lifetime. The 32,555-name baseline emits
 about 588 KB of C++ source including feature transitions, down from 852 KB with
 one string-view literal per member. Generator 5 widens transitions to standard
-integer macros and raises the enforced source budget to 3,200,000 bytes. The
-unchanged generator-4 baseline now embeds to 588,498 bytes; the actual widened
-artifact size must be recorded after CI regeneration. Compiled round trips check
-every shipped member name.
+integer macros with an enforced source budget of 1,000,000 bytes. The complete
+14-build generator-5 artifacts measured on 2026-11-22 produce 74,900,608 baseline
+bytes and 1,654,630 source bytes before integer-only standard-name selection.
+Selecting 503 names (248 feature-test plus 255 standard, including
+`FLT_EVAL_METHOD`) reduces source size to 916,768 bytes, with about 9% headroom.
+The unchanged generator-4 baseline still embeds to 588,498 bytes. These measured
+artifacts are not imported into the reviewed baseline. Compiled round trips
+check every shipped member name when C++ compilation is enabled.
 
 The compact file shares repeated records using content-address tables (the first
 16 hexadecimal SHA-256 digits, with collision detection). Build `headers` refer

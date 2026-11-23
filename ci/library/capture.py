@@ -8,7 +8,7 @@ import subprocess
 import sys
 from time import perf_counter
 
-from audit import ROOT, VERSION, classify, apply_trust, library_macro
+from audit import ROOT, VERSION, INTEGER, classify, apply_trust, compact_audit, library_macro
 from probe import build_inputs, trusted_build_inputs
 from member_inventory import inventory
 sys.path.append(str(ROOT / 'ci/extensions'))
@@ -64,7 +64,9 @@ def header_names(search):
 
 def write(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, sort_keys=True, indent=2) + '\n', encoding='utf-8', newline='\n')
+    with path.open('w', encoding='utf-8', newline='\n') as output:
+        json.dump(data, output, sort_keys=True, separators=(',', ':'))
+        output.write('\n')
 
 
 def capture(compiler, std, flags, build, output, *, search=None, reached=None, provenance=None,
@@ -112,13 +114,6 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
         volatile = {s.split()[0] for s in model.read_text().splitlines() if s and not s.startswith('#')}
     discovered = perf_counter()
     names = header_names(search)
-    audit = classify(files, {n: v for n, v in predefines.items() if n not in volatile},
-                     overridden | volatile, roots=names)
-    audited = perf_counter()
-    print(f'library audit: {audited - discovered:.2f}s ({len(files)} header keys, '
-          f'{len(names)} roots)', file=sys.stderr, flush=True)
-    observations = build_inputs(compiler, std, flags, search, audit, command)
-    observed = perf_counter()
     headers, probes = {}, 0
     disabled = any(f.startswith(('-include', '-imacros')) for f in flags)
     for header in names:
@@ -132,8 +127,21 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
             headers[header] = dict(status='ok' if process.returncode == 0 else 'error',
                                    macros=dump(process.stdout) if process.returncode == 0 else {})
             if process.returncode == 0:
+                values = headers[header]['macros']
+                noninteger = sorted(n for n, v in values.items() if not INTEGER.fullmatch(v))
+                if noninteger:
+                    headers[header]['noninteger'] = noninteger
+                headers[header]['macros'] = {n: v for n, v in values.items() if INTEGER.fullmatch(v)}
                 headers[header]['function_like'] = function_macros(process.stdout)
     preprocessed = perf_counter()
+    integer_names = {n for h in headers.values() for n in h['macros']}
+    audit = classify(files, {n: v for n, v in predefines.items() if n not in volatile},
+                     overridden | volatile, roots=names, integer_names=integer_names)
+    audited = perf_counter()
+    print(f'library audit: {audited - preprocessed:.2f}s ({len(files)} header keys, '
+          f'{len(names)} roots, {len(integer_names)} integer candidates)', file=sys.stderr, flush=True)
+    observations = build_inputs(compiler, std, flags, search, audit, command)
+    observed = perf_counter()
     data = dict(schema=2, generator=VERSION, build=build, gcc=version,
                 major=version.split('.')[0], std=std, flags=flags,
                 triple=command(compiler, ['-dumpmachine']).stdout.strip(),
@@ -144,16 +152,17 @@ def capture(compiler, std, flags, build, output, *, search=None, reached=None, p
     # A raw report describes its own build. The merger reapplies the rules over
     # the complete GCC-major matrix before licensing approximate-profile facts.
     apply_trust(audit, trusted_build_inputs(data, [data]))
+    compact_audit(audit)
     write(output, data)
     print(f'A12 member inventory: {len(data["member_inventory"]["names"])} names, '
           f'token pasting={data["member_inventory"]["token_pasting"]}',
           file=sys.stderr, flush=True)
     finished = perf_counter()
     print(f'library capture: discovery={discovered - started:.2f}s '
-          f'audit={audited - discovered:.2f}s '
+          f'audit={audited - preprocessed:.2f}s '
           f'inputs={observed - audited:.2f}s '
-          f'preprocessing={preprocessed - observed:.2f}s '
-          f'write={finished - preprocessed:.2f}s total={finished - started:.2f}s '
+          f'preprocessing={preprocessed - discovered:.2f}s '
+          f'write={finished - observed:.2f}s total={finished - started:.2f}s '
           f'({len(files)} header keys, {probes} -dM probes)', file=sys.stderr, flush=True)
     return output
 

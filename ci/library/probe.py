@@ -87,6 +87,7 @@ def expected(report, header):
     # Nonliteral replacements remain evidence, but are not safe to expand in a
     # diagnostic TU (they can contain quotes, contextual builtins or calls).
     return {name: '<function-like>' if name in snapshot.get('function_like', []) else
+            '<unsupported>' if name in snapshot.get('noninteger', []) else
             (value if INTEGER.fullmatch(value) else '<unsupported>')
             if (value := snapshot['macros'].get(name)) is not None else '<undefined>'
             for name in names}

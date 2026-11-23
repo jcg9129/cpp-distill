@@ -276,3 +276,54 @@ def test_embed_native_conditions_in_unsupported_value_helpers_stay_unknown(condi
     data['volatile'] = ['__AVX2__']
     _, rows, _ = transitions(combined(data), {'cfloat'})
     assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_noninteger_presence_is_unknown_for_both_own_and_major():
+    a = standard_report()
+    a['headers']['cfloat'].update(macros={}, noninteger=['FLT_EVAL_METHOD'])
+    names, rows, _ = transitions(combined(a), {'cfloat'})
+    assert names == ['FLT_EVAL_METHOD']
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_embed_excludes_standard_names_never_observed_as_integers():
+    data = combined(standard_report(value='__unsupported'))
+    text = generate(baseline_text(data).encode(), {'cfloat'})
+    assert '"FLT_EVAL_METHOD"' not in text
+    assert 'std::array<std::string_view,0> names{}' in text
+    assert 'std::array<std::uint16_t,0> s0{}' in text
+    assert text.index('#include <array>') < text.index('namespace distill')
+
+
+@pytest.mark.parametrize('presence', [['FLT_EVAL_METHOD', 'FLT_EVAL_METHOD'], ['bad name'], ['assert']])
+def test_embed_rejects_bad_noninteger_presence(presence):
+    data = combined(standard_report())
+    snapshot = next(iter(data['snapshots'].values()))
+    snapshot['noninteger'] = presence
+    if presence == ['assert']:
+        snapshot['function_like'] = ['assert']
+    # Re-address the mutated snapshot so validation reaches its contents.
+    from merge import digest
+    new = digest(snapshot)[:16]
+    data['snapshots'] = {new: snapshot}
+    mapping = next(iter(data['build_headers'].values()))
+    mapping['cfloat'] = new
+    new_headers = digest(mapping)[:16]
+    data['build_headers'] = {new_headers: mapping}
+    data['builds']['profile-test']['headers'] = new_headers
+    with pytest.raises(ValueError, match='invalid noninteger presence metadata'):
+        transitions(data, {'cfloat'})
+
+
+@pytest.mark.parametrize('other_major', ['14', '16'])
+def test_omitted_native_conditional_write_cannot_prove_own_absence(other_major):
+    a = standard_report()
+    a['major'], a['gcc'] = other_major, other_major + '.2.0'
+    b = standard_report('profile-other')
+    b['volatile'] = ['__AVX2__']
+    b['headers']['cfloat']['macros'] = {}
+    b['audit'] = classify({'0/cfloat': '#if __AVX2__\n#define FLT_EVAL_METHOD(x) x\n#endif'},
+                          (), {'__AVX2__'}, roots=['cfloat'], integer_names=set())
+    _, rows, _ = transitions(combined(a, b), {'cfloat'})
+    assert rows['profile-other', 'cfloat'] == (1,)

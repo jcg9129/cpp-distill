@@ -609,10 +609,11 @@ embeds the reviewed baseline and implements resolver header transitions.
 Extended by user decision on 2026-11-22 to **library header integer macros**.
 This is an extension of the approved L1c design, with the same include transition,
 default-configuration Boolean, agreement, union rule, invalidation and A9 provenance.
-The universe is `__cpp_lib_*` plus object-like macros named in
-`data/names/standard-macros.txt`. Usable definitions must expand through complete
+The embedded universe is `__cpp_lib_*` plus names in
+`data/names/standard-macros.txt` that at least one captured header actually defines
+as an integer. Usable definitions must expand through complete
 object-like identifier chains to a single integer literal. Other replacements
-remain recorded but unusable; function-like macros are not captured. Parenthesized
+have presence-only metadata; function-like macros also have presence-only metadata. Parenthesized
 literals, unary minus, floating literals and expressions are not admitted: the
 motivating `FLT_EVAL_METHOD` captures need only bare `0`/`2` literals. These are
 header facts, separate from the source-entry compiler snapshot and identity registry.
@@ -625,7 +626,16 @@ Its `-dM -E` output supplies the selected object-like names and values. A missin
 a preprocessing failure and a successful header defining no selected macros
 are distinct states; failed output never proves absence. Internal object-like
 aliases (GCC 14+ `__glibcxx_*`) are expanded through the dump to their integer
-values; unfamiliar replacements remain recorded but unusable.
+values. Snapshots retain only integer values, plus `noninteger` and
+`function_like` presence lists; neither list can prove absence or a value.
+Preprocessing precedes auditing so non-feature standard names never observed as
+integers need no detailed value audit. Their per-root `noninteger` lists retain
+possible writes, including function-only names. If another build supplies an
+integer candidate, these unaudited writes block absence and major independence;
+all native inputs conservatively block reproduced absence for such names.
+Dependencies on omitted names remain unrecognised. Selected names still retain
+every write, including unsupported replacements and undefs, and every existing
+pair, reset, taint, configuration and native-input rule applies.
 
 `ci/profiles/snapshot.py` additionally produces `<profile>-library.json` beside
 the existing outputs. `ci/extensions/scan.py` produces analogous build reports
@@ -765,8 +775,8 @@ header is preprocessed once.
 `ci/library/merge.py` requires reports from the complete profiles and extensions
 matrices and never unions old facts into fresh results. Schema 2/generator 5
 separates the compact baseline `data/library/library.json` from the uploaded
-`library-evidence.json`. The latter retains complete original build reports,
-including all definitions, conditions, include paths, compiler inputs and
+`library-evidence.json`. The latter retains complete captured build reports,
+including candidate definitions, conditions, include paths, compiler inputs and
 per-root/per-value classifications. The baseline retains build metadata,
 per-header snapshots/status (with optional `function_like` presence-only names
 that are excluded from object-value facts), per-major/root classification (`independent`,
@@ -777,6 +787,21 @@ absence, for both major agreement and reproduced snapshots. Each compact build a
 retains a full `evidence_sha256`: SHA-256 of its entire report encoded as ASCII
 JSON with sorted keys, separators `(',', ':')` and no trailing newline. Any
 evidence change therefore fails comparison even when facts do not change.
+Captures store identical per-name/per-value audit records once in an optional
+`audit.root_records` array; root macro maps reference capture-local integer
+indexes. These indexes are not content addresses: the merger reapplies matrix
+trust to their retained requirements. Old expanded generator-5 reports remain
+readable with byte-identical baseline output. Raw captures and merged evidence
+use compact JSON; the reviewed baseline keeps its one-record-per-line format.
+
+The merger streams input JSON into a temporary SQLite store beside its output,
+decoding one root at a time, rather than loading the entire matrix. Matrix trust
+is persisted before classification. Evidence hashes and output stream canonical
+stored root bytes without decoding them again. Exact encoded-size calculations
+and set differences choose the same delta bases and ties without serializing
+every candidate. CI logs loading and merge phases. The benchmark-only
+`--allow-subset` option cannot be combined with `--check`; ordinary runs still
+require the complete matrix. Temporary storage is removed on normal/error exit.
 
 Sorted content-address tables share repeated snapshots, classification maps,
 common dependency sets and agreement records. References use 16 hexadecimal
@@ -813,10 +838,13 @@ scanned-build flags. Thus an unflagged profile cannot borrow `-m32` or
 `-mfpmath=387` values, and a flagged profile cannot borrow a default capture.
 Reproduced snapshots still require their complete exact argv and build identity.
 
-The embedder enforces a 3,200,000-byte generated-source budget (previously
-620,000). With the unchanged generator-4 committed data the new embedder emits
-588,498 bytes; the widened CI artifact's actual size remains to be measured when
-imported. No widened production data is generated locally.
+The embedder enforces a 1,000,000-byte generated-source budget. The complete
+14-build generator-5 input matrix measured on 2026-11-22 produces a 74,900,608-byte
+baseline and 1,654,630 source bytes before integer-only standard-name selection.
+Selection retains 503 names (248 feature-test, 255 standard), including
+`FLT_EVAL_METHOD`, and reduces the source to 916,768 bytes, leaving about 9%
+headroom. The unchanged generator-4 committed baseline emits 588,498 bytes.
+These measurements do not import or approve a new production baseline.
 
 **Default library configuration.** Track a separate, monotone Boolean at every
 point. It holds iff on every path to that point there has been no user

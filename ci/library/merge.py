@@ -6,11 +6,13 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import tempfile
+from time import perf_counter
 
-from audit import ROOT, VERSION, apply_trust
-from capture import write
+from audit import ROOT, VERSION, apply_trust, root_macros
 from probe import trusted_build_inputs
 from member_inventory import validate_inventory
+from report_store import ReportStore, report_digest, write_evidence
 
 
 def canonical(data):
@@ -21,7 +23,7 @@ def digest(data):
     return hashlib.sha256(canonical(data).encode('utf-8')).hexdigest()
 
 
-def merge(reports, expected):
+def merge(reports, expected, progress=None):
     builds = {}
     for report in reports:
         if (report.get('schema') != 2 or report.get('generator') != VERSION or
@@ -58,6 +60,10 @@ def merge(reports, expected):
         tables[table][key] = entry
         return key
 
+    # Embedding uses a global name universe, including names seen only in a
+    # different GCC major. Its own native-dependent absences need blockers too.
+    universe = {n for b in builds.values() for n in b['audit']['macros']}
+    universe.update(n for b in builds.values() for s in b['headers'].values() for n in s['macros'])
     versions, agreement = {}, {}
     for major in sorted({b['major'] for b in builds.values()}, key=int):
         rows = [builds[k] for k in sorted(builds) if builds[k]['major'] == major]
@@ -68,6 +74,15 @@ def merge(reports, expected):
         agreement[major] = {}
         for header in headers:
             roots = [b['audit']['roots'].get(header, dict(macros={}, taint=['<missing-root>'])) for b in rows]
+            for i, (build, root) in enumerate(zip(rows, roots)):
+                # A non-candidate in this capture can be an integer candidate
+                # in another build. Unanalysed writes never establish absence;
+                # all native inputs conservatively block own absence as well.
+                if root.get('noninteger') or 'root_records' in build['audit']:
+                    roots[i] = root = dict(root, macros=root_macros(build['audit'], root))
+                for name in universe.intersection(root.get('noninteger', [])):
+                    root['macros'][name] = dict(independent=False, pairs={},
+                        dependencies=build['volatile'], unrecognised=['<noninteger-candidate>'])
             taint = sorted(set().union(*(set(r['taint']) for r in roots)))
             default = dict(independent=not taint, values=[], dependencies=taint)
             classification = {}
@@ -90,14 +105,19 @@ def merge(reports, expected):
                 macros=intern('macro_sets', {n: intern('macro_classifications', e) for n, e in stored.items()})))
             defined, absent, unknown = {}, [], {}
             snapshots = [b['headers'].get(header) for b in rows]
+            unavailable = not all(s and s['status'] == 'ok' for s in snapshots)
+            functions = set().union(*(s.get('function_like', []) for s in snapshots if s))
+            nonintegers = set().union(*(s.get('noninteger', []) for s in snapshots if s))
             for name in names:
                 entry = classification.get(name, default)
                 values = {s['macros'].get(name) for s in snapshots if s and s['status'] == 'ok'}
                 reason = None
-                if not all(s and s['status'] == 'ok' for s in snapshots):
+                if unavailable:
                     reason = 'unavailable-header'
-                elif any(name in s.get('function_like', []) for s in snapshots):
+                elif name in functions:
                     reason = 'function-like-definition'
+                elif name in nonintegers:
+                    reason = 'noninteger-definition'
                 elif len(values) != 1:
                     reason = 'cross-build-disagreement'
                 elif values == {None}:
@@ -112,6 +132,8 @@ def merge(reports, expected):
                 if reason:
                     unknown[name] = reason
             agreement[major][header] = intern('agreements', dict(defined=defined, absent=absent, unknown=unknown))
+        if progress:
+            progress('Classified GCC ' + major)
     for major in versions:
         versions[major]['roots'] = intern('root_classifications', versions[major]['roots'])
         agreement[major] = intern('root_agreements', agreement[major])
@@ -122,8 +144,12 @@ def merge(reports, expected):
         compact_builds[key]['member_inventory'] = dict(
             names_sha256=digest(inv['names']), name_count=len(inv['names']),
             reachable_headers=inv['reachable_headers'], token_pasting=inv['token_pasting'])
-        compact_builds[key].update(evidence_sha256=digest(build),
+        compact_builds[key].update(evidence_sha256=report_digest(build),
                                   headers=intern('build_headers', {h: intern('snapshots', s) for h, s in sorted(build['headers'].items())}))
+        if progress:
+            progress('Hashed evidence for ' + key)
+    if progress:
+        progress(f'Compacting {len(tables["macro_sets"])} macro sets')
     tables['macro_sets'] = delta_sets(tables['macro_sets'])
     member_names = sorted(set().union(*(set(b['member_inventory']['names']) for b in builds.values())))
     return dict(schema=2, generator=VERSION, builds=compact_builds, member_names=member_names,
@@ -133,20 +159,31 @@ def merge(reports, expected):
 def delta_sets(sets):
     """Share repeated name maps with deterministic, acyclic base-plus-deltas."""
     result, previous = {}, []
+    # JSON object size is additive in its encoded key/value pairs. Avoid
+    # serializing every candidate in this quadratic search; preserve the exact
+    # old cost and tie-breaking (including optional removed lists).
+    names = {n for entries in sets.values() for n in entries}
+    weights = {n: len(canonical(n)) for n in names}
+    pairs = {item for entries in sets.values() for item in entries.items()}
+    pair_sizes = {(n, v): weights[n] + 1 + len(canonical(v)) for n, v in pairs}
+    def map_size(items):
+        return 2 + sum(map(pair_sizes.__getitem__, items)) + len(items) - bool(items)
     for key, entries in sorted(sets.items(), key=lambda kv: (len(kv[1]), canonical(kv[1]))):
         best = dict(entries=entries)
-        cost = len(canonical(best))
-        for base, old in previous:
-            changes = {n: v for n, v in entries.items() if old.get(n) != v}
+        items = set(entries.items())
+        cost = 12 + map_size(items)  # {"entries":...}
+        for base, old, old_items, overhead in previous:
+            changes = items - old_items
             removed = sorted(old.keys() - entries.keys())
-            candidate = dict(base=base, entries=changes)
+            size = overhead + map_size(changes)
             if removed:
-                candidate['removed'] = removed
-            size = len(canonical(candidate))
+                size += 12 + sum(map(weights.__getitem__, removed)) + len(removed)
             if size < cost:
-                best, cost = candidate, size
+                best, cost = dict(base=base, entries=dict(changes)), size
+                if removed:
+                    best['removed'] = removed
         result[key] = best
-        previous.append((key, entries))
+        previous.append((key, entries, items, 20 + len(canonical(key))))
     return result
 
 
@@ -219,9 +256,9 @@ def check(actual, committed):
         return True
     if old.replace(b'\r\n', b'\n') == actual.replace(b'\r\n', b'\n'):
         print('L1c bytes differ in line endings')
-    print(''.join(unified_diff(old.decode('utf-8', errors='backslashreplace').splitlines(True),
+    sys.stdout.writelines(unified_diff(old.decode('utf-8', errors='backslashreplace').splitlines(True),
                                actual.decode('utf-8', errors='backslashreplace').splitlines(True),
-                               fromfile=str(committed), tofile='CI/library.json')), end='')
+                               fromfile=str(committed), tofile='CI/library.json'))
     return False
 
 
@@ -231,14 +268,29 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--check', type=Path)
     parser.add_argument('--evidence-output', type=Path, help='full artifact (default: beside --output)')
+    parser.add_argument('--allow-subset', action='store_true',
+                        help='benchmark/test only: accept an incomplete matrix; never use for reviewed data')
     args = parser.parse_args()
+    if args.allow_subset and args.check:
+        parser.error('--allow-subset cannot be used with --check')
     try:
-        reports = [json.loads(p.read_text(encoding='utf-8')) for p in sorted(args.artifacts.rglob('*-library.json'))]
-        data = merge(reports, expected_builds())
+        started = perf_counter()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='library-merge-', dir=args.output.parent) as scratch:
+            store = ReportStore(Path(scratch) / 'roots.sqlite')
+            try:
+                reports = []
+                for i, path in enumerate(sorted(args.artifacts.rglob('*-library.json'))):
+                    reports.append(store.load(path, i))
+                    print(f'Loaded {reports[-1]["build"]}: {perf_counter() - started:.1f}s', flush=True)
+                data = merge(reports, [r['build'] for r in reports] if args.allow_subset else expected_builds(),
+                             progress=lambda message: print(f'{message}: {perf_counter() - started:.1f}s', flush=True))
+                print(f'Merged {len(reports)} builds: {perf_counter() - started:.1f}s', flush=True)
+                write_evidence(args.evidence_output or args.output.with_name('library-evidence.json'), reports, VERSION)
+            finally:
+                store.close()
         print(f'A12 member inventory: {len(data["member_names"])} names, '
               f'{len(data["builds"])} scanned builds, {inventory_bytes(data)} added compact JSON bytes')
-        full = dict(schema=2, generator=VERSION, builds={r['build']: r for r in reports})
-        write(args.evidence_output or args.output.with_name('library-evidence.json'), full)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(baseline_text(data), encoding='utf-8', newline='\n')
         if args.check and not check(args.output.read_bytes(), args.check):

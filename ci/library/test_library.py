@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from audit import ROOT, VERSION, classify, identifiers, parse, header_test_key, apply_trust
+from audit import ROOT, VERSION, classify, identifiers, parse, header_test_key, apply_trust, root_macros
 from fixtures import l1c_reference as reference
 from capture import capture, dump, header_names, write
 from merge import (merge, check, expected_builds, baseline_text, digest,
@@ -347,13 +347,13 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
     assert data['headers']['ext/pb_ds/tree.hpp'] == dict(status='error', macros={})
     assert data['audit']['unparsed'] == {
         '0/ext/pb_ds/tree.hpp': '0/ext/pb_ds/tree.hpp: unterminated conditional'}
-    assert data['audit']['roots']['charconv']['macros']['__cpp_lib_test']['independent']
+    assert root_macros(data['audit'], data['audit']['roots']['charconv'])['__cpp_lib_test']['independent']
     for args, source_text, _ in calls:
         if '-dM' in args:
             assert args == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']
             assert source_text.count('#include') == 1
     assert [source_ for args, source_, _ in calls if '-dM' in args] == [
-        f'#include <{h}>\n' for h in ['bits/c++config.h', 'charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp']]
+        f'#include <{h}>\n' for h in ['charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp', 'bits/c++config.h']]
     assert '__AVX2__' in data['volatile']
     assert '__AVX2__' not in data['audit']['compiler_inputs']
     assert data['audit']['compiler_inputs']['__cplusplus'] == '#define __cplusplus 202302L'
@@ -388,7 +388,7 @@ def test_capture_symlinked_headers_preserves_include_dependencies(tmp_path, hand
         path = capture('/fixture/g++', 'c++23', [], 'fixture', tmp_path / 'symlink.json',
                        search=[search], **kwargs)
     data = json.loads(path.read_text())['audit']
-    entry = data['roots']['charconv']['macros']['__cpp_lib_test']
+    entry = root_macros(data, data['roots']['charconv'])['__cpp_lib_test']
     assert not entry['independent']
     assert entry['unrecognised'] == ['_GLIBCXX_HAS_GTHREADS', '_GLIBCXX_HOSTED']
     assert {definition['file'] for definition in data['macros']['__cpp_lib_test']} == {
@@ -906,7 +906,8 @@ def test_standard_macro_capture_uses_exact_profile_argv_and_merge_disagrees(tmp_
     search = tmp_path / 'include'
     search.mkdir()
     header = search / 'cfloat'
-    header.write_text('#undef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__')
+    header.write_text('#undef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n'
+                      '#define NULL __null\n#define assert(x) x')
     reports, calls = [], []
     def compiler(executable, argv, source='', check=True):
         calls.append((str(executable), argv, source))
@@ -924,7 +925,7 @@ def test_standard_macro_capture_uses_exact_profile_argv_and_merge_disagrees(tmp_
         else:
             out = '#define __FLT_EVAL_METHOD__ ' + value + '\n'
             if source == '#include <cfloat>\n':
-                out += '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n'
+                out += '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#define NULL __null\n#define assert(x) x\n'
         return subprocess.CompletedProcess(argv, 0, out, '')
     for key, flags in [('default', ['-O2', '-Wall']), ('x87', ['-O2', '-m32', '-mfpmath=387'])]:
         with patch('capture.command', side_effect=compiler), patch('capture.header_names', return_value=['cfloat']):
@@ -934,7 +935,9 @@ def test_standard_macro_capture_uses_exact_profile_argv_and_merge_disagrees(tmp_
         reports.append(report_)
         value = '2' if key == 'x87' else '0'
         assert report_['headers']['cfloat']['macros'] == {'FLT_EVAL_METHOD': value}
-        assert report_['audit']['roots']['cfloat']['macros']['FLT_EVAL_METHOD']['pairs'][value]['independent']
+        assert report_['headers']['cfloat']['noninteger'] == ['NULL']
+        assert report_['headers']['cfloat']['function_like'] == ['assert']
+        assert root_macros(report_['audit'], report_['audit']['roots']['cfloat'])['FLT_EVAL_METHOD']['pairs'][value]['independent']
         own_calls = [(args, src) for _, args, src in calls if src == '#include <cfloat>\n']
         assert own_calls[-1][0] == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']
     merged = merge(reports, ['default', 'x87'])
@@ -991,3 +994,29 @@ def test_function_like_presence_is_not_an_absence_claim():
     generated = source(b, 'charconv')
     assert '__distill_lib_s(__cpp_lib_test)' not in generated
     assert 'DLIB|charconv|__cpp_lib_test|<function-like>' in generated
+
+
+def test_integer_candidate_audit_keeps_omitted_presence_and_fails_closed():
+    files = {'0/cfloat': '#define FLT_EVAL_METHOD __unsupported\n'
+                         '#define NULL __null\n#define assert(x) x\n'
+                         '#if NULL\n#define __cpp_lib_test 1L\n#endif'}
+    data = classify(files, (), roots=['cfloat'], integer_names=set())
+    root = data['roots']['cfloat']
+    assert root['noninteger'] == ['FLT_EVAL_METHOD', 'NULL', 'assert']
+    assert set(data['macros']) == {'__cpp_lib_test'}
+    assert not root['macros']['__cpp_lib_test']['independent']
+    assert 'NULL' in root['macros']['__cpp_lib_test']['unrecognised']
+
+
+def test_cross_build_integer_candidate_cannot_borrow_omitted_absence():
+    from test_embed import standard_report
+    a = standard_report()
+    b = standard_report('other', reproduced=False)
+    b['headers']['cfloat']['macros'] = {}
+    b['audit'] = classify({'0/cfloat': '#if SWITCH\n#define FLT_EVAL_METHOD __helper\n#endif'},
+                          (), roots=['cfloat'], integer_names=set())
+    data = merge([a, b], [a['build'], b['build']])
+    assert 'FLT_EVAL_METHOD' not in get_agreement(data, '14', 'cfloat')['absent']
+    assert not get_classification(data, '14', 'cfloat')['macros']['FLT_EVAL_METHOD']['independent']
+    # Synthetic blockers used for merging must not pollute the full evidence.
+    assert b['audit']['roots']['cfloat']['macros'] == {}

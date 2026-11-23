@@ -2,6 +2,8 @@
 """Fail-closed, per-root textual library macro audit."""
 from collections import deque
 from functools import lru_cache
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -21,6 +23,38 @@ STANDARD_MACROS = frozenset(n for n in (ROOT / 'data/names/standard-macros.txt')
 
 def library_macro(name):
     return name.startswith('__cpp_lib_') or name in STANDARD_MACROS
+
+
+def root_macros(audit, root):
+    """Expand optional capture-local sharing, without changing the evidence."""
+    records = audit.get('root_records', [])
+    if any(type(e) is int and not 0 <= e < len(records) for e in root['macros'].values()):
+        raise ValueError('invalid library audit record reference')
+    return {n: records[e] if type(e) is int else e for n, e in root['macros'].items()}
+
+
+def compact_audit(audit):
+    """Store identical per-name evidence once, with capture-local record IDs.
+
+    IDs are opaque indexes, not content addresses: merge may reproject their
+    unfiltered requirements under the complete matrix's trust rules.
+    """
+    records, indexes = [], {}
+    for header, root in audit['roots'].items():
+        shared = {}
+        for name, entry in sorted(root_macros(audit, root).items()):
+            key = hashlib.sha256(json.dumps(entry, sort_keys=True, separators=(',', ':')).encode()).digest()
+            if key not in indexes:
+                indexes[key] = len(records)
+                records.append(entry)
+            index = indexes[key]
+            if records[index] != entry:
+                raise ValueError('library audit record digest collision')
+            shared[name] = index
+        root['macros'] = shared
+        audit['roots'][header] = root
+    audit['root_records'] = records
+    return audit
 
 
 # Candidates, never unconditional exemptions: verify every reachable write.
@@ -56,12 +90,19 @@ def apply_trust(audit, inputs):
     without reparsing headers or rerunning the per-root graph audit at merge.
     """
     audit['trusted_inputs'] = inputs
-    projections = {}
+    projections, projected = {}, set()
     for header, root in audit['roots'].items():
         used = set()
-        for entry in root['macros'].values():
+        for name, entry in root_macros(audit, root).items():
+            # Only referenced records stay alive across disk-backed root reads;
+            # IDs of temporary expanded entries may be reused by Python.
+            shared = type(root['macros'][name]) is int
             used.update(entry['requirements'])
             for record in [entry, *entry['pairs'].values()]:
+                if shared and id(record) in projected:
+                    continue
+                if shared:
+                    projected.add(id(record))
                 key = tuple(record['requirements'])
                 if key not in projections:
                     projections[key] = sorted(set(key) - inputs.keys())
@@ -71,6 +112,8 @@ def apply_trust(audit, inputs):
         for name, requirements in root.get('condition_macros', {}).items():
             if not (set(requirements) - inputs.keys()):
                 root['trusted_inputs'][name] = dict(rule='independent-library-macro', root=header)
+        # Disk-backed roots return one decoded record, so persist its projection.
+        audit['roots'][header] = root
     return audit
 
 
@@ -328,7 +371,8 @@ def grounded_macros(start, includes, intrinsic, writers, invalid):
     return proven
 
 
-def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inputs=None):
+def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inputs=None,
+             integer_names=None):
     """Audit fresh TUs rooted at the requested search-relative header spellings.
 
     Literal edges follow compiler search order, including quote and include_next
@@ -358,6 +402,15 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
     # but function-only standard names do not enter the captured universe.
     targets = {n for n, ws in writes.items() if library_macro(n) and
                (n.startswith('__cpp_lib_') or any(w['value'] is not None and not w['function_like'] for w in ws))}
+    omitted = set()
+    if integer_names is not None:
+        # Names with no observed integer cannot add a positive header fact.
+        # Keep closure presence so another build's integer candidate cannot
+        # turn these unanalysed writes into an absence proof. Dependencies on
+        # omitted names remain unrecognised, never promoted to trusted inputs.
+        selected = {n for n in targets if n.startswith('__cpp_lib_') or n in integer_names}
+        omitted = {n for n in writes if library_macro(n)} - selected
+        targets = selected
     audited_names = targets | PURE_CANDIDATES
     candidates = set().union(*(g for _, _, g in parsed.values()))
     guards = {g for g in candidates if g not in predefines and g not in blocked
@@ -634,6 +687,8 @@ def classify(files, predefines, blocked=frozenset(), *, roots=None, trusted_inpu
         results[root] = dict(macros=macros, taint=sorted(unknown), reset_prefixes=sorted(resets),
                             condition_macros={n: sorted(expand(n)) for n in sorted(condition_names & local.keys())
                                               if n in targets or n.startswith('__glibcxx_')})
+        if integer_names is not None:
+            results[root]['noninteger'] = sorted(omitted & local.keys())
     header_tests = {}
     for file, (ws, includes, _) in parsed.items():
         conditions = [c for w in ws for c in w['conditions']]
