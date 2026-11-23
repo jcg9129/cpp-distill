@@ -188,11 +188,30 @@ these, and only these; the report lists each one an output depended on, and
   records appearing as cv/ref-qualified constructor or assignment parameter types,
   transitively, including assignment's destination record, instantiated function
   template signatures and record template arguments (e.g. initializer-list
-  elements). The witness walk is bounded to 128 records and 4096 declarations,
+  elements). They also walk non-static data members, stripping cv/ref and array
+  extents, including anonymous unions/structs. Assignment checks carry assignment
+  operator evidence as well as constructor evidence through bases and members;
+  revisiting a record with stronger evidence upgrades its cached coverage.
+  The witness walk is bounded to 128 records and 4096 declarations,
   parameters, bases and template arguments per operand; hitting
   either bound protects all rule-1 declarations for that check, still conditional
   on independently retained owners. Selected deduction-guide specializations
   propagate reference flags to their written template identity.
+  Independently of explicit checks, an implicitly declared or defaulted special
+  member that is deleted protects every constructor and every form of `operator=`
+  (including templates) in its direct/virtual bases and non-static member record
+  types, transitively through their bases/members. These declarations are never
+  individually removed while their owners survive. User-written `=delete` does
+  not trigger this dependency protection. Non-deleted special members need no
+  such protection: removing a non-selected candidate cannot undelete a member
+  that is already non-deleted.
+  The worker uses the parser's Sema to force implicit-member declarations for
+  every complete, non-dependent user record before collecting deletion roots.
+  Dependent patterns cannot be forced; an undeclared implicit special member
+  there conservatively protects any subobject constructor/assignment candidates.
+  Without such candidates this adds no protection. The deletion walk has the
+  same 128-record/4096-declaration bound; exhaustion protects all rule-1
+  declarations in the TU, still without resurrecting dead owners.
   This does not prevent removal of an unused whole record under the existing rules.
   A13 is enabled by default with A12-enabled member pruning. Reports list
   `A13 unreferenced-overloads` whenever member pruning is enabled with it, even

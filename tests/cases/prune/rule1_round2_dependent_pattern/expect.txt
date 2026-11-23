@@ -1,0 +1,3 @@
+contains | Base(unsigned long)
+contains | template<class T> Base& operator=
+kept Base::operator= | special-member deletion dependency

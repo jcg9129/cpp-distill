@@ -1,0 +1,2 @@
+absent | Base(unsigned long)
+absent | template<class T>

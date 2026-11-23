@@ -170,6 +170,122 @@ is in `build/verified-bin/`. The focused oracle is reproducible with
 build/verified-bin/distill_prune_worker rule1_review` (set `TMPDIR` inside this
 worktree and apply the memory limit above). No commit was made.
 
+## Review fixes, round 2
+
+The follow-up A–C programs were added as `rule1_round2_*` extraction fixtures
+before changing the worker, then run against the archived 2f9d095 worker.
+The existing oracle compiled and ran original and pruned programs with GCC
+15.2.0 and Clang 22.1.8, checking both stdout and exit status:
+
+| Finding | Original stdout / exit | Unfixed pruned stdout / exit |
+| --- | --- | --- |
+| A, aggregate member conversion | `0` / 0 | `1` / 1, both compilers |
+| B, deleted implicit move assignment, evaluated call | `1` / 1 | `2` / 2, both compilers |
+| C, deleted defaulted move assignment, explicit trait | `0` / 0 | `1` / 1, both compilers |
+
+The constructor/check witness walk now follows non-static data members,
+including cv/ref types, multidimensional array elements and anonymous
+union/struct fields. Bases and members retain assignment-operator evidence
+for assignment checks. The visited-record cache tracks evidence kinds, so a
+record first reached for constructors can later acquire assignment evidence.
+A separate fixture exercises that upgrade without any deleted special member.
+
+Deletion dependencies are independent of check witnesses. A deleted implicit
+or defaulted default/copy/move constructor, copy/move assignment or destructor
+protects every constructor and every `operator=` overload (including templates)
+of its direct/virtual bases and member record types, transitively through their
+bases/members. User-written `=delete` does not itself trigger this protection.
+Non-deleted special members need no dependency protection: removing a
+non-selected candidate cannot undelete a member that is already non-deleted.
+Protection remains conditional on the candidate's owner surviving.
+
+Clang declares implicit members lazily. The consumer now obtains the parser's
+Sema via `SemaConsumer` and calls `ForceDeclarationOfImplicitMembers` for every
+complete non-dependent user record, including implicit lambda records and
+known template instantiations. Dependent patterns cannot be forced; undeclared
+implicit members there conservatively protect subobject constructor/assignment
+candidates, with no protection when no such candidates exist. Both walks are
+bounded to 128 records and 4096 declarations; deletion-walk exhaustion protects
+all rule-1 declarations in the TU. The bound fixture also verifies that a dead
+owner remains removable.
+
+The existing `rule1_review_guide_template` fixture already contains the exact
+`Box(T) -> Box<long>` regression and an unused `Box(T*) -> Box<char>` control.
+In `MemberUnits::VisitFunctionDecl`, the evidence-only identity lookup and
+`protectRule1` call precede the `CXXMethodDecl` filter, so non-method guide
+specializations transfer used/referenced flags through `rule1Identity` to their
+registered written pattern. A code comment records this ordering requirement.
+
+Additional fixtures cover aggregate fields with a non-deleted default
+constructor, field shapes, ordinary assignment through member and virtual-base
+subobjects, lazily declared unused move assignment, each special-member kind,
+implicit lambda records, dependent patterns, explicit-delete/non-deleted removal
+controls, and the bounded fallback. The 15 new fixtures use the same GCC/Clang
+stdout/exit and opt-out monotonicity oracles as the existing fixtures. Baseline
+reproduction is in `build/round2-before.log`.
+
+All 409 Python tests passed again: 209 unittest cases and 200 library pytest
+cases. Library modules ran in separate processes under the memory limit; the
+large reviewed-baseline test passed with capture disabled (`pytest -s`).
+
+All 109 CTest tests passed across the full batch and the final isolated D3c CLI
+rerun. The full extraction suite passed all 137 expectation variants, including
+15 new fixtures; the focused A13 run passed 53 variants. The original batch
+passed 108 tests, with `pipeline_cli_d3c` reaching its 120-second aggregate
+limit. Timing the unchanged archived CLI's 14 D3c cases took 117.76 seconds;
+the fixed CLI passed the same assertions directly in 121.24 seconds. This
+suite's aggregate CTest timeout is now 180 seconds; its per-case process,
+compilation and runtime limits are unchanged. The CTest rerun passed in
+126.43 seconds. No other checked-in timeout changed.
+
+Builds used the pinned LLVM 23.1.5 SDK, assertions, `-O0 -g0`, at most two jobs,
+`ulimit -v 5700000` and explicit timeouts. All compiler temporary files, SDK
+copies and validation artifacts stayed inside this worktree. Final CTest logs
+are `build/ctest-final.log` and `build/ctest-d3c-180.log`; Python results are
+`build/python-*.log`. The stable tested CLI/worker snapshot is in
+`build/verified-bin/`. No commit was made.
+
+The final NLM CLI differential passed on 111 accepted fixtures (96 pre-existing
+and 15 new), with five matching baseline-gate rejections: `chrono_parse`,
+`generated_line`, `ordinary_pragmas`, `parse_error` and `typical_library`.
+Opt-out output is byte-identical to archived 2f9d095 with A13 disabled; enabled
+families, physical declaration coverage and declaration bytes are monotone,
+and NLM output never grows against opt-out.
+
+Rule-1 removal counts within surviving records on the **96 pre-existing
+accepted fixtures** are unchanged:
+
+| Category | Before declarations / bytes | Fixed declarations / bytes |
+| --- | ---: | ---: |
+| Explicit constructors | 2 / 94 | 2 / 94 |
+| Implicit converting constructors | 3 / 64 | 3 / 64 |
+| Multi-argument constructors | 12 / 321 | 12 / 321 |
+| operator() | 3 / 122 | 3 / 122 |
+| Comparison operators | 0 / 0 | 0 / 0 |
+| Arithmetic operators | 11 / 447 | 11 / 447 |
+| Other operators | 1 / 40 | 1 / 40 |
+| Deduction guides | 2 / 62 | 2 / 62 |
+| Total | 34 / 1,150 | 34 / 1,150 |
+
+All 17 constructor removals, three functor removals and two guide removals
+remain. NLM rendered savings against opt-out remain 1,344 B. This comparison
+includes the previous review's 21 fixtures and excludes the 15 new round-2
+fixtures. Per-category totals and per-fixture differences are recorded in
+`build/round2-counts.json`; the CLI differential is in
+`build/cli-final-round2/summary.json`. Completed serial comparison artifacts
+were reused with identical binaries, inputs and options; all comparison
+invariants were rechecked, and remaining CLI invocations ran at most two at a
+time under the same memory/time limits.
+
+None of the 96 pre-existing accepted NLM outputs changed from the archived
+A13-enabled branch. The seven focused CSES fixtures also passed opt-out byte
+identity and family/declaration monotonicity checks in plain, NLM and compact
+rendering. NLM and compact output never grew. Plain rendering reported extra
+`#line` marker bytes for `rule1_layout_checks` (78 B),
+`rule1_nested_protection` (186 B) and `rule1_specialization_protection` (196 B),
+with monotone family/declaration coverage. Their summaries are
+`build/focused-round2-{plain,nlm,compact}/summary.json`.
+
 ## Original round 2 investigation
 
 The reproduced causes and changes are:

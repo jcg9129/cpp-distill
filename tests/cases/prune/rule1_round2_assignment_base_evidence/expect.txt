@@ -1,0 +1,2 @@
+contains | Base& operator=(int)
+kept Base::operator= | overload-sensitive check

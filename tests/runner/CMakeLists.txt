@@ -46,7 +46,10 @@ if(TARGET distill)
   add_test(NAME pipeline_pruning_d3c COMMAND distill_pipeline_cases --worker $<TARGET_FILE:distill_prune_worker> --d3c)
   set_tests_properties(pipeline_pruning_d3c PROPERTIES TIMEOUT 120)
   add_test(NAME pipeline_cli_d3c COMMAND distill_pipeline_cases --cli $<TARGET_FILE:distill> --d3c)
-  set_tests_properties(pipeline_cli_d3c PROPERTIES TIMEOUT 120)
+  # Fourteen end-to-end CLI cases also compile/run flat reference artifacts.
+  # Allow the aggregate special-member analysis cost on memory-limited VMs;
+  # each case retains its own process/compilation/runtime limits.
+  set_tests_properties(pipeline_cli_d3c PROPERTIES TIMEOUT 180)
   add_test(NAME pipeline_pruning_d3d COMMAND distill_pipeline_cases --worker $<TARGET_FILE:distill_prune_worker> --d3d)
   set_tests_properties(pipeline_pruning_d3d PROPERTIES TIMEOUT 120)
   add_test(NAME pipeline_cli_d3d COMMAND distill_pipeline_cases --cli $<TARGET_FILE:distill> --d3d)
