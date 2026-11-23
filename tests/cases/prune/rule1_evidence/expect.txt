@@ -1,0 +1,7 @@
+contains | ConceptRecord(int, int)
+kept ConceptRecord::operator+ |
+contains | RequiresRecord(int, int)
+kept RequiresRecord::operator- |
+kept Compared::operator== |
+removed Compared::operator!= |
+contains | Guided(int) -> Guided<long>;

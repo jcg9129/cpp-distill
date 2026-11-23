@@ -42,6 +42,15 @@ struct PruneFamily {
   // retained record's structural family (also for records nested in it).
   FamilyId memberOf = noFamily;
   std::string memberName, memberBlocker;
+  // Prototype: a declaration identity, rather than a same-name overload unit.
+  // Nonempty also on structurally protected rule-1 declarations.
+  std::string rule1Kind;
+  bool rule1Constructor = false;
+  // Physical record pattern and written declaration; instances share keys.
+  // Nested records may share one structural family but have distinct keys.
+  std::size_t rule1Record = noFamily, rule1Declaration = noFamily;
+  // Unresolved overload candidates participate only in reverse effects.
+  std::vector<FamilyId> potentialEdges;
 };
 struct PruneMacroExpansion {
   std::size_t offset = 0;
@@ -76,6 +85,7 @@ struct PositionUse {
 struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
 struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
+  bool assumeUnreferencedOverloads = true;
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
   // Raw system-header identifiers plus identifiers emitted through system macro

@@ -1,0 +1,5 @@
+args | --no-assume=unreferenced-overloads
+contains | Out::Out(int, double)
+contains | Template<T>::Template(int, double)
+contains | Template<int>::operator+(double)
+report | rule1-removed: category=operator-arithmetic declarations=0 bytes=0

@@ -1,0 +1,11 @@
+exit=0
+prune=yes
+artifact=pruned
+contains=Counter(int a,int b)
+contains.used=operator+(int n)
+absent=Counter(int,double)
+absent.op=operator+(double)
+verification=local
+configuration=local
+report.assumption=pruning assumption: unreferenced-overloads
+report.removed=rule1-removed: category=ctor-multi-arg declarations=1

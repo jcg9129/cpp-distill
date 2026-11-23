@@ -14,17 +14,18 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (a == "--no-assume" || a.starts_with("--no-assume=")) {
       std::string names;
       if (a == "--no-assume") {
-        if (++i == args.size()) return Error{"missing value for --no-assume; switchable names: instantiation-effects, library-spelled-members, library-macro-values"};
+        if (++i == args.size()) return Error{"missing value for --no-assume; switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads"};
         names = args[i];
       } else names = a.substr(12);
       for (std::size_t begin = 0;;) {
         const auto end = names.find(',',begin);
         const auto name = names.substr(begin,end == names.npos ? end : end-begin);
-        if (name != "instantiation-effects" && name != "library-spelled-members" && name != "library-macro-values")
-          return Error{"unknown --no-assume name: " + name + "; switchable names: instantiation-effects, library-spelled-members, library-macro-values"};
+        if (name != "instantiation-effects" && name != "library-spelled-members" && name != "library-macro-values" && name != "unreferenced-overloads")
+          return Error{"unknown --no-assume name: " + name + "; switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads"};
         if (name == "instantiation-effects") o.assumeInstantiationEffects = false;
         else if (name == "library-spelled-members") o.assumeLibrarySpelledMembers = false;
-        else o.assumeLibraryMacroValues = false;
+        else if (name == "library-macro-values") o.assumeLibraryMacroValues = false;
+        else o.assumeUnreferencedOverloads = false;
         if (end == names.npos) break;
         begin = end+1;
       }
@@ -53,7 +54,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        o.noPrune || !o.assumeUnreferencedOverloads || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
@@ -78,7 +79,7 @@ std::string distillHelp() {
       "  --report <file>    validation, conditional and pruning report\n"
       "  --no-prune         inline and resolve only\n"
       "  --no-assume=<name> disable an assumption (repeatable, comma lists accepted)\n"
-      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-macro-values (A9 standard macros)\n"
+      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-macro-values (A9 standard macros), unreferenced-overloads (prototype)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
       "  --strip-comments   remove comments during checked rendering\n"
       "  --no-line-markers  omit #line markers from a pruned result when no user code\n"

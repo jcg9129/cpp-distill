@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
         model = take(preparePruning(configuration,{},flat,&configuration.facts,cli.keep));
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
         model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
+        model.assumeUnreferencedOverloads = cli.assumeUnreferencedOverloads;
         if (*feature || name == "ordinary_builtins") {
           model.dialect = "gnu++23";
           for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";
@@ -83,7 +84,10 @@ int main(int argc, char** argv) {
           const auto bar = line.find('|'); if (bar == line.npos) { fail("invalid expectation: " + line); continue; }
           auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
           if (assertion == "args") continue;
-          if (assertion == "report-absent") {
+          if (assertion == "contains" || assertion == "absent") {
+            const auto output = take(renderSource(model,&retained)).provenance.text;
+            matched = (output.find(reason) != std::string::npos) == (assertion == "contains");
+          } else if (assertion == "report-absent") {
             matched = take(renderPruningReport(model,retained)).find(reason) == std::string::npos;
           } else if (assertion == "report") {
             matched = take(renderPruningReport(model,retained)).find(reason) != std::string::npos;

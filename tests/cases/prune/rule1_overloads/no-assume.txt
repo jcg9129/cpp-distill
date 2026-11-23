@@ -1,0 +1,11 @@
+args | --no-assume=unreferenced-overloads
+contains | Overloads(int, double)
+contains | explicit Overloads(char)
+contains | Overloads(float)
+contains | operator+(double)
+contains | Box(long) -> Box<long>;
+kept ctor_helper |
+kept operator_helper |
+report | pruning assumption disabled: unreferenced-overloads
+report | rule1-removed: category=ctor-multi-arg declarations=0 bytes=0
+report | rule1-removed: category=deduction-guide declarations=0 bytes=0

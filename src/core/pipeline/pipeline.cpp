@@ -152,6 +152,7 @@ struct Pipeline {
       auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
       m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
+      m.assumeUnreferencedOverloads = options.assumeUnreferencedOverloads;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
@@ -455,6 +456,8 @@ struct Pipeline {
       result.diagnostic += e.message + '\n';
       result.resultLine = "distill: nothing written, runtime " + result.runtime;
     }
+    if (!options.assumeUnreferencedOverloads && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: unreferenced-overloads (--no-assume=unreferenced-overloads)\n";
     if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
     if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))

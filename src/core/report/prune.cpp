@@ -23,6 +23,8 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     out << "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
   if (!m.assumeLibrarySpelledMembers)
     out << "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
+  if (!m.assumeUnreferencedOverloads)
+    out << "pruning assumption disabled: unreferenced-overloads (--no-assume=unreferenced-overloads)\n";
   for (const auto& a : r.assumptions) out << "pruning assumption: " << assumptionLabel(a) << '\n';
   out << "extension coverage:\n" << embeddedExtensionCoverage();
   for (FamilyId id = 0; id < m.families.size(); ++id) {
@@ -33,7 +35,7 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     if (f.original) out << "; " << f.original->file << ':' << f.original->line;
     out << '\n';
   }
-  // Same-name overloads, redeclarations and specializations are a single unit.
+  // Ordinary same-name overloads share a unit; rule-1 units use declaration identities.
   // Ordinary family lines above retain the per-declaration provenance.
   std::vector<FamilyId> parent(m.families.size()); std::iota(parent.begin(),parent.end(),0);
   auto find = [&](FamilyId id) { while (parent[id] != id) { parent[id] = parent[parent[id]]; id = parent[id]; } return id; };
@@ -57,6 +59,23 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     for (auto part : ids) for (auto range : m.families[part].ranges) bytes += range.end-range.begin;
     out << "member unit " << id << ' ' << std::quoted(f.label) << ' ' << std::quoted(f.memberName)
         << ": " << (kept.kept ? "blocked: " : "removed: ") << reason << "; bytes=" << bytes << '\n';
+  }
+  // Only count written declarations removed from records that survive.
+  // Instantiations reuse the written family's row/ranges; redeclarations own
+  // distinct rows and all share the declaration's retention group.
+  for (const char* kind : {"ctor-explicit", "ctor-implicit-converting", "ctor-multi-arg",
+                          "operator()", "operator-comparison", "operator-arithmetic",
+                          "operator-other", "deduction-guide"}) {
+    std::size_t count = 0, bytes = 0;
+    std::set<std::size_t> declarations;
+    for (FamilyId id = 0; id < m.families.size(); ++id) {
+      const auto& f = m.families[id];
+      if (f.rule1Kind != kind || r.families[id].kept || f.memberOf == noFamily ||
+          !r.families[f.memberOf].kept) continue;
+      if (declarations.insert(f.rule1Declaration).second) ++count;
+      for (auto range : f.ranges) bytes += range.end - range.begin;
+    }
+    out << "rule1-removed: category=" << kind << " declarations=" << count << " bytes=" << bytes << '\n';
   }
   out << "member units kept=" << keptUnits << " removed=" << removedUnits << '\n';
   out << "unique family bytes kept=" << r.keptBytes << " removed=" << r.removedBytes << '\n';

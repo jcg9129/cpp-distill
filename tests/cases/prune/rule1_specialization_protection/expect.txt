@@ -1,0 +1,6 @@
+contains | Specialized(int, double);
+contains | Specialized<T>::Specialized(int n, double)
+contains | Specialized<int>::Specialized(int n, double)
+contains | int operator+(int) const
+contains | Specialized<int>::operator+(int) const = delete;
+absent | int operator-(int) const

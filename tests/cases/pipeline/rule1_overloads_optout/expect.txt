@@ -1,0 +1,11 @@
+exit=0
+prune=yes
+artifact=pruned
+contains=Counter(int a,int b)
+contains.used=operator+(int n)
+contains.unused=Counter(int,double)
+contains.op=operator+(double)
+no-assume=unreferenced-overloads
+verification=local
+configuration=local
+report.assumption=pruning assumption disabled: unreferenced-overloads

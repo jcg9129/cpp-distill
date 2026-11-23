@@ -65,7 +65,7 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-7 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-8 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
@@ -81,6 +81,23 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   };
   const auto mixed = extractPruning(b.m,o).value();
   CHECK(!mixed.assumeInstantiationEffects);
+  CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
+TEST(prune_unreferenced_overloads_worker_identity) {
+  Model b; b.add("main","int main(){}");
+  const auto enabled = serializePruningModel(b.m).value();
+  b.m.assumeUnreferencedOverloads = false;
+  const auto disabled = serializePruningModel(b.m).value(); CHECK(enabled != disabled);
+  CHECK(!parsePruningModel(disabled).value().assumeUnreferencedOverloads);
+  CHECK(parsePruningModel(enabled).value().assumeUnreferencedOverloads);
+  CHECK(renderPruningReport(b.m,b.run()).value().find("pruning assumption disabled: unreferenced-overloads") != std::string::npos);
+  test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
+    ProcessResult response; response.exitCode = 0; response.stdoutText = enabled; return response;
+  };
+  const auto mixed = extractPruning(b.m,o).value();
+  CHECK(!mixed.assumeUnreferencedOverloads);
   CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
 }
 
@@ -447,12 +464,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-7 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-8 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-7 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-8 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-7 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-8 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

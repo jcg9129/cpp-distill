@@ -1,0 +1,16 @@
+kept Base::Base |
+kept Structural::Structural |
+kept Structural::~Structural |
+kept Structural::operator= |
+kept Structural::operator int |
+kept Structural::virtual_member |
+kept Structural::operator new |
+kept Structural::operator delete |
+kept Structural::operator co_await |
+kept Structural::operator+ |
+kept Structural::operator== |
+kept Flagged::Flagged |
+kept Flagged::operator+ |
+removed discarded |
+contains | Base(int, double)
+contains | TemplateBase(int, double)

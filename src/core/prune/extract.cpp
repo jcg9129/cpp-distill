@@ -165,6 +165,7 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
         model.value().sourceDirectives != in.sourceDirectives || model.value().includes != in.includes ||
         model.value().keepNames != in.keepNames || model.value().keepOffsets != in.keepOffsets || model.value().dialect != in.dialect ||
         model.value().unknownInUserCode != in.unknownInUserCode ||
+        model.value().assumeUnreferencedOverloads != in.assumeUnreferencedOverloads ||
         model.value().assumeInstantiationEffects != in.assumeInstantiationEffects ||
         model.value().assumeLibrarySpelledMembers != in.assumeLibrarySpelledMembers ||
         !std::all_of(in.disabledReasons.begin(),in.disabledReasons.end(),[&](const auto& reason) {

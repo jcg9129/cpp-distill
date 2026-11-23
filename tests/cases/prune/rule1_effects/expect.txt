@@ -1,0 +1,3 @@
+contains | Candidate(int, double)
+kept observe |
+report | instantiation effect: possible trigger

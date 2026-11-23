@@ -219,6 +219,7 @@ int run(int argc, char** argv) {
         if (value("lines") == "no") s.argv.push_back("--no-line-markers");
         if (value("compact") == "yes") s.argv.push_back("--compact-whitespace");
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
+        if (!value("no-assume").empty()) s.argv.push_back("--no-assume=" + value("no-assume"));
         if (value("strict") == "yes") s.argv.push_back("--strict");
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? pathToUtf8(fixture.provenance.file.filename()) : value("profile")); }
         const bool samples = value("prune") == "yes" || value("samples") == "yes";
@@ -295,6 +296,7 @@ int run(int argc, char** argv) {
         // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
         DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
+        if (value("no-assume") == "unreferenced-overloads") o.assumeUnreferencedOverloads = false;
         o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no"; o.compactWhitespace = value("compact") == "yes";
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (value("prune") == "yes" || value("samples") == "yes") {

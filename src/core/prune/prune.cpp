@@ -188,6 +188,11 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
       ranges.push_back(r);
     }
     for (std::size_t j = 0; j < f.edges.size(); ++j) if (f.edges[j] >= n) return invalid("invalid AST edge",field+".edges["+std::to_string(j)+"]");
+    for (std::size_t j = 0; j < f.potentialEdges.size(); ++j) if (f.potentialEdges[j] >= n) return invalid("invalid potential AST edge",field+".potentialEdges["+std::to_string(j)+"]");
+    if (f.rule1Constructor && (f.rule1Kind.empty() || f.rule1Record >= m.text.size()))
+      return invalid("invalid rule-1 constructor record",field+".rule1Record");
+    if (!f.rule1Kind.empty() && (!m.assumeUnreferencedOverloads || f.memberOf == noFamily || f.rule1Declaration >= m.text.size()))
+      return invalid("invalid rule-1 declaration",field+".rule1Kind");
     for (std::size_t j = 0; j < f.associatedTypes.size(); ++j) if (f.associatedTypes[j] >= n) return invalid("invalid association",field+".associatedTypes["+std::to_string(j)+"]");
   }
   std::sort(ranges.begin(), ranges.end(), [](auto a, auto b) { return a.begin < b.begin; });
@@ -321,7 +326,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     const auto& f = m.families[i];
     members[f.memberOf].push_back(i);
     memberReasons[i] = out.memberDisabledReasons.empty() ? f.memberBlocker : "member pruning disabled";
-    if (memberReasons[i].empty() && (memberRegistry.contains(f.memberName) ||
+    if (f.rule1Kind.empty() && memberReasons[i].empty() && (memberRegistry.contains(f.memberName) ||
         (m.assumeLibrarySpelledMembers &&
          std::binary_search(scannedMemberNames.begin(),scannedMemberNames.end(),f.memberName))))
       memberReasons[i] = "D3e rule 4: library or language spelling: " + f.memberName;
@@ -381,7 +386,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     const auto& f = m.families[i];
     for (const auto& name : f.names) effectIndex[name].push_back(i);
     for (const auto& name : f.callableNames) effectCallables[name].push_back(i);
-    if (f.memberOf != noFamily) {
+    if (f.memberOf != noFamily && f.rule1Kind.empty()) {
       index[f.memberName].push_back(i); callables[f.memberName].push_back(i);
       if (!ownerDispatch[i]) {
         effectIndex[f.memberName].push_back(i); effectCallables[f.memberName].push_back(i);
@@ -434,6 +439,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     for (FamilyId id = 0; id < n; ++id) {
       const auto& f = m.families[id];
       for (auto target : f.edges) dependency(id,target);
+      for (auto target : f.potentialEdges) dependency(id,target);
       // A whole record did not globally index its non-removable member names.
       // Keep that boundary for owner-dispatched units: their owner/type-carrier
       // paths already cover dispatch, and all their outgoing edges remain here.
@@ -484,18 +490,37 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     }
   }
   if (!out.disabledReasons.empty()) for (FamilyId id = 0; id < n; ++id) keep(id,"pruning disabled",noFamily);
-  while (!work.empty()) {
-    const auto id = work.front(); work.pop(); const auto& f = m.families[id];
-    if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
-    for (auto member : members[id]) {
-      if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
-      if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
+  for (;;) {
+    while (!work.empty()) {
+      const auto id = work.front(); work.pop(); const auto& f = m.families[id];
+      if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
+      for (auto member : members[id]) {
+        if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
+        if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
+      }
+      for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
+      for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
+      for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
+      for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
+      for (auto entity : systemUses[id]) system(entity,id);
     }
-    for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
-    for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
-    for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
-    for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
-    for (auto entity : systemUses[id]) system(entity,id);
+    // Keep one written constructor identity if all would otherwise disappear.
+    // Do this after closure so an already referenced/protected ctor suffices.
+    bool added = false;
+    if (m.assumeUnreferencedOverloads) {
+      std::map<std::pair<FamilyId,std::size_t>,std::pair<FamilyId,bool>> constructors;
+      for (FamilyId id = 0; id < n; ++id) {
+        const auto& f = m.families[id];
+        if (!f.rule1Constructor || !out.families[f.memberOf].kept) continue;
+        auto [it,fresh] = constructors.emplace(std::pair{f.memberOf,f.rule1Record},std::pair{id,false});
+        (void)fresh;
+        it->second.second |= out.families[id].kept;
+      }
+      for (const auto& [record,state] : constructors) if (!state.second) {
+        keep(state.first,"D3e rule 1: last user-declared constructor",record.first); added = true;
+      }
+    }
+    if (!added) break;
   }
   for (FamilyId i = 0; i < n; ++i) {
     std::size_t bytes = 0; for (auto r : m.families[i].ranges) bytes += r.end - r.begin;
@@ -514,7 +539,10 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   if (out.disabledReasons.empty()) {
     out.assumptions.insert("A7");
     if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
-    if (out.memberDisabledReasons.empty()) out.assumptions.insert("A12");
+    if (out.memberDisabledReasons.empty()) {
+      out.assumptions.insert("A12");
+      if (m.assumeUnreferencedOverloads) out.assumptions.insert("unreferenced-overloads");
+    }
   }
   return out;
 }
@@ -529,7 +557,7 @@ Result<bool> staticNameInvariant(const PruningModel& m, const PruningResult& r, 
     const auto owner = m.families[i].memberOf;
     if (owner == noFamily || r.families[owner].kept) {
       removed.insert(m.families[i].names.begin(),m.families[i].names.end());
-      if (owner != noFamily) removed.insert(m.families[i].memberName);
+      if (owner != noFamily && m.families[i].rule1Kind.empty()) removed.insert(m.families[i].memberName);
     }
   }
   for (const auto& t : tokens.value()) if (removed.contains(t.text)) return Error{"static name invariant: removed name " + t.text};

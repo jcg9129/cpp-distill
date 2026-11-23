@@ -66,7 +66,12 @@ struct Extraction {
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberSpellings;
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberGroups;
   std::set<std::string> virtualMemberNames;
-  std::set<FamilyId> explicitlyInstantiatedRecords;
+  std::set<FamilyId> explicitlyInstantiatedRecords, inheritedConstructorRecords;
+  std::map<const Decl*,FamilyId> rule1Identities;
+  std::set<const FunctionDecl*> ctadConstructors;
+  std::map<FamilyId,std::vector<FamilyId>> rule1Members;
+  std::set<const Decl*> checkedTemplates;
+  std::set<std::pair<const DeclContext*,std::string>> checkedCallGroups;
   std::vector<std::pair<const Decl*,FamilyId>> declarations;
   std::map<std::size_t,std::pair<bool,bool>> pasteGroups;
   std::set<std::size_t> hashOffsets; // Expansion offsets of macros defined with #, #@ or ##.
@@ -216,6 +221,72 @@ struct Extraction {
     return model.assumeLibrarySpelledMembers && model.libraryMemberNamesComputed &&
         model.memberDisabledReasons.empty();
   }
+  bool individualRule1(const FunctionDecl* f) const {
+    if (!model.assumeUnreferencedOverloads) return false;
+    if (isa<CXXDeductionGuideDecl>(f)) return true;
+    const auto* m = dyn_cast<CXXMethodDecl>(f);
+    // Lambda/local-record text belongs to its enclosing written declaration.
+    if (m && (m->getParent()->isLambda() || m->getParent()->isLocalClass())) return false;
+    return m && (isa<CXXConstructorDecl,CXXDestructorDecl,CXXConversionDecl>(m) ||
+                 m->isOverloadedOperator() || m->isVirtual());
+  }
+  const FunctionDecl* rule1Identity(const FunctionDecl* f) const {
+    std::set<const FunctionDecl*> seen;
+    while (f && seen.insert(f).second) {
+      const FunctionDecl* next = nullptr;
+      if (auto* t = f->getPrimaryTemplate()) next = t->getTemplatedDecl();
+      if (!next) next = f->getInstantiatedFromMemberFunction();
+      if (!next) next = f->getTemplateInstantiationPattern();
+      if (!next || next == f) break;
+      f = next;
+    }
+    return f->getCanonicalDecl();
+  }
+  auto callGroup(const FunctionDecl* f) const {
+    f = rule1Identity(f);
+    return std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
+  }
+  std::string rule1Category(const FunctionDecl* f) const {
+    // Same precedence and operator classification as trim-analysis-diag.patch.
+    if (const auto* c = dyn_cast<CXXConstructorDecl>(f)) {
+      if (c->isDefaultConstructor() || c->isCopyOrMoveConstructor()) return "protected";
+      if (c->getMinRequiredArguments() <= 1 && c->getNumParams() >= 1)
+        return c->isExplicit() ? "ctor-explicit" : "ctor-implicit-converting";
+      return "ctor-multi-arg";
+    }
+    if (isa<CXXDeductionGuideDecl>(f)) return "deduction-guide";
+    if (!f->isOverloadedOperator()) return "protected";
+    const auto op = f->getOverloadedOperator();
+    if (op == OO_Call) return "operator()";
+    if (op == OO_EqualEqual || op == OO_ExclaimEqual || op == OO_Less || op == OO_Greater ||
+        op == OO_LessEqual || op == OO_GreaterEqual || op == OO_Spaceship) return "operator-comparison";
+    switch (op) {
+    case OO_Plus: case OO_Minus: case OO_Star: case OO_Slash: case OO_Percent:
+    case OO_Caret: case OO_Amp: case OO_Pipe: case OO_Tilde: case OO_PlusPlus: case OO_MinusMinus:
+    case OO_LessLess: case OO_GreaterGreater: case OO_PlusEqual: case OO_MinusEqual:
+    case OO_StarEqual: case OO_SlashEqual: case OO_PercentEqual: case OO_CaretEqual:
+    case OO_AmpEqual: case OO_PipeEqual: case OO_LessLessEqual: case OO_GreaterGreaterEqual:
+      return "operator-arithmetic";
+    default: return "operator-other";
+    }
+  }
+  void protectRule1(const FunctionDecl* fn, PruneFamily& f) {
+    if (f.rule1Kind.empty()) return;
+    bool structural = fn->isDeleted() || fn->isDefaulted();
+    if (const auto* m = dyn_cast<CXXMethodDecl>(fn)) {
+      structural |= isa<CXXDestructorDecl,CXXConversionDecl>(m) || m->isVirtual() ||
+                    m->hasAttr<OverrideAttr>() || m->hasAttr<FinalAttr>() ||
+                    m->isCopyAssignmentOperator() || m->isMoveAssignmentOperator();
+      if (const auto* c = dyn_cast<CXXConstructorDecl>(m))
+        structural |= c->isDefaultConstructor() || c->isCopyOrMoveConstructor() || c->isInheritingConstructor();
+    }
+    if (fn->isOverloadedOperator()) {
+      const auto op = fn->getOverloadedOperator();
+      structural |= op == OO_New || op == OO_Array_New || op == OO_Delete || op == OO_Array_Delete || op == OO_Coawait;
+    }
+    if (structural) f.memberBlocker = "D3e rule 1: structural declaration";
+    else if (fn->isUsed() || fn->isReferenced()) f.memberBlocker = "D3e rule 1: compiler used/referenced evidence";
+  }
   void discover(Decl* d) {
     if (!d || d->isImplicit() || !user(d->getBeginLoc())) return;
     if (auto* ns = dyn_cast<NamespaceDecl>(d)) { for (auto* child : ns->decls()) discover(child); return; }
@@ -328,7 +399,20 @@ struct Extraction {
         // memberOf supplies forward ownership retention. It is not a source
         // dependency: deleting a method cannot delete its containing class
         // definition. Actual references to the owner still add AST/name edges.
-        if (isa<CXXConstructorDecl,CXXDestructorDecl,CXXConversionDecl>(method) || method->isOverloadedOperator() || method->isVirtual())
+        if (individualRule1(method)) {
+          f.rule1Kind = rule1Category(method);
+          f.rule1Constructor = isa<CXXConstructorDecl>(method);
+          const auto* record = method->getParent();
+          const auto* pattern = record->getTemplateInstantiationPattern();
+          f.rule1Record = offset((pattern ? pattern : record)->getBeginLoc());
+          const FunctionDecl* written = method;
+          if (method->getTemplateSpecializationKind() != TSK_ExplicitSpecialization) {
+            if (const auto* origin = method->getTemplateInstantiationPattern()) written = origin;
+            else if (const auto* origin = method->getInstantiatedFromMemberFunction()) written = origin;
+          }
+          f.rule1Declaration = offset(written->getLocation());
+          protectRule1(method,f);
+        } else if (isa<CXXConstructorDecl,CXXDestructorDecl,CXXConversionDecl>(method) || method->isOverloadedOperator() || method->isVirtual())
           f.memberBlocker = "D3e rule 1: excluded kind or virtual";
         else if (isReserved(f.memberName)) f.memberBlocker = "D3e rule 3: reserved name";
         // The terminator scan can include shared declarators (int f(), data;)
@@ -339,6 +423,15 @@ struct Extraction {
             const auto at = offset(sibling->getLocation());
             if (r->begin <= at && at < r->end) f.pinned = "shared declaration with non-function member";
           }
+      }
+    }
+    if (memberUnitsEnabled()) if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(base); guide && individualRule1(guide)) {
+      f.memberOf = owner(guide->getDeducedTemplate());
+      if (f.memberOf != noFamily) {
+        f.memberName = guide->getDeducedTemplate()->getNameAsString();
+        f.rule1Kind = "deduction-guide"; f.rule1Declaration = offset(guide->getLocation());
+        f.names.clear(); f.callableNames.clear();
+        protectRule1(guide,f);
       }
     }
     f.ranges.push_back(*r);
@@ -393,14 +486,22 @@ struct Extraction {
     const auto* record = method->getParent();
     const auto* pattern = record->getTemplateInstantiationPattern();
     const auto at = offset((pattern ? pattern : record)->getBeginLoc());
-    auto [it,fresh] = memberGroups.emplace(std::pair{at,f.memberName},id);
-    if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
+    if (!f.rule1Kind.empty()) {
+      auto [it,fresh] = rule1Identities.emplace(rule1Identity(method),id);
+      if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
+      protectRule1(method,f); // Union flags/protection across every instantiation.
+    } else {
+      auto [it,fresh] = memberGroups.emplace(std::pair{at,f.memberName},id);
+      if (!fresh && it->second != id) model.unions.emplace_back(id,it->second);
+    }
     if (method->isVirtual() || method->hasAttr<OverrideAttr>() || method->hasAttr<FinalAttr>()) {
       f.memberBlocker = "D3e rule 1: excluded kind or virtual";
       virtualMemberNames.insert(f.memberName);
     }
   }
   void partitionMembers() {
+    for (const auto* ctor : ctadConstructors) if (auto it = rule1Identities.find(ctor); it != rule1Identities.end())
+      model.families[it->second].memberBlocker = "D3e rule 1: CTAD evidence";
     // Subtract member spellings before the existing shared-declarator union
     // pass, so keeping a record no longer keeps every method in that record.
     std::vector<EditRange> cuts;
@@ -409,8 +510,13 @@ struct Extraction {
     std::sort(cuts.begin(),cuts.end(),[](auto a,auto b) { return a.begin < b.begin; });
     for (auto& f : model.families) {
       if (f.memberOf != noFamily) {
-        if (f.memberBlocker.empty() && virtualMemberNames.contains(f.memberName))
+        if (f.rule1Kind.empty() && f.memberBlocker.empty() && virtualMemberNames.contains(f.memberName))
           f.memberBlocker = "D3e rule 2: virtual name clash";
+        if (!f.rule1Kind.empty()) {
+          rule1Members[f.memberOf].push_back(&f - model.families.data());
+          if (f.rule1Constructor && inheritedConstructorRecords.contains(f.memberOf))
+            f.memberBlocker = "D3e rule 1: inherited constructor base";
+        }
         if (explicitlyInstantiatedRecords.contains(f.memberOf)) f.memberBlocker = "D3e rule 8: explicitly instantiated record";
       }
       std::vector<EditRange> remaining;
@@ -787,6 +893,17 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
       symbolRoot(symbol,"asm");
     }
   }
+  unsigned rule1CheckDepth = 0;
+  bool unresolvedCandidate = false;
+  void userEdge(FamilyId target, bool potential = false) {
+    if (current != noFamily) {
+      auto& f = e.model.families[current];
+      (potential ? f.potentialEdges : f.edges).push_back(target);
+    } else if (systemCurrent != noFamily) {
+      // Reached library candidates are conservatively retained too.
+      e.model.systemEntities[systemCurrent].userEdges.push_back(target);
+    }
+  }
   void edge(const Decl* d) {
     if (!d) return;
     // Builtin templates have no source declaration to retain. Their template
@@ -795,8 +912,9 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     if (const auto* shadow = dyn_cast<UsingShadowDecl>(d)) edge(shadow->getTargetDecl());
     const auto target = e.owner(d);
     if (target != noFamily) {
-      if (current != noFamily) e.model.families[current].edges.push_back(target);
-      else if (systemCurrent != noFamily) e.model.systemEntities[systemCurrent].userEdges.push_back(target);
+      userEdge(target,unresolvedCandidate && !e.model.families[target].rule1Kind.empty());
+      if (rule1CheckDepth) if (auto it = e.rule1Members.find(target); it != e.rule1Members.end())
+        for (auto member : it->second) userEdge(member);
       return;
     }
     if (scalarBuiltin(d)) return;
@@ -811,6 +929,15 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     if (q.isNull()) return;
     if (depth > 100) { e.disable("type traversal limit for " + q.getAsString()); return; }
     const Type* t = q.getTypePtr();
+    const auto savedCheck = rule1CheckDepth;
+    // A failed substitution may leave only the template's dependent check in
+    // the AST. Conservatively carry its actual template arguments as witnesses.
+    if (const auto* r = t->getAs<RecordType>()) {
+      if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(r->getDecl());
+          spec && e.checkedTemplates.contains(e.canonical(spec->getSpecializedTemplate()))) ++rule1CheckDepth;
+    }
+    if (const auto* spec = dyn_cast<TemplateSpecializationType>(t))
+      if (e.checkedTemplates.contains(e.canonical(spec->getTemplateName().getAsTemplateDecl()))) ++rule1CheckDepth;
     if (auto* r = t->getAs<RecordType>()) {
       if (associated) { auto id = e.owner(r->getDecl()); if (id != noFamily) associated->push_back(id); }
       edge(r->getDecl());
@@ -824,6 +951,7 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
       edge(a->getTemplateName().getAsTemplateDecl());
       for (const auto& arg : a->template_arguments()) argument(arg,associated,depth+1);
     }
+    rule1CheckDepth = savedCheck;
   }
   void argument(const TemplateArgument& a, std::vector<FamilyId>* associated, unsigned depth) {
     if (a.getKind() == TemplateArgument::Type) type(a.getAsType(),associated,depth+1);
@@ -1084,7 +1212,13 @@ public:
     if (++visits > 2000000) { e.disable("AST traversal limit: " + e.describe(d)); return false; }
     const auto saved = current;
     if (const auto id = e.owner(d); id != noFamily) current = id;
-    const bool result = RecursiveASTVisitor::TraverseDecl(d); current = saved; return result;
+    const auto savedCheck = rule1CheckDepth;
+    if (e.model.assumeUnreferencedOverloads) {
+      if (const auto* f = dyn_cast<FunctionDecl>(d); f && f->getTrailingRequiresClause().ConstraintExpr) ++rule1CheckDepth;
+      if (const auto* t = dyn_cast<TemplateDecl>(d); t && t->getTemplateParameters()->getRequiresClause()) ++rule1CheckDepth;
+    }
+    const bool result = RecursiveASTVisitor::TraverseDecl(d);
+    current = saved; rule1CheckDepth = savedCheck; return result;
   }
   bool VisitDecl(Decl* d) {
     if (d->isInvalidDecl()) e.disable("error-recovery AST: " + e.describe(d));
@@ -1117,6 +1251,27 @@ public:
     if (isa<CoroutineBodyStmt>(s) || isa<CoawaitExpr>(s) || isa<CoyieldExpr>(s)) e.disable("unsupported coroutine machinery at " + s->getBeginLoc().printToString(e.sm));
     return true;
   }
+  // Reuse the diagnostic's unevaluated/trait traversal, widening its
+  // kind-specific trait fallback to every declaration on the checked record.
+  bool TraverseStmt(Stmt* x) {
+    if (!x) return true;
+    const auto saved = rule1CheckDepth;
+    if (e.model.assumeUnreferencedOverloads &&
+        isa<UnaryExprOrTypeTraitExpr,CXXNoexceptExpr,RequiresExpr,TypeTraitExpr,ConceptSpecializationExpr>(x)) ++rule1CheckDepth;
+    if (e.model.assumeUnreferencedOverloads) if (const auto* call = dyn_cast<CallExpr>(x))
+      if (const auto* callee = call->getDirectCallee(); callee && e.checkedCallGroups.contains(e.callGroup(callee))) ++rule1CheckDepth;
+    const bool result = RecursiveASTVisitor::TraverseStmt(x); rule1CheckDepth = saved; return result;
+  }
+  bool TraverseTypeLoc(TypeLoc t, bool qualifier = true) {
+    const auto saved = rule1CheckDepth;
+    if (e.model.assumeUnreferencedOverloads && !t.isNull() && isa<DecltypeType>(t.getType().getTypePtr())) ++rule1CheckDepth;
+    const bool result = RecursiveASTVisitor::TraverseTypeLoc(t,qualifier); rule1CheckDepth = saved; return result;
+  }
+  bool VisitTypeTraitExpr(TypeTraitExpr* x) {
+    if (e.model.assumeUnreferencedOverloads)
+      for (unsigned i = 0; i < x->getNumArgs(); ++i) type(x->getArg(i)->getType());
+    return true;
+  }
   bool VisitExpr(Expr* x) { type(x->getType()); return true; }
   bool VisitTypeLoc(TypeLoc t) { type(t.getType()); return true; }
   bool VisitDeclRefExpr(DeclRefExpr* x) { edge(x->getDecl()); return true; }
@@ -1126,10 +1281,17 @@ public:
   bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr* x) { edge(x->getTemporary()->getDestructor()); return true; }
   bool VisitCXXDeleteExpr(CXXDeleteExpr* x) { edge(x->getOperatorDelete()); type(x->getDestroyedType()); return true; }
   bool VisitCXXNewExpr(CXXNewExpr* x) { edge(x->getOperatorNew()); edge(x->getOperatorDelete()); return true; }
-  bool VisitConceptSpecializationExpr(ConceptSpecializationExpr* x) { edge(x->getNamedConcept()); return true; }
+  bool VisitConceptSpecializationExpr(ConceptSpecializationExpr* x) {
+    edge(x->getNamedConcept());
+    if (e.model.assumeUnreferencedOverloads)
+      for (const auto& a : x->getTemplateArguments()) argument(a,nullptr,0);
+    return true;
+  }
   bool VisitUnresolvedLookupExpr(UnresolvedLookupExpr* x) {
     if (current != noFamily && !x->getQualifier()) e.model.families[current].dependentNames.insert(x->getName().getAsString());
+    const bool saved = unresolvedCandidate; unresolvedCandidate = e.model.assumeUnreferencedOverloads;
     for (auto* d : x->decls()) edge(d);
+    unresolvedCandidate = saved;
     return true;
   }
   bool memberName(DeclarationName name) {
@@ -1139,7 +1301,9 @@ public:
   }
   bool VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr* x) { return memberName(x->getMember()); }
   bool VisitUnresolvedMemberExpr(UnresolvedMemberExpr* x) {
+    const bool saved = unresolvedCandidate; unresolvedCandidate = e.model.assumeUnreferencedOverloads;
     for (auto* d : x->decls()) edge(d);
+    unresolvedCandidate = saved;
     return memberName(x->getMemberName());
   }
   bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { return memberName(x->getDeclName()); }
@@ -1164,10 +1328,19 @@ public:
       type(f->getReturnType(),&family.associatedTypes);
       for (auto* p : f->parameters()) type(p->getType(),&family.associatedTypes);
     }
-    if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f)) {
+    if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f); guide && !e.individualRule1(guide)) {
       auto id = e.owner(guide->getDeducedTemplate()); if (id != noFamily) e.model.unions.emplace_back(current,id);
     }
-    if (auto* info = f->getTemplateSpecializationInfo()) for (const auto& a : info->TemplateArguments->asArray()) argument(a,&family.associatedTypes,0);
+    if (auto* info = f->getTemplateSpecializationInfo()) {
+      const auto saved = rule1CheckDepth;
+      if (e.model.assumeUnreferencedOverloads) {
+        llvm::SmallVector<AssociatedConstraint,4> constraints;
+        info->getTemplate()->getAssociatedConstraints(constraints);
+        if (!constraints.empty() || e.checkedTemplates.contains(e.canonical(info->getTemplate()))) ++rule1CheckDepth;
+      }
+      for (const auto& a : info->TemplateArguments->asArray()) argument(a,&family.associatedTypes,0);
+      rule1CheckDepth = saved;
+    }
     if (auto* info = f->getPrimaryTemplate()) if (e.user(info->getBeginLoc()) && e.owner(info) != noFamily) e.model.unions.emplace_back(current,e.owner(info));
     return true;
   }
@@ -1176,7 +1349,10 @@ public:
     if (r->hasDefinition() && r == r->getDefinition()) for (const auto& base : r->bases()) type(base.getType());
     if (auto* s = dyn_cast<ClassTemplateSpecializationDecl>(r)) {
       auto& f = e.model.families[current];
+      const auto saved = rule1CheckDepth;
+      if (e.checkedTemplates.contains(e.canonical(s->getSpecializedTemplate()))) ++rule1CheckDepth;
       for (const auto& a : s->getTemplateArgs().asArray()) argument(a,&f.associatedTypes,0);
+      rule1CheckDepth = saved;
       if (e.user(s->getSpecializedTemplate()->getBeginLoc()) && e.owner(s->getSpecializedTemplate()) != noFamily)
         e.model.unions.emplace_back(current,e.owner(s->getSpecializedTemplate()));
     }
@@ -1199,7 +1375,10 @@ public:
   bool VisitVarDecl(VarDecl* v) {
     if (current == noFamily) return true;
     if (auto* s = dyn_cast<VarTemplateSpecializationDecl>(v)) {
+      const auto saved = rule1CheckDepth;
+      if (e.checkedTemplates.contains(e.canonical(s->getSpecializedTemplate()))) ++rule1CheckDepth;
       for (const auto& a : s->getTemplateArgs().asArray()) argument(a,&e.model.families[current].associatedTypes,0);
+      rule1CheckDepth = saved;
       if (e.user(s->getSpecializedTemplate()->getBeginLoc()) && e.owner(s->getSpecializedTemplate()) != noFamily)
         e.model.unions.emplace_back(current,e.owner(s->getSpecializedTemplate()));
     }
@@ -1397,10 +1576,80 @@ public:
 // Semantic virtualness in an instance can exclude an otherwise nonvirtual pattern.
 class MemberUnits final : public RecursiveASTVisitor<MemberUnits> {
   Extraction& e;
+  std::vector<const NamedDecl*> checkScopes;
+  void inherited(const NamedDecl* d, NestedNameSpecifier qualifier) {
+    if (!e.model.assumeUnreferencedOverloads || qualifier.getKind() != NestedNameSpecifier::Kind::Type) return;
+    const auto* type = qualifier.getAsType();
+    const Decl* base = type->getAsCXXRecordDecl();
+    if (!base) if (const auto* spec = dyn_cast<TemplateSpecializationType>(type)) base = spec->getTemplateName().getAsTemplateDecl();
+    const auto* named = dyn_cast_or_null<NamedDecl>(base);
+    if (d->getDeclName().getNameKind() != DeclarationName::CXXConstructorName &&
+        (!named || named->getNameAsString() != d->getNameAsString())) return;
+    const auto id = e.owner(base);
+    if (id != noFamily) e.inheritedConstructorRecords.insert(id);
+  }
+  void check() {
+    for (const auto* d : checkScopes) {
+      if (isa<TemplateDecl>(d)) e.checkedTemplates.insert(e.canonical(d));
+      if (const auto* f = dyn_cast<FunctionDecl>(d)) {
+        e.checkedCallGroups.insert(e.callGroup(f));
+        if (const auto* t = f->getPrimaryTemplate()) e.checkedTemplates.insert(e.canonical(t));
+      }
+    }
+  }
 public:
   explicit MemberUnits(Extraction& x) : e(x) {}
+  bool TraverseDecl(Decl* d) {
+    const auto saved = checkScopes.size();
+    if (e.model.assumeUnreferencedOverloads && isa_and_nonnull<TemplateDecl,FunctionDecl>(d))
+      checkScopes.push_back(cast<NamedDecl>(d));
+    const bool result = RecursiveASTVisitor::TraverseDecl(d); checkScopes.resize(saved); return result;
+  }
+  bool VisitTemplateDecl(TemplateDecl* d) {
+    if (e.model.assumeUnreferencedOverloads) {
+      llvm::SmallVector<AssociatedConstraint,4> constraints;
+      if (const auto* parameters = d->getTemplateParameters()) parameters->getAssociatedConstraints(constraints);
+      if (!constraints.empty()) check();
+    }
+    return true;
+  }
+  bool VisitTypeTraitExpr(TypeTraitExpr*) { check(); return true; }
+  bool VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr*) { check(); return true; }
+  bool VisitCXXNoexceptExpr(CXXNoexceptExpr*) { check(); return true; }
+  bool VisitRequiresExpr(RequiresExpr*) { check(); return true; }
+  bool VisitConceptSpecializationExpr(ConceptSpecializationExpr*) { check(); return true; }
   bool shouldVisitTemplateInstantiations() const { return true; }
+  bool shouldVisitImplicitCode() const { return e.model.assumeUnreferencedOverloads; }
+  bool VisitUnresolvedUsingValueDecl(UnresolvedUsingValueDecl* d) { inherited(d,d->getQualifier()); return true; }
+  bool VisitUsingDecl(UsingDecl* d) {
+    inherited(d,d->getQualifier());
+    if (!e.model.assumeUnreferencedOverloads || d->getDeclName().getNameKind() != DeclarationName::CXXConstructorName) return true;
+    for (auto* shadow : d->shadows()) if (const auto* ctor = dyn_cast<CXXConstructorDecl>(shadow->getTargetDecl())) {
+      const auto id = e.owner(ctor->getParent());
+      if (id != noFamily) e.inheritedConstructorRecords.insert(id);
+    }
+    return true;
+  }
   bool VisitFunctionDecl(FunctionDecl* f) {
+    if (e.model.assumeUnreferencedOverloads) {
+      llvm::SmallVector<AssociatedConstraint,4> constraints;
+      if (const auto* t = f->getDescribedFunctionTemplate()) t->getAssociatedConstraints(constraints);
+      else f->getAssociatedConstraints(constraints);
+      if (!constraints.empty()) check();
+    }
+    if (e.model.assumeUnreferencedOverloads) if (const auto* guide = dyn_cast<CXXDeductionGuideDecl>(f);
+        guide && (guide->isUsed() || guide->isReferenced())) {
+      if (const auto* ctor = guide->getCorrespondingConstructor()) e.ctadConstructors.insert(e.rule1Identity(ctor));
+      for (auto* source = guide->getSourceDeductionGuide(); source; source = source->getSourceDeductionGuide()) {
+        const auto id = e.owner(source);
+        if (id != noFamily && !e.model.families[id].rule1Kind.empty())
+          e.model.families[id].memberBlocker = "D3e rule 1: CTAD evidence";
+      }
+    }
+    if (e.individualRule1(f)) {
+      const auto id = e.owner(f);
+      if (id != noFamily) e.protectRule1(f,e.model.families[id]);
+    }
     auto* method = dyn_cast<CXXMethodDecl>(f);
     if (!method) return true;
     if (auto* wrapper = method->getDescribedFunctionTemplate()) e.member(wrapper,method);
@@ -1438,7 +1687,7 @@ public:
     std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;
     for (auto [d,id] : e.declarations) {
       if (const auto* t = dyn_cast<TemplateDecl>(d); t && t->getTemplatedDecl()) d = t->getTemplatedDecl();
-      if (const auto* f = dyn_cast<FunctionDecl>(d); f && !isa<CXXMethodDecl>(f)) {
+      if (const auto* f = dyn_cast<FunctionDecl>(d); f && !isa<CXXMethodDecl>(f) && !e.individualRule1(f)) {
         auto key = std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
         auto [it,fresh] = overloads.emplace(key,id); if (!fresh) e.model.unions.emplace_back(id,it->second);
       }
@@ -1527,6 +1776,15 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
     fact.hashOperator = extraction.hashOffsets.contains(fact.offset) || (i != merged.begin() && fact.offset < std::prev(i)->end);
   }
   auto valid = validatePruningModel(extraction.model); if (!valid.ok()) return valid.error();
+  // Repeated instantiated type checks can witness the same declaration many
+  // times. Bound the serialized measurement model to distinct graph edges.
+  if (extraction.model.assumeUnreferencedOverloads) {
+    auto unique = [](auto& edges) {
+      std::sort(edges.begin(),edges.end()); edges.erase(std::unique(edges.begin(),edges.end()),edges.end());
+    };
+    for (auto& f : extraction.model.families) { unique(f.edges); unique(f.potentialEdges); }
+    for (auto& entity : extraction.model.systemEntities) unique(entity.userEdges);
+  }
   return std::move(extraction.model);
 }
 } // namespace distill

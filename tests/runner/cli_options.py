@@ -41,10 +41,10 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     (root / 'main.cpp').write_text('// SPDX-License-Identifier: GPL-3.0-or-later\n#if 1\nint main(){}\n#endif\n')
     for args, code, message in [
         (['--help'], 0, 'Usage: distill'),
-        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
-        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
-        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
-        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values'),
+        (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
+        (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
+        (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
+        (['--no-assume=instantiation-effects,', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
         (['g++', '-std=gnu++20', 'main.cpp'], 0, 'distill: wrote pruned (local)'),
         (['--no-prune'], 1, 'missing compile command'),
         (['--no-prune', '-o'], 1, 'missing value'),
