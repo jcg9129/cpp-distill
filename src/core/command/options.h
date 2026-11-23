@@ -11,7 +11,7 @@ struct CliOptions {
   std::optional<std::string> output, judge, report;
   std::optional<std::string> judgeProbe, judgeCheck, part, record;
   std::vector<std::string> judgeOutputs;
-  bool noPrune = false, stripComments = false, noLineMarkers = false;
+  bool noPrune = false, stripComments = false, noLineMarkers = false, compactWhitespace = false;
   bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true;
   std::vector<std::string> compile, keep, verifyRun;
 };

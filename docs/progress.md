@@ -37,6 +37,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | L1c library facts | part A (#100), part B (#102), once elision (#101), flag coverage (#103); standard integer macro extension implemented, CI data import pending (2026-11-22) |
 | Pruning soundness D3d-5…7 | done (#104, 2026-11-20): instantiation-effect closure; A11 `instantiation-effects`; `--no-assume=instantiation-effects` |
 | Member pruning D3e | done (#105, #106, 2026-11-20): unused member functions under A12 `library-spelled-members` (worker headers + scanned-build inventory); `--no-assume=library-spelled-members` |
+| Compact output and prefetch | implemented 2026-11-22: implicit `__builtin_prefetch` allow-list entry; opt-in `--compact-whitespace` implies marker omission under the existing position/column proof; lexical, preprocessing, build and sample checks; ATL `compact` measurement variant |
 | Call-based member retention | started 2026-11-20: analysis only (see current state) |
 
 ## Current state (2026-11-20)

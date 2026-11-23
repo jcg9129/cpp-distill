@@ -217,6 +217,7 @@ int run(int argc, char** argv) {
         if (value("prune") != "yes" && value("prune") != "diagnostics") s.argv.push_back("--no-prune");
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (value("lines") == "no") s.argv.push_back("--no-line-markers");
+        if (value("compact") == "yes") s.argv.push_back("--compact-whitespace");
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? pathToUtf8(fixture.provenance.file.filename()) : value("profile")); }
@@ -266,6 +267,11 @@ int run(int argc, char** argv) {
           write(cwd / "sample.in",value("sample"));
           auto compile = take(flatCommand(take(parseCompileCommand(command,cwd)),profile ? &*profile : nullptr,
                                           pathFromUtf8(command.front()),false));
+          // Like the pipeline, keep system searches meaningful after changing
+          // cwd for the independent build of the published artifact.
+          for (auto& arg : compile.args) if (arg.option == "-isystem" || arg.option == "-L") {
+            arg.value = pathToUtf8(cwd / pathFromUtf8(arg.value)); arg.spelling = {arg.option,arg.value};
+          }
           const auto runDir = temp.path / ("cli-runs-" + name); std::filesystem::create_directory(runDir);
           std::vector<ProcessResult> compared;
           for (const auto* source : {"flat-reference.cpp","submit.cpp"}) {
@@ -289,7 +295,7 @@ int run(int argc, char** argv) {
         // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
         DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
-        o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no";
+        o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no"; o.compactWhitespace = value("compact") == "yes";
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (value("prune") == "yes" || value("samples") == "yes") {
           write(cwd / "sample.in",value("sample")); o.samples = {{"sample.in",cwd / "sample.in"}};
@@ -326,7 +332,7 @@ int run(int argc, char** argv) {
         auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
-            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp") continue;
+            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp") continue;
             workPath = p.parent_path();
             check(std::filesystem::equivalent(workPath.parent_path(), workRoot), "work is outside requested temp root");
             check(spec.cwd == workPath, "generated check uses user cwd");
@@ -341,6 +347,7 @@ int run(int argc, char** argv) {
               if (p.filename() == "flat.cpp") builtInputs["flat"] = read(p);
               if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
               if (p.filename() == "unmarked.cpp") builtInputs["unmarked"] = read(p);
+              if (p.filename() == "compact.cpp") builtInputs["compact"] = read(p);
             }
           auto process = caseRunner(spec);
           // Test-only bad analysis: remove a user-pasted callee's positive AST
@@ -387,9 +394,9 @@ int run(int argc, char** argv) {
           if (artifact == "raw") kind = "local";
           check(kind == value("configuration"), "wrong configuration kind: " + kind);
           // The returned bytes are exactly the checked output; no renderer runs afterwards.
-          const auto written = result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
+          const auto written = result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
           check(builtInputs.contains(written) && bytes == builtInputs.at(written), "returned bytes differ from compiled bytes");
-          check((value("lines") == "no") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
+          check((value("lines") == "no" || value("compact") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
         } else {
           check(bytes.empty(), "failed pipeline returned output");
           if (value("kept") == "yes") {

@@ -107,6 +107,7 @@ must include the target's C/C++ standard headers and libraries.
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
 | `--no-line-markers` | Omit generated `#line` markers from a `pruned` result when the analysis proves no user code observes source positions (`__LINE__`, `__FILE__`, `__builtin_LINE`, `assert` without `NDEBUG`, call-site default arguments, …); otherwise they stay and the report says `line markers kept: <why>`. |
+| `--compact-whitespace` | Opt-in trimming of leading horizontal whitespace, trailing whitespace and empty lines; implies `--no-line-markers` and requires its proof that source positions (including columns) are unobserved. Preserves literal/comment contents and spliced logical lines. If refused, output stays unchanged and the report says `whitespace kept: <why>`. |
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
 | `-v` | Show progress on stderr. |

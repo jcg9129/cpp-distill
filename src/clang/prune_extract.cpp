@@ -43,7 +43,7 @@ bool scalarBuiltin(const Decl* d) {
   const auto* f = dyn_cast<FunctionDecl>(d);
   if (!f || !f->isImplicit() || !f->getBuiltinID()) return false;
   // Clang gives these implicit declarations the user's call-site location.
-  // They operate on scalars/control flow only; arguments are traversed normally.
+  // They introduce no further user lookup; arguments are traversed normally.
   // Do not generalize to arbitrary builtins or explicitly declared user code.
   static const std::set<std::string,std::less<>> names = {
     "__builtin_popcount", "__builtin_popcountl", "__builtin_popcountll",
@@ -53,7 +53,8 @@ bool scalarBuiltin(const Decl* d) {
     "__builtin_parity", "__builtin_parityl", "__builtin_parityll",
     "__builtin_bswap16", "__builtin_bswap32", "__builtin_bswap64", "__builtin_bswap128",
     "__builtin_add_overflow", "__builtin_sub_overflow", "__builtin_mul_overflow",
-    "__builtin_expect", "__builtin_expect_with_probability", "__builtin_unreachable"
+    "__builtin_expect", "__builtin_expect_with_probability", "__builtin_unreachable",
+    "__builtin_prefetch"
   };
   return names.contains(f->getNameAsString());
 }

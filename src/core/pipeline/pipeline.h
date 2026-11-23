@@ -12,6 +12,8 @@ struct DistillOptions {
   // Opt-in: omit generated #line markers from a pruned result when the parse
   // proves no position is observed (docs/reviews/2026-11-18-no-line-markers.md).
   bool noLineMarkers = false;
+  // Implies noLineMarkers; compact only the checked marker-free artifact.
+  bool compactWhitespace = false;
   std::vector<std::string> keep;
   std::filesystem::path pruningWorker;
   // CLI selection and internal callers share the same bounded comparisons.
@@ -39,6 +41,8 @@ struct PipelineResult {
   std::string diagnostic, resultLine, report;
   // With noLineMarkers: "omitted" or "kept: <first reason>"; empty otherwise.
   std::string lineMarkers;
+  // With compactWhitespace: "compacted" or "kept: <first reason>".
+  std::string compactWhitespace;
   std::optional<std::filesystem::path> keptWork;
   std::vector<ArtifactCheck> checks;
   ResolveResult resolution;

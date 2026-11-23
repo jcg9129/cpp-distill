@@ -197,6 +197,7 @@ Distill options (before the compiler name):
 | `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11) and `library-spelled-members` (A12) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
+| `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
 | `-v` | progress on stderr |
 
@@ -1722,6 +1723,23 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   `flat`'s. A failure keeps the marked `pruned` bytes. The rendering
   invariant with line provenance applies to the marked output; the proof
   that positions are unobserved replaces it for the marker-free one.
+- **Compact whitespace** (`--compact-whitespace`, opt-in, user 2026-11-22):
+  implies `--no-line-markers`; only the checked marker-free `pruned` artifact
+  is eligible. The §4.4 proof already covers column observations through
+  `__builtin_COLUMN`, whole-TU source-location expressions (including system
+  defaults), and `std::source_location` values/types/member calls such as
+  `column()`. No extra assumption is made. Remove leading horizontal whitespace,
+  trailing whitespace and empty physical lines, except inside literals/comments
+  and whole logical lines containing a backslash-newline (including CRLF/GCC
+  whitespace splices), whose bytes stay intact. Keep nonempty lines separate,
+  preserving directive start/end boundaries and `#` line-start semantics.
+  Re-lex and require equal tokens/kinds/directive boundaries; compare `-E`
+  tokens/pragma boundaries with the marker-free artifact (also verifying
+  stringized multi-line macro arguments); build and compare samples on the
+  exact compact bytes. A failed compact check retains the checked unmarked
+  bytes. A failed gate or marker-free check leaves its artifact unchanged.
+  Report `whitespace compacted: ...` or `whitespace kept: <why>`. Renderer
+  annotations/provenance are consumed before this final transformation.
 - `--strip-comments` (D3-1-10) is part of rendering every artifact (`raw`,
   `flat`, `pruned`) and keeps token spellings, directive boundaries and
   logical lines: a comment outside a directive becomes one space, or its
