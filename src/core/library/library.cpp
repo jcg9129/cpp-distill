@@ -6,12 +6,19 @@ namespace distill {
 namespace {
 bool harmlessFlag(std::string_view flag) {
   // -Wp, forwards arbitrary preprocessor options, including -D and -U.
-  // Optimization levels deliberately require a scanned match: they alter
-  // __OPTIMIZE__, __OPTIMIZE_SIZE__ and __NO_INLINE__.
+  // The last optimization level requires a scanned match: it alters
+  // __OPTIMIZE__, __OPTIMIZE_SIZE__ and __NO_INLINE__. Earlier levels are
+  // discarded by selector's relevant-flags comparison, not treated as harmless.
   return (flag.starts_with("-W") && !flag.starts_with("-Wp,")) ||
          flag.starts_with("-g") || flag == "-pipe" || flag.starts_with("-fdiagnostics-") ||
          flag.starts_with("-fconstexpr-depth=") || flag.starts_with("-fconstexpr-cache-depth=") ||
          flag.starts_with("-fconstexpr-loop-limit=") || flag.starts_with("-fconstexpr-ops-limit=");
+}
+bool optimizationLevel(std::string_view flag) {
+  if (!flag.starts_with("-O")) return false;
+  const auto level = flag.substr(2);
+  return level.empty() || level == "s" || level == "fast" || level == "g" || level == "z" ||
+         std::all_of(level.begin(), level.end(), [](char c) { return c >= '0' && c <= '9'; });
 }
 bool compilerInputsMatch(const LibraryBuild& build, const Profile& p, std::string* reason) {
   for (const auto& input : build.standardInputs) {
@@ -62,6 +69,22 @@ std::string LibraryData::selector(const Profile& p, bool agreementOnly, std::str
       if (reason) *reason = "profile dialect not covered by scanned builds: " + p.dialect.name;
       return {};
     }
+    const auto relevant = [](const auto& flags) {
+      // Keep aligned with ci/library/merge.py. GCC uses the last -O level;
+      // explicit -f options still matter regardless of their position.
+      std::vector<std::string_view> result;
+      bool seenOptimization = false;
+      for (auto it = flags.rbegin(); it != flags.rend(); ++it) {
+        if (optimizationLevel(*it)) {
+          if (seenOptimization) continue;
+          seenOptimization = true;
+        }
+        if (!harmlessFlag(*it)) result.emplace_back(*it);
+      }
+      std::reverse(result.begin(), result.end());
+      return result;
+    };
+    const auto flags = relevant(p.flags);
     if (exactFlags && !featureOnly) {
       const auto target = [&](const auto& b) {
         return covered(b) && compatibleProfileTriple(b.triple, p.triple);
@@ -70,12 +93,6 @@ std::string LibraryData::selector(const Profile& p, bool agreementOnly, std::str
         if (reason) *reason = "profile target not covered by scanned builds: " + p.triple;
         return {};
       }
-      const auto relevant = [](const auto& flags) {
-        std::vector<std::string_view> result;
-        for (const auto& flag : flags) if (!harmlessFlag(flag)) result.emplace_back(flag);
-        return result;
-      };
-      const auto flags = relevant(p.flags);
       std::string inputReason;
       const auto match = std::find_if(builds.begin(), builds.end(), [&](const auto& b) {
             return target(b) && relevant(b.flags) == flags && compilerInputsMatch(b, p, &inputReason);
@@ -94,17 +111,20 @@ std::string LibraryData::selector(const Profile& p, bool agreementOnly, std::str
       return {};
     }
     if (std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
-          return covered(b) && std::all_of(p.flags.begin(), p.flags.end(), [&](const auto& flag) {
-            return harmlessFlag(flag) || std::find(b.flags.begin(), b.flags.end(), flag) != b.flags.end();
+          if (!covered(b)) return false;
+          const auto buildFlags = relevant(b.flags);
+          return std::all_of(flags.begin(), flags.end(), [&](const auto& flag) {
+            return std::find(buildFlags.begin(), buildFlags.end(), flag) != buildFlags.end();
           });
         })) return "gcc-" + major;
     std::string required, uncovered;
-    for (const auto& flag : p.flags) {
-      if (harmlessFlag(flag)) continue;
+    for (const auto flag : flags) {
       if (!required.empty()) required += ' ';
       required += flag;
       if (std::any_of(builds.begin(), builds.end(), [&](const auto& b) {
-            return covered(b) && std::find(b.flags.begin(), b.flags.end(), flag) != b.flags.end();
+            if (!covered(b)) return false;
+            const auto buildFlags = relevant(b.flags);
+            return std::find(buildFlags.begin(), buildFlags.end(), flag) != buildFlags.end();
           })) continue;
       if (!uncovered.empty()) uncovered += ' ';
       uncovered += flag;
