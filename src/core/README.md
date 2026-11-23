@@ -869,6 +869,32 @@ deletes the renderer's marker spans, then `unmarkedInvariant` (re-lex),
 `compareUnmarkedPreprocessed` (`-E` of both), a build and the samples check
 `unmarked.cpp`; any failure keeps the marked bytes.
 
+`--compact-whitespace` is opt-in and **implies `--no-line-markers`**. It
+runs only after that option's proof and checks succeed for a `pruned` artifact.
+The existing proof covers columns: user `__builtin_COLUMN` tokens, every
+`SourceLocExpr` (also system defaults), naming builtins containing `COLUMN`,
+and `std::source_location` values/types/calls, including `column()`, already
+block omission. No new assumption or weaker position gate is introduced.
+
+`compactWhitespace` then removes leading horizontal whitespace, trailing
+whitespace and empty physical lines. Literal and comment bytes are protected
+(including every raw-string prefix/delimiter and its blank lines); whole logical
+lines containing a backslash-newline, including CRLF and GCC whitespace splices,
+are copied verbatim. Nonempty lines keep their newline, so directives retain
+line-start semantics and tokens cannot join across lines. Keep annotations are
+consumed before this final transformation; retained comment bytes stay intact.
+There is no downstream consumer of the old byte offsets. After compaction,
+`unmarkedInvariant` independently compares token spellings/kinds and directive
+boundaries, and `compareUnmarkedPreprocessed` compares `-E` token sequences and
+pragma boundaries (including expanded stringized arguments), keeping system
+header locations. `compact.cpp` must build and pass the same sample comparisons;
+only its exact checked bytes are returned. A failed compact check keeps the
+checked unmarked bytes. A failed position gate, absent parse/pruned artifact or
+failed marker-free check keeps the preceding artifact unchanged. The report
+says `whitespace compacted: ...` or `whitespace kept: <why>` and records checks.
+The ATL sweep measures a fourth `compact` variant with comment stripping and
+marker omission enabled.
+
 Policy D3d-2 also accepts `NoUniqueAddressAttr` only for the standard,
 argument-free `[[no_unique_address]]` spelling on a non-static, non-bit-field
 `FieldDecl` owned by its enclosing record. Empty and nonempty fields, templates,
@@ -918,13 +944,17 @@ call-site location. They bypass the otherwise valid â€œunowned user dependencyâ€
 refusal only for a finite compiler-recognized allow-list: `__builtin_popcount`,
 `clz`, `ctz`, `ffs`, `parity` (each with `l`/`ll` variants),
 `__builtin_bswap16/32/64/128`, `__builtin_expect`,
-`__builtin_expect_with_probability` and `__builtin_unreachable`. These operate
-on scalar values/control flow and introduce no further user lookup; argument
+`__builtin_expect_with_probability`, `__builtin_unreachable`, the
+`__builtin_add/sub/mul_overflow` forms and `__builtin_prefetch`. These introduce
+no further user lookup; prefetch takes a pointer and optional constant integer
+arguments and does not change program semantics. Argument
 expressions and conversions are still traversed, and external C runtime
 definitions already stay as roots. This exemption applies only to implicit
 builtin declarations, after checking for an owned user declaration. It does
 not excuse arbitrary builtins or explicitly declared user functions.
-`ordinary_builtins` covers the common forms.
+`ordinary_builtins` covers the common forms, including one-, two- and
+three-argument prefetch inside `if !consteval` in a constexpr function template,
+constant evaluation that skips the hint, and dependencies in its arguments.
 
 Static/thread storage roots retain the positive syntactic initializer/type
 classifier, plus D3d-3's narrow constexpr exception above. Outside that

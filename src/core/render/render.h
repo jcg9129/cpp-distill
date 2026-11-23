@@ -29,4 +29,8 @@ Result<std::string> withoutLineMarkers(const RenderedSource&);
 // Independent re-lex: marked minus its #line lines and unmarked have the same
 // tokens, kinds and directive boundaries; unmarked has no line directive.
 Result<bool> unmarkedInvariant(std::string_view marked, std::string_view unmarked);
+// Final marker-free artifact only. Trim line edges/empty lines, preserving
+// literal/comment bytes and entire logical lines containing physical splices.
+// No offsets from the renderer are consumed after this transformation.
+Result<std::string> compactWhitespace(std::string_view);
 } // namespace distill

@@ -524,4 +524,43 @@ Result<bool> unmarkedInvariant(std::string_view marked, std::string_view unmarke
   } catch (const Error& e) { return e; }
   catch (const std::exception& e) { return Error{std::string("unmarked invariant: ")+e.what()}; }
 }
+Result<std::string> compactWhitespace(std::string_view text) {
+  try {
+    const auto scan = take(scanDirectives(text));
+    std::vector<bool> protectedBytes(text.size(),false);
+    auto protect = [&](std::size_t begin, std::size_t end) {
+      std::fill(protectedBytes.begin()+begin,protectedBytes.begin()+end,true);
+    };
+    for (const auto& c : scan.comments) protect(c.begin,c.end);
+    for (const auto& l : scan.lines) {
+      for (const auto& t : l.tokens) if (t.kind == TokenKind::literal) protect(t.begin,t.end);
+      // Keep whole spliced logical lines, including whitespace before/after
+      // the backslash (GCC accepts horizontal whitespace before the newline).
+      // Trimming a continuation can glue tokens or alter macro stringizing.
+      for (auto i = l.begin; i < l.end; ++i) if (text[i] == '\\') {
+        auto end = i+1;
+        while (end < l.end && (text[end] == ' ' || text[end] == '\t' || text[end] == '\r' || text[end] == '\v' || text[end] == '\f')) ++end;
+        if (end < l.end && text[end] == '\n') { protect(l.begin,l.end); break; }
+      }
+    }
+    std::string out; out.reserve(text.size());
+    auto horizontal = [](char c) { return c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r'; };
+    for (std::size_t begin = 0; begin < text.size();) {
+      auto newline = text.find('\n',begin);
+      const auto end = newline == text.npos ? text.size() : newline;
+      auto first = begin, last = end;
+      while (first < last && horizontal(text[first]) && !protectedBytes[first]) ++first;
+      while (last > first && horizontal(text[last-1]) && !protectedBytes[last-1]) --last;
+      // A protected newline can be an empty physical line inside a raw string
+      // or a continued logical line. Preserve it even when it has no tokens.
+      if (first != last || (end < text.size() && protectedBytes[end])) {
+        out.append(text.substr(first,last-first));
+        if (end < text.size()) out += '\n';
+      }
+      begin = end + (end < text.size());
+    }
+    return out;
+  } catch (const Error& e) { return e; }
+  catch (const std::exception& e) { return Error{std::string("compact whitespace: ")+e.what()}; }
+}
 } // namespace distill

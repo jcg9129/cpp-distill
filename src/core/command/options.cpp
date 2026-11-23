@@ -32,6 +32,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (a == "-v") o.verbose = true;
     else if (a == "--strip-comments") o.stripComments = true;
     else if (a == "--no-line-markers") o.noLineMarkers = true;
+    else if (a == "--compact-whitespace") { o.compactWhitespace = true; o.noLineMarkers = true; }
     else if (a == "--keep" || a == "--verify-run") {
       if (++i == args.size() || args[i].empty() || args[i].starts_with('-')) return Error{"missing value for " + a};
       (a == "--keep" ? o.keep : o.verifyRun).push_back(args[i]);
@@ -81,6 +82,8 @@ std::string distillHelp() {
       "  --strip-comments   remove comments during checked rendering\n"
       "  --no-line-markers  omit #line markers from a pruned result when no user code\n"
       "                     can observe source positions (else kept; report says why)\n"
+      "  --compact-whitespace trim line edges and empty lines when positions are unobserved;\n"
+      "                     implies --no-line-markers (else unchanged; report says why)\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"

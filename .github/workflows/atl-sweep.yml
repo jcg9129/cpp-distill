@@ -87,7 +87,7 @@ jobs:
           git -C out/atl-sweep/atl fetch --depth 1 -- origin "$ATL_REF"
           git -C out/atl-sweep/atl checkout --detach FETCH_HEAD
           git -C out/atl-sweep/atl rev-parse HEAD
-      - name: Measure and verify all three variants
+      - name: Measure and verify all four variants
         shell: bash
         run: bash ci/atl-sweep/sweep.sh out/atl-sweep/atl "$DISTILL" out/atl-sweep/results "$JUDGE"
       - name: Upload sweep summary, reports and diagnostics

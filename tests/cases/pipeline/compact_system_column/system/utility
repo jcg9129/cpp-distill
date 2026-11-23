@@ -1,0 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include <source_location>
+inline unsigned column(std::source_location at = std::source_location::current()) {
+  return at.column();
+}

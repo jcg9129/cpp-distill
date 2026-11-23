@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+kept prefetch |
+kept offset |
 kept input |
 kept main | root: main
 removed Unused | outside the retention closure
