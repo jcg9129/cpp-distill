@@ -350,7 +350,7 @@ struct Extraction {
     return std::pair{f->getDeclContext()->getPrimaryContext(),f->getNameAsString()};
   }
   std::string rule1Category(const FunctionDecl* f) const {
-    // Same precedence and operator classification as trim-analysis-diag.patch.
+    // Classify written declarations for the rule-1 removal summary.
     if (const auto* c = dyn_cast<CXXConstructorDecl>(f)) {
       if (c->isDefaultConstructor() || c->isCopyOrMoveConstructor()) return "protected";
       if (c->getMinRequiredArguments() <= 1 && c->getNumParams() >= 1)
@@ -1926,7 +1926,7 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   }
   auto valid = validatePruningModel(extraction.model); if (!valid.ok()) return valid.error();
   // Repeated instantiated type checks can witness the same declaration many
-  // times. Bound the serialized measurement model to distinct graph edges.
+  // times. Bound the serialized worker model to distinct graph edges.
   if (extraction.model.assumeUnreferencedOverloads) {
     auto unique = [](auto& edges) {
       std::sort(edges.begin(),edges.end()); edges.erase(std::unique(edges.begin(),edges.end()),edges.end());

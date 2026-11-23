@@ -6,6 +6,7 @@ contains | operator+(double)
 contains | Box(long) -> Box<long>;
 kept ctor_helper |
 kept operator_helper |
-report | pruning assumption disabled: unreferenced-overloads
+report | pruning assumption disabled: A13 unreferenced-overloads
+report-absent | pruning assumption: A13
 report | rule1-removed: category=ctor-multi-arg declarations=0 bytes=0
 report | rule1-removed: category=deduction-guide declarations=0 bytes=0

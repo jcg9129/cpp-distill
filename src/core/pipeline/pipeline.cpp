@@ -457,7 +457,7 @@ struct Pipeline {
       result.resultLine = "distill: nothing written, runtime " + result.runtime;
     }
     if (!options.assumeUnreferencedOverloads && (!result.pruningModel || !result.retention))
-      result.diagnostic += "pruning assumption disabled: unreferenced-overloads (--no-assume=unreferenced-overloads)\n";
+      result.diagnostic += "pruning assumption disabled: A13 unreferenced-overloads (--no-assume=unreferenced-overloads)\n";
     if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
     if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))

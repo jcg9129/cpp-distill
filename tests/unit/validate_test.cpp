@@ -139,6 +139,16 @@ TEST(validate_no_assume_names) {
   }
   const auto both = parseDistillOptions({"--no-assume=instantiation-effects,library-spelled-members","main.cpp"});
   CHECK(both.ok()); CHECK(!both.value().assumeLibrarySpelledMembers); CHECK(!both.value().assumeInstantiationEffects);
+  CHECK(parseDistillOptions({"main.cpp"}).value().assumeUnreferencedOverloads);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--no-assume=unreferenced-overloads","main.cpp"},
+      {"--no-assume","unreferenced-overloads","main.cpp"},
+      {"--no-assume=unreferenced-overloads","--no-assume=unreferenced-overloads","main.cpp"},
+      {"--no-assume=unreferenced-overloads,unreferenced-overloads","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(!r.value().assumeUnreferencedOverloads);
+    CHECK(r.value().assumeInstantiationEffects); CHECK(r.value().assumeLibrarySpelledMembers);
+    CHECK(r.value().assumeLibraryMacroValues); CHECK(!r.value().noPrune);
+  }
   CHECK(parseDistillOptions({"main.cpp"}).value().assumeLibraryMacroValues);
   for (const auto& args : std::vector<std::vector<std::string>>{
       {"--no-assume=library-macro-values","main.cpp"},
@@ -149,21 +159,23 @@ TEST(validate_no_assume_names) {
     CHECK(!r.value().assumeLibraryMacroValues); CHECK(r.value().assumeInstantiationEffects);
     CHECK(r.value().assumeLibrarySpelledMembers); CHECK(!r.value().noPrune);
   }
-  const auto all = parseDistillOptions({"--no-assume=instantiation-effects,library-macro-values,library-spelled-members","main.cpp"});
+  const auto all = parseDistillOptions({"--no-assume=instantiation-effects,library-macro-values,library-spelled-members,unreferenced-overloads","main.cpp"});
   CHECK(all.ok()); CHECK(!all.value().assumeInstantiationEffects);
   CHECK(!all.value().assumeLibrarySpelledMembers); CHECK(!all.value().assumeLibraryMacroValues);
+  CHECK(!all.value().assumeUnreferencedOverloads);
   CHECK(!parseDistillOptions({"--no-assume=library-macro-values","--judge-probe","cses"}).ok());
   CHECK(!parseDistillOptions({"--no-assume=library-macro-values","--judge-check","cses","output.txt"}).ok());
   CHECK(!parseDistillOptions({"--no-assume=library-spelled-members","--judge-probe","cses"}).ok());
-  for (const auto* name : {"", "A11", "A12", "A9", "A7", "unknown", "library-macro-values,", ",library-macro-values", "instantiation-effects,", ",instantiation-effects",
+  for (const auto* name : {"", "A11", "A12", "A13", "A9", "A7", "unknown", "unreferenced-overloads,", ",unreferenced-overloads", "library-macro-values,", ",library-macro-values", "instantiation-effects,", ",instantiation-effects",
                            "instantiation-effects,unknown", "unknown,instantiation-effects"}) {
     const auto r = parseDistillOptions({std::string("--no-assume=")+name,"main.cpp"});
-    CHECK(!r.ok()); CHECK(r.error().message.find("switchable names: instantiation-effects, library-spelled-members, library-macro-values") != std::string::npos);
+    CHECK(!r.ok()); CHECK(r.error().message.find("switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads") != std::string::npos);
   }
   CHECK(!parseDistillOptions({"--no-assume"}).ok());
   CHECK(!parseDistillOptions({"--no-assume=instantiation-effects","--judge-probe","cses"}).ok());
   CHECK(distillHelp().find("--no-assume=<name>") != std::string::npos);
   CHECK(distillHelp().find("library-macro-values (A9 standard macros)") != std::string::npos);
+  CHECK(distillHelp().find("unreferenced-overloads (A13)") != std::string::npos);
 }
 
 TEST(validate_capture_profile_crlf_compiler_output) {

@@ -7,5 +7,5 @@ absent=Counter(int,double)
 absent.op=operator+(double)
 verification=local
 configuration=local
-report.assumption=pruning assumption: unreferenced-overloads
+report.assumption=pruning assumption: A13 unreferenced-overloads
 report.removed=rule1-removed: category=ctor-multi-arg declarations=1

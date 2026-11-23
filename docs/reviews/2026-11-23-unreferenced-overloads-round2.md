@@ -1,7 +1,39 @@
 Round 2 of the `unreferenced-overloads` prototype, starting at e295016 and
 comparing against a separately built archive of a653b6c. No commit was made.
 The supplied `.measure/` directory was absent from this worktree, so the
-investigation and counts use repository fixtures, not the 126 ATL examples.
+original investigation and counts below use repository fixtures. The subsequent
+ATL sweep supplied for adoption is recorded next.
+
+## Adopted round 2: ATL sweep
+
+The user approved round 2 as default-on A13 `unreferenced-overloads` on
+2026-11-23, with `--no-assume=unreferenced-overloads` as the opt-out. Sweep
+45187236147 compared 126 ATL examples under judge `cses` against main a653b6c:
+
+| Rendering | Main bytes | Round 2 bytes | Change |
+| --- | ---: | ---: | ---: |
+| NLM | 4,535,428 | 4,451,696 | −83,732 (−1.85%) |
+| Compact | 4,051,059 | 3,972,342 | −78,717 (−1.94%) |
+
+All 126/126 examples pruned, with 0 run failures. No example grew; 41 shrank.
+The removal summaries count 253 declarations / 65,500 B within surviving records:
+
+| Category | Declarations | Bytes |
+| --- | ---: | ---: |
+| operator() | 114 | 35,885 |
+| Deduction guides | 100 | 23,987 |
+| Arithmetic/comparison/other operators | 31 | 4,295 |
+| Constructors | 8 | 1,333 |
+
+## Round 3 (not adopted)
+
+Flag-origin replay plus check-shape narrowing was evaluated and discarded.
+It added 1,902 B on 7 examples for roughly 790 lines of implementation and up
+to 8 reparses. All 43 flag-protected constructors examined there had real
+references from retained code. Round 2's compiler used/referenced protection
+remains; none of the round 3 logic is adopted.
+
+## Original round 2 investigation
 
 The reproduced causes and changes are:
 
@@ -114,5 +146,6 @@ protect multiple candidate declarations; there is no complete argument-level
 viability or template-parameter-flow analysis. Requires/concept witnesses
 remain conservative. Compiler reference flags from dead callers are retained
 by policy. Macro/shared spellings and explicitly instantiated records retain
-their existing protections. The absent ATL corpus/reports prevent claiming
-new ATL byte totals or a per-reason breakdown for those examples.
+their existing protections. The original local investigation did not include
+the ATL corpus/reports; the adoption sweep totals above were supplied
+subsequently, and no ATL per-protection-reason breakdown is claimed.

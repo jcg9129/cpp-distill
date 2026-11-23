@@ -79,7 +79,7 @@ user code after resolution; an include of a system header outside the
 standard-header list; libraries other than `-lm`, `-lpthread`, `-lstdc++`
 (external code can call into user code, R4-K).
 
-### 1.3 Trust assumptions (user, amended through 2026-11-18)
+### 1.3 Trust assumptions (user, amended through 2026-11-23)
 
 Some judge facts can't be proved from the user's machine. The design relies on
 these, and only these; the report lists each one an output depended on, and
@@ -170,6 +170,19 @@ these, and only these; the report lists each one an output depended on, and
   by `--no-assume=library-spelled-members`; only whole-family pruning then remains.
   An unavailable worker raw/expanded header inventory also disables member pruning
   with a reason, without disabling whole-family pruning (§4.7).
+- **A13 (`unreferenced-overloads`)** (user, 2026-11-23) The judge's overload resolution, implicit conversions, constraints, traits, concept checks and class template argument deduction do not select or require a user constructor, operator function or deduction guide that the worker program neither references (including implicit calls and compiler used/referenced flags) nor examines with a relevant trait, concept or unevaluated check.
+  Member pruning never removes destructors; default, copy and move constructors;
+  copy/move assignment; conversion functions; virtual members; operator new/delete
+  and co_await; defaulted/deleted declarations; inheriting constructors and their
+  bases' constructors; a record's last user-declared constructor; declarations
+  from macro expansion; or declarations of explicitly instantiated records.
+  This does not prevent removal of an unused whole record under the existing rules.
+  A13 is enabled by default with A12-enabled member pruning. Reports list
+  `A13 unreferenced-overloads` whenever member pruning is enabled with it, even
+  without a deletion. `--no-assume=unreferenced-overloads` restores D3e rule 1
+  exactly (byte-identical output to the pre-A13 policy).
+  `--no-assume=library-spelled-members` disables member pruning, so A13 is neither
+  applied nor reported as a relied-on assumption (§4.7).
 
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
@@ -198,7 +211,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
-| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12) and `library-macro-values` (A9 standard macros) are switchable; any other name is a usage error (exit 1) listing switchable names |
+| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `unreferenced-overloads` (A13) and `library-macro-values` (A9 standard macros) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
@@ -1337,12 +1350,14 @@ as the code the judge compiles; the values that system macros supply (such
 as `BUFSIZ`) may differ. This is a statement about preprocessing only. It does not make the
 library's declarations, layouts, overload resolution or template selection in
 Clang's parse the judge's (the parse may use another target, §4.2, and other
-headers). So the keep rules never treat a missing AST edge *from system code
-into user code* as evidence that a user declaration is unused: such calls
-are covered by A6 and the never-removed ADL names, member calls by A12 and
+headers). The keep rules account for calls *from system code into user code*
+through A6 and the never-removed ADL names, member calls through A12 and
 D3e's library/language inventory or whole-record fallback, and user specializations
 of system templates by rule 3 and the roots. AST edges from system code are
-positive evidence only.
+positive evidence. A13 additionally permits removal of individual unreferenced
+constructors, operators and deduction guides under its stated assumption and
+structural/check protections; without A13, missing system edges cannot justify
+their removal.
 
 **Parse configuration** (D3-1-1). Clang parses in a configuration derived
 from the selected `flat` checking configuration (§4.6): its probed triple,
@@ -1388,7 +1403,7 @@ its dependencies.
 - an overload set: all non-member functions and function templates with the
   same name in the same namespace, with their redeclarations;
 - a template family: primary, partial and explicit specializations,
-  deduction guides; a user specialization of a system template (`std::hash`)
+  deduction guides (separate declaration units under A13); a user specialization of a system template (`std::hash`)
   is its own family;
 - an enum; a typedef or alias declaration; a namespace alias; a
   using-declaration or using-directive; a concept; a variable with its
@@ -1427,15 +1442,26 @@ concept and namespace-alias names, and unscoped enumerators. D3e also indexes
 function-member names in their own units; template parameter names and other
 local/member names are not indexed.
 
-**Member units (policy D3e, A12).** Functions and function templates with one
+**Member units (policy D3e, A12/A13).** Functions and function templates with one
 name in one record form a unit, including overloads, in-class declarations,
 out-of-line definitions and specializations. Nested records have separate units.
+Under A13, rule-1 declarations instead use individual declaration identities;
+redeclarations and instantiations share the written declaration's retention group.
 Data/static data members, nested types, aliases, enums and friends stay with the
 structural record family. A kept record no longer automatically keeps all methods.
 A unit stays if any of these eight rules applies:
 
-1. Constructors, destructors, conversions, operators, deduction guides, or any
-   virtual member (including virtualness in known instantiations) are excluded.
+1. Without A13 (`--no-assume=unreferenced-overloads`), constructors, destructors,
+   conversions, operators, deduction guides, or any virtual member (including
+   virtualness in known instantiations) are excluded, exactly as before A13.
+   With A13, unreferenced user constructors, operator functions and deduction
+   guides may be removed individually unless protected by a relevant retained
+   trait, concept or unevaluated check. Implicit calls and compiler used/referenced
+   flags count as references, even when the flag originates in discarded code.
+   The structural exclusions listed in A13 always remain, including a surviving
+   record's last user-declared constructor. Rules 4/5 spelling alone do not protect
+   these individual overloads. Check evidence requires both its source and the
+   owning record to survive; it cannot resurrect an otherwise dead record.
 2. Any user virtual member anywhere has the same name.
 3. The name is reserved.
 4. The name is an identifier token in the raw text of any included system header
@@ -1465,6 +1491,9 @@ baseline has no scanned inventory: member pruning uses worker headers only and
 reports `scanned-build inventory unavailable` until the CI data import.
 Whole-family pruning continues under its existing gates.
 `--no-assume=library-spelled-members` likewise keeps records whole.
+A13 then has no effect and is omitted from relied-on assumptions. Disabling
+A13 alone keeps A12 member pruning and restores the original rule 1 with
+byte-identical output to the pre-A13 policy.
 
 Member units join the ordinary fixpoint and rule 6's reverse potential dependency
 graph below as families. Forward member-to-owner retention keeps records; owner-to-blocked-member
@@ -1483,7 +1512,12 @@ extraction and its existing effect rules. A11 and its opt-out apply to units too
 Edits own template headers, attributes, default arguments and terminators, leaving
 access labels and record braces intact. Mixed function/data declarations are
 pinned. Reports give one row per member unit and kept/removed counts. A12 is
-reported whenever member pruning is enabled, even without a deletion, like A11.
+reported whenever member pruning is enabled, even without a deletion, like A11;
+A13 is likewise reported as `A13 unreferenced-overloads` when enabled with it.
+The `rule1-removed:` summaries count written declarations and bytes by category
+only within surviving records. `rule1-constructors-kept:` summarizes effective
+constructor protection reasons, deduplicating instantiated copies by written
+declaration offset. These complement the member-unit and family-byte summaries.
 See the [adopted member review](reviews/2026-11-20-member-pruning.md) for the
 critical review and historical prototype measurements.
 
@@ -1642,17 +1676,19 @@ no-extended-temporary proof above succeeds. Necessarily-dynamic block locals
 are conservatively retained as sources; the optional dynamic-initialization
 proof is not used. Rule-1 exemptions, forward/reverse closure, attribute/symbol
 sources and refusal gates still apply. This mode needs A1–A7 and A9 where
-applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
+applicable, plus A12 and enabled A13 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 7 and checked as
+The settings are part of serialized worker protocol version 9 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
-model and policy identity distinguish both A11 and A12 flag combinations.
+model identity distinguishes A11, A12 and A13 flag combinations.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. For member units this additional
-check applies to individually removed units of kept owners; members removed
-with a whole record may share names with retained records. It catches range and editing
+check applies to individually removed same-name units of kept owners. A13's
+individual rule-1 declarations are exempt from the member-name check because
+another retained overload or the record itself can share their spelling. Members
+removed with a whole record may also share names with retained records. It catches range and editing
 bugs without a compiler; it is not an equivalence proof, and it can't see
 pasted names.
 
@@ -1827,7 +1863,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7, A11, A12 for member pruning, and A9 for L1c) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, A11, A12 and enabled A13 for member pruning, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

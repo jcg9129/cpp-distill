@@ -552,7 +552,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
     if (out.memberDisabledReasons.empty()) {
       out.assumptions.insert("A12");
-      if (m.assumeUnreferencedOverloads) out.assumptions.insert("unreferenced-overloads");
+      if (m.assumeUnreferencedOverloads) out.assumptions.insert("A13");
     }
   }
   return out;

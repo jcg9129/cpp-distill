@@ -91,7 +91,7 @@ TEST(prune_unreferenced_overloads_worker_identity) {
   const auto disabled = serializePruningModel(b.m).value(); CHECK(enabled != disabled);
   CHECK(!parsePruningModel(disabled).value().assumeUnreferencedOverloads);
   CHECK(parsePruningModel(enabled).value().assumeUnreferencedOverloads);
-  CHECK(renderPruningReport(b.m,b.run()).value().find("pruning assumption disabled: unreferenced-overloads") != std::string::npos);
+  CHECK(renderPruningReport(b.m,b.run()).value().find("pruning assumption disabled: A13 unreferenced-overloads (--no-assume=unreferenced-overloads)") != std::string::npos);
   test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
   o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
     ProcessResult response; response.exitCode = 0; response.stdoutText = enabled; return response;
@@ -99,6 +99,32 @@ TEST(prune_unreferenced_overloads_worker_identity) {
   const auto mixed = extractPruning(b.m,o).value();
   CHECK(!mixed.assumeUnreferencedOverloads);
   CHECK(mixed.disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
+TEST(prune_a13_reporting_requires_enabled_member_pruning) {
+  Model b; b.add("main","int main(){}");
+  b.m.libraryMemberNamesComputed = true;
+  auto r = b.run();
+  CHECK_EQ(r.removedBytes,0u);
+  CHECK(r.assumptions.contains("A12")); CHECK(r.assumptions.contains("A13"));
+  CHECK(!r.assumptions.contains("unreferenced-overloads"));
+  CHECK(renderPruningReport(b.m,r).value().find("pruning assumption: A13 unreferenced-overloads\n") != std::string::npos);
+  b.m.assumeUnreferencedOverloads = false;
+  r = b.run(); CHECK(r.assumptions.contains("A12")); CHECK(!r.assumptions.contains("A13"));
+  b.m.assumeUnreferencedOverloads = true;
+  b.m.assumeInstantiationEffects = false;
+  r = b.run(); CHECK(r.assumptions.contains("A13")); CHECK(!r.assumptions.contains("A11"));
+  b.m.assumeLibrarySpelledMembers = false;
+  r = b.run(); CHECK(!r.assumptions.contains("A12")); CHECK(!r.assumptions.contains("A13"));
+  CHECK(renderPruningReport(b.m,r).value().find("pruning assumption: A13") == std::string::npos);
+  b.m.assumeLibrarySpelledMembers = true;
+  b.m.libraryMemberNamesComputed = false;
+  r = b.run(); CHECK(!r.assumptions.contains("A12")); CHECK(!r.assumptions.contains("A13"));
+  b.m.libraryMemberNamesComputed = true;
+  b.m.memberDisabledReasons = {"inventory unavailable"};
+  r = b.run(); CHECK(!r.assumptions.contains("A13"));
+  b.m.memberDisabledReasons.clear(); b.m.disabledReasons = {"parse error"};
+  r = b.run(); CHECK(!r.assumptions.contains("A13"));
 }
 
 TEST(prune_rule1_evidence_needs_both_source_and_owner) {

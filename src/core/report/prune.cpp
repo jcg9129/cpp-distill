@@ -24,7 +24,7 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
   if (!m.assumeLibrarySpelledMembers)
     out << "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
   if (!m.assumeUnreferencedOverloads)
-    out << "pruning assumption disabled: unreferenced-overloads (--no-assume=unreferenced-overloads)\n";
+    out << "pruning assumption disabled: A13 unreferenced-overloads (--no-assume=unreferenced-overloads)\n";
   for (const auto& a : r.assumptions) out << "pruning assumption: " << assumptionLabel(a) << '\n';
   out << "extension coverage:\n" << embeddedExtensionCoverage();
   for (FamilyId id = 0; id < m.families.size(); ++id) {

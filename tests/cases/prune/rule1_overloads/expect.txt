@@ -1,4 +1,5 @@
 contains | Overloads(int a, int b)
+report | pruning assumption: A13 unreferenced-overloads
 absent | Overloads(int, double)
 absent | explicit Overloads(char)
 absent | Overloads(float)

@@ -11,6 +11,7 @@ inline constexpr std::string_view pruningPolicyVersion = "D3e";
 inline std::string_view assumptionLabel(std::string_view id) {
   if (id == "A11") return "A11 instantiation-effects";
   if (id == "A12") return "A12 library-spelled-members";
+  if (id == "A13") return "A13 unreferenced-overloads";
   return id;
 }
 struct EditRange {
@@ -42,7 +43,7 @@ struct PruneFamily {
   // retained record's structural family (also for records nested in it).
   FamilyId memberOf = noFamily;
   std::string memberName, memberBlocker;
-  // Prototype: a declaration identity, rather than a same-name overload unit.
+  // A13 uses a declaration identity rather than a same-name overload unit.
   // Nonempty also on structurally protected rule-1 declarations.
   std::string rule1Kind;
   bool rule1Constructor = false;

@@ -8,4 +8,4 @@ contains.op=operator+(double)
 no-assume=unreferenced-overloads
 verification=local
 configuration=local
-report.assumption=pruning assumption disabled: unreferenced-overloads
+report.assumption=pruning assumption disabled: A13 unreferenced-overloads

@@ -79,7 +79,7 @@ std::string distillHelp() {
       "  --report <file>    validation, conditional and pruning report\n"
       "  --no-prune         inline and resolve only\n"
       "  --no-assume=<name> disable an assumption (repeatable, comma lists accepted)\n"
-      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-macro-values (A9 standard macros), unreferenced-overloads (prototype)\n"
+      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-macro-values (A9 standard macros), unreferenced-overloads (A13)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
       "  --strip-comments   remove comments during checked rendering\n"
       "  --no-line-markers  omit #line markers from a pruned result when no user code\n"

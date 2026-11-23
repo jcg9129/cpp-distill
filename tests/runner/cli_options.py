@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
     (root / 'main.cpp').write_text('// SPDX-License-Identifier: GPL-3.0-or-later\n#if 1\nint main(){}\n#endif\n')
     for args, code, message in [
         (['--help'], 0, 'Usage: distill'),
+        (['--help'], 0, 'unreferenced-overloads (A13)'),
         (['--no-assume=A11', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
         (['--no-assume=unknown', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
         (['--no-assume=', 'main.cpp'], 1, 'switchable names: instantiation-effects, library-spelled-members, library-macro-values, unreferenced-overloads'),
@@ -100,6 +101,50 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                   (not any('instantiation-effects' in flag for flag in flags)), report)
             if flags:
                 check('member pruning disabled: --no-assume=library-spelled-members' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
+    with case('A13 opt-out and A12 dependency reach the worker and both report formats'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('struct S { S(){} S(int,int){} int operator+(int){return 0;} '
+                                      'int unused(){return 0;} }; int main(){S s;(void)s;}\n')
+        selections = [([], True, True),
+                      (['--no-assume=unreferenced-overloads'], True, False),
+                      (['--no-assume', 'unreferenced-overloads'], True, False),
+                      (['--no-assume=unreferenced-overloads,unreferenced-overloads',
+                        '--no-assume=unreferenced-overloads'], True, False),
+                      (['--no-assume=instantiation-effects'], True, True),
+                      (['--no-assume=library-spelled-members'], False, False),
+                      (['--no-assume=library-spelled-members,unreferenced-overloads'], False, False),
+                      ([], True, True)]
+        whole_record_output = None
+        for flags, members, overloads in selections:
+            result = subprocess.run([binary, *flags, '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            check(('S(int,int)' not in result.stdout) == overloads, result.stdout)
+            check(('operator+' not in result.stdout) == overloads, result.stdout)
+            check(('int unused' not in result.stdout) == members, result.stdout)
+            check(('pruning assumption: A12 library-spelled-members\n' in report) == members, report)
+            check(('pruning assumption: A13 unreferenced-overloads\n' in report) == overloads, report)
+            assumptions = next(line for line in report.splitlines() if line.startswith('assumptions:'))
+            check((' A13 unreferenced-overloads' in assumptions) == overloads, assumptions)
+            opted_out = any('unreferenced-overloads' in flag for flag in flags)
+            check(('pruning assumption disabled: A13 unreferenced-overloads '
+                   '(--no-assume=unreferenced-overloads)\n' in report) == opted_out, report)
+            if not members:
+                if whole_record_output is None:
+                    whole_record_output = result.stdout
+                check(result.stdout == whole_record_output, 'A13 changed output with A12 disabled')
+        # The report must also name the disabled assumption when pruning is skipped.
+        result = subprocess.run([binary, '--no-prune', '--no-assume=unreferenced-overloads',
+                                 '--report', 'report.txt', 'main.cpp'],
+                                cwd=root, capture_output=True, text=True, timeout=120)
+        check(result.returncode == 0, result.stderr)
+        report = (root / 'report.txt').read_text()
+        check('pruning assumption disabled: A13 unreferenced-overloads '
+              '(--no-assume=unreferenced-overloads)\n' in report, report)
+        check('pruning assumption: A13' not in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
     with case('library-macro-values switch reaches resolution and reports A9 scope'):

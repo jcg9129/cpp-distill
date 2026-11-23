@@ -293,7 +293,7 @@ and location-sensitive builtins. See [input restrictions](docs/design.md#12-supp
 and [command classification](docs/design.md#41-command-model) for the exact scope.
 Pruning can keep more code or be disabled for unsupported options/AST features.
 
-The [trust assumptions A1–A6](docs/design.md#13-trust-assumptions-user-2026-11-15) are:
+The [trust assumptions A1–A6](docs/design.md#13-trust-assumptions-user-amended-through-2026-11-23) are:
 
 - **A1:** Standard headers introduce only specified, reserved or inventoried extension names.
 - **A2:** Those headers do not alter protected user/compiler macros, and macro expansions refer to user names only through identifiers present in their arguments.
@@ -310,8 +310,15 @@ library configuration. Conflicting captured values remain unknown.
 when this part of A9 is off.
 
 `--no-assume=<name>` accepts repeated flags and comma lists. The switchable
-names are `instantiation-effects` (A11), `library-spelled-members` (A12), and
-`library-macro-values` (A9 standard macros). Unknown names are usage errors.
+names are `instantiation-effects` (A11), `library-spelled-members` (A12),
+`unreferenced-overloads` (A13), and `library-macro-values` (A9 standard macros).
+Unknown names are usage errors. A13 is enabled by default with member pruning:
+it allows removal of unreferenced constructors, operators and deduction guides
+under the [documented exclusions and assumption](docs/design.md#13-trust-assumptions-user-amended-through-2026-11-23).
+`--no-assume=unreferenced-overloads` restores the original D3e rule 1 with
+byte-identical output to the pre-A13 policy. Disabling `library-spelled-members`
+also disables A13; reports list `A13 unreferenced-overloads` only when member
+pruning is enabled with it.
 
 ## Build, license and credits
 
