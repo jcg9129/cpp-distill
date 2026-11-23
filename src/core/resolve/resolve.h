@@ -57,6 +57,8 @@ struct ResolveOptions {
   // Local satisfaction reruns have compiler observations, not a reproduced
   // judge library build. They may use only the major's audited agreement.
   bool libraryAgreementOnly = false;
+  // A9's standard object-like integer macros; __cpp_lib_* facts stay enabled.
+  bool assumeLibraryMacroValues = true;
   std::size_t maxConditionTokens = 100000, maxNesting = 200;
   std::size_t maxOutputBytes = 128 * 1024 * 1024;
   // Raw-text lines of conditional directives kept unknown (cross-host demotion).
@@ -72,6 +74,7 @@ struct ResolveResult {
   std::vector<std::string> disabledReasons;
   bool unknownInUserCode = false;
   std::set<std::string> libraryProvenance; // Only facts used by resolved decisions.
+  bool libraryMacroValuesUsed = false; // A9 standard-macro facts, including absence.
   std::string libraryDisabledReason; // Coverage rejection; other facts still apply.
   std::map<std::string, std::size_t, std::less<>> counts;
 };

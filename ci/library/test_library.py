@@ -11,13 +11,14 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from audit import ROOT, VERSION, classify, identifiers, parse, header_test_key, apply_trust
+from audit import ROOT, VERSION, classify, identifiers, parse, header_test_key, apply_trust, root_macros
 from fixtures import l1c_reference as reference
 from capture import capture, dump, header_names, write
 from merge import (merge, check, expected_builds, baseline_text, digest,
                    get_snapshot, get_agreement, get_classification)
 from probe import compare, source, build_inputs, trusted_build_inputs
 from member_inventory import inventory
+from baseline import decode
 
 
 def audit(text, extra=None, predefines=()):
@@ -193,6 +194,7 @@ def report(build='a', value='1L', status='ok', independent=True):
     if not independent:
         text = '#if _GLIBCXX_HAS_GTHREADS\n' + text + '\n#endif'
     return dict(schema=2, generator=VERSION, build=build, gcc='14.2.0', major='14',
+                std='c++23', triple='x86_64-linux-gnu', flags=[],
                 member_inventory=inventory({'0/charconv': text}),
                 headers={'charconv': dict(status=status, macros={} if value is None else {'__cpp_lib_test': value})},
                 audit=classify({'0/charconv': text}, (), roots=['charconv']))
@@ -264,7 +266,7 @@ def test_compact_digest_determinism_and_evidence_only_check(tmp_path, capsys):
     original = merge([a, b], ['a', 'b'])
     text = baseline_text(original)
     assert text == baseline_text(merge([b, a], ['b', 'a']))
-    assert json.loads(text) == original
+    assert decode(json.loads(text)) == original
     assert 'audit' not in original['builds']['a']
     assert original['builds']['a']['evidence_sha256'] == digest(a)
     assert len(original['builds']['a']['evidence_sha256']) == 64
@@ -341,27 +343,26 @@ def test_capture_exact_flags_single_header_missing_error_empty_and_native(tmp_pa
     assert 'string_hidden' not in data['member_inventory']['names']
     assert data['member_inventory']['token_pasting_headers'] == ['1/libc.h']
     assert data['headers']['charconv']['macros'] == {'__cpp_lib_test': '1L'}
-    assert data['headers']['empty'] == dict(status='ok', macros={})
+    assert data['headers']['empty'] == dict(status='ok', macros={}, function_like=[])
     assert data['headers']['missing']['status'] == 'missing'
     assert data['headers']['broken']['status'] == 'error'
     assert data['headers']['ext/pb_ds/tree.hpp'] == dict(status='error', macros={})
     assert data['audit']['unparsed'] == {
         '0/ext/pb_ds/tree.hpp': '0/ext/pb_ds/tree.hpp: unterminated conditional'}
-    assert data['audit']['roots']['charconv']['macros']['__cpp_lib_test']['independent']
+    assert root_macros(data['audit'], data['audit']['roots']['charconv'])['__cpp_lib_test']['independent']
     for args, source_text, _ in calls:
         if '-dM' in args:
             assert args == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']
             assert source_text.count('#include') == 1
     assert [source_ for args, source_, _ in calls if '-dM' in args] == [
-        f'#include <{h}>\n' for h in ['bits/c++config.h', 'charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp']]
+        f'#include <{h}>\n' for h in ['charconv', 'empty', 'broken', 'ext/pb_ds/tree.hpp', 'bits/c++config.h']]
     assert '__AVX2__' in data['volatile']
     assert '__AVX2__' not in data['audit']['compiler_inputs']
     assert data['audit']['compiler_inputs']['__cplusplus'] == '#define __cplusplus 202302L'
     assert 'ext/pb_ds/tree.hpp' in header_names([search])
     assert dump('#define __glibcxx_a 201703L\n#define __cpp_lib_a __glibcxx_a') == {'__cpp_lib_a': '201703L'}
     assert dump('#define __cpp_lib_a 2L\n#define __GNUC__ 15') == {'__cpp_lib_a': '2L'}
-    with pytest.raises(ValueError):
-        dump('#define __cpp_lib_a(x) x')
+    assert dump('#define __cpp_lib_a(x) x') == {}
 
 
 @pytest.mark.parametrize('handoff', [False, True], ids=['profile', 'extensions'])
@@ -389,7 +390,7 @@ def test_capture_symlinked_headers_preserves_include_dependencies(tmp_path, hand
         path = capture('/fixture/g++', 'c++23', [], 'fixture', tmp_path / 'symlink.json',
                        search=[search], **kwargs)
     data = json.loads(path.read_text())['audit']
-    entry = data['roots']['charconv']['macros']['__cpp_lib_test']
+    entry = root_macros(data, data['roots']['charconv'])['__cpp_lib_test']
     assert not entry['independent']
     assert entry['unrecognised'] == ['_GLIBCXX_HAS_GTHREADS', '_GLIBCXX_HOSTED']
     assert {definition['file'] for definition in data['macros']['__cpp_lib_test']} == {
@@ -615,6 +616,7 @@ def trust_files():
 def trust_report(files, build='a', hosted='1', present=True):
     audit_ = classify(files, (), roots=['charconv', 'syncstream', 'thread'])
     data = dict(schema=2, generator=VERSION, build=build, major='15', gcc='15.2.0',
+                std='c++23', triple='x86_64-linux-gnu', flags=[],
                 member_inventory=inventory(files),
                 headers={'charconv': dict(status='ok', macros={'__cpp_lib_to_chars': '201611L'})},
                 audit=audit_, observations=dict(hosted=hosted,
@@ -787,6 +789,7 @@ def test_fourteen_build_compact_size_and_classifications_survive_sharing():
                                        for n, v in values.items()}
             roots[header] = dict(macros=source_records[key], taint=[])
         reports.append(dict(schema=2, generator=VERSION, build=f'build-{i}', major=major,
+                            std='c++23', triple='x86_64-linux-gnu', flags=[],
                             member_inventory=inventory({}),
                             headers={h: dict(status='ok', macros=values) for h in headers},
                             audit=dict(generator=VERSION, macros=dict.fromkeys(names, []), roots=roots)))
@@ -844,3 +847,223 @@ def test_internal_own_ifndef_never_erases_inbound_feature_conditions():
     entry = classify(files, (), roots=['root'])['roots']['root']['macros']['__cpp_lib_test']
     assert not entry['independent']
     assert '__cpp_lib_test' in entry['unrecognised']
+
+
+def test_standard_macro_dump_records_only_objects_and_integer_chains():
+    from audit import INTEGER
+    text = ('#define __FLT_EVAL_METHOD__ 2\n#define __alias __FLT_EVAL_METHOD__\n'
+            '#define FLT_EVAL_METHOD __alias\n#define FLT_RADIX 2\n'
+            '#define NULL __null\n#define HUGE_VAL (__builtin_huge_val ())\n'
+            '#define errno (*__errno_location ())\n#define assert(x) ((void)0)\n'
+            '#define __cpp_lib_test 1L\n#define UNLISTED 42\n#define NDEBUG\n')
+    values = dump(text)
+    assert values == {'FLT_EVAL_METHOD': '2', 'FLT_RADIX': '2', 'NULL': '__null',
+                      'HUGE_VAL': '(__builtin_huge_val ())', 'errno': '(*__errno_location ())',
+                      '__cpp_lib_test': '1L', 'NDEBUG': ''}
+    for value in ['0', '2', '201703L', '0xffUL', '077', '0b10', "1'000", '42UZ']:
+        assert INTEGER.fullmatch(value)
+    for value in ['(0)', '-1', '(-1)', '1 + 1', '0.0', '08', '2LLLL', '1uu', '0x', '']:
+        assert not INTEGER.fullmatch(value)
+    with pytest.raises(ValueError, match='duplicate'):
+        dump('#define FLT_RADIX 2\n#define FLT_RADIX 3')
+    assert dump('#define FLT_RADIX other\n#define other FLT_RADIX')['FLT_RADIX'] == 'other'
+
+
+def test_standard_macro_compiler_alias_and_float_header_reset():
+    files = {'0/cfloat': '#include <float.h>', '1/float.h':
+             '#undef FLT_EVAL_METHOD\n#if __cplusplus > 201703L\n'
+             '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD_TS_18661_3__\n#else\n'
+             '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#endif\n'
+             '#define assert(x) x\n#define NULL __null'}
+    predefines = {'__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ 0',
+                  '__FLT_EVAL_METHOD_TS_18661_3__': '#define __FLT_EVAL_METHOD_TS_18661_3__ 2'}
+    result = classify(files, predefines, roots=['cfloat'])
+    root = result['roots']['cfloat']
+    entry = root['macros']['FLT_EVAL_METHOD']
+    assert root['reset_prefixes'] == ['FLT_EVAL_METHOD']
+    assert entry['values'] == ['0', '2']
+    assert all(p['independent'] for p in entry['pairs'].values())
+    assert not entry['independent']  # No absence/identity claim for an undef.
+    assert 'assert' not in root['macros']
+    assert not root['macros']['NULL']['pairs']
+    assert result['macros']['FLT_EVAL_METHOD'][0]['value'] is None
+    # An absent/blocked/locally overwritten compiler alias cannot license a value.
+    for blocked, extra in [({'__FLT_EVAL_METHOD__', '__FLT_EVAL_METHOD_TS_18661_3__'}, ''),
+                           (set(), '\n#define __FLT_EVAL_METHOD__ 0\n'
+                                   '#define __FLT_EVAL_METHOD_TS_18661_3__ 2')]:
+        changed = dict(files)
+        changed['1/float.h'] += extra
+        entry = classify(changed, predefines, blocked, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+        assert not entry['pairs']
+    for extra in ['\n#undef FLT_EVAL_METHOD', '\n#define FLT_EVAL_METHOD (0)']:
+        changed = dict(files)
+        changed['1/float.h'] += extra
+        entry = classify(changed, predefines, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+        assert all(not p['independent'] for p in entry['pairs'].values())
+    changed = dict(files, **{'0/other': '#undef FLT_EVAL_METHOD'})
+    changed['0/cfloat'] += '\n#include <other>'
+    entry = classify(changed, predefines, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert all(not p['independent'] for p in entry['pairs'].values())
+
+
+def test_float_reset_with_forwarding_fallback_keeps_all_real_inputs():
+    files = {'0/cfloat': '#include <float.h>\n#if __cplusplus >= 201103L\n'
+                         '#ifndef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#endif\n#endif',
+             '1/float.h': '#undef FLT_EVAL_METHOD\n#ifdef __STDC_WANT_IEC_60559_TYPES_EXT__\n'
+                          '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD_TS_18661_3__\n#else\n'
+                          '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#endif'}
+    predefines = {'__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ 0',
+                  '__FLT_EVAL_METHOD_TS_18661_3__': '#define __FLT_EVAL_METHOD_TS_18661_3__ 0'}
+    result = classify(files, predefines, roots=['cfloat'])
+    entry = result['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert entry['pairs']['0']['independent']
+    assert entry['pairs']['0']['dependencies'] == ['__FLT_EVAL_METHOD_TS_18661_3__',
+        '__FLT_EVAL_METHOD__', '__STDC_WANT_IEC_60559_TYPES_EXT__', '__cplusplus']
+    assert not entry['independent']  # A reset still cannot license absence.
+    assert result['macros']['FLT_EVAL_METHOD'][1]['value'] is None
+    # Missing/native/overridden aliases and locally written opt-ins still block.
+    for blocked, extra in [({'__FLT_EVAL_METHOD__'}, ''),
+                           ({'__STDC_WANT_IEC_60559_TYPES_EXT__'}, ''),
+                           (set(), '\n#define __STDC_WANT_IEC_60559_TYPES_EXT__ 1')]:
+        changed = dict(files)
+        changed['1/float.h'] += extra
+        e = classify(changed, predefines, blocked, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+        assert not e['pairs']['0']['independent']
+    # A later undef in any file remains a possible final write.
+    changed = dict(files, **{'2/other': '#undef FLT_EVAL_METHOD'})
+    changed['0/cfloat'] += '\n#include <other>'
+    e = classify(changed, predefines, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert not e['pairs']['0']['independent']
+
+
+@pytest.mark.parametrize('definitions', [
+    '#if SWITCH\n#define FLT_EVAL_METHOD 0\n#endif',
+    '#if A\n#define FLT_EVAL_METHOD 0\n#elif B\n#define FLT_EVAL_METHOD 0\n#endif',
+    '#define FLT_EVAL_METHOD 0\n#undef FLT_EVAL_METHOD',
+    '#define FLT_EVAL_METHOD (0)',
+])
+def test_uncovered_reset_or_unsupported_definition_stays_blocked(definitions):
+    entry = classify({'0/cfloat': '#include <earlier>\n#undef FLT_EVAL_METHOD\n' + definitions,
+                      '0/earlier': '#define FLT_EVAL_METHOD 0'},
+                     {'SWITCH', 'A', 'B'}, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+    assert not any(p['independent'] for p in entry['pairs'].values())
+
+
+def test_standard_macro_capture_uses_exact_profile_argv_and_merge_disagrees(tmp_path):
+    search = tmp_path / 'include'
+    search.mkdir()
+    header = search / 'cfloat'
+    header.write_text('#undef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n'
+                      '#define NULL __null\n#define assert(x) x')
+    reports, calls = [], []
+    def compiler(executable, argv, source='', check=True):
+        calls.append((str(executable), argv, source))
+        value = '2' if '-mfpmath=387' in argv else '0'
+        if argv[0] == '-dumpfullversion':
+            out = '13.3.0'
+        elif argv[0] == '-dumpmachine':
+            out = 'x86_64-linux-gnu'
+        elif argv[0] == '--version':
+            out = 'fixture GCC 13.3'
+        elif '-dD' in argv:
+            # GCC can reset and redefine its own predefines under <built-in>.
+            out = ('# 0 "<built-in>"\n#undef __FLT_EVAL_METHOD__\n'
+                   '#define __FLT_EVAL_METHOD__ ' + value + '\n')
+        else:
+            out = '#define __FLT_EVAL_METHOD__ ' + value + '\n'
+            if source == '#include <cfloat>\n':
+                out += '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#define NULL __null\n#define assert(x) x\n'
+        return subprocess.CompletedProcess(argv, 0, out, '')
+    for key, flags in [('default', ['-O2', '-Wall']), ('x87', ['-O2', '-m32', '-mfpmath=387'])]:
+        with patch('capture.command', side_effect=compiler), patch('capture.header_names', return_value=['cfloat']):
+            path = capture('/fixture/g++-13', 'c++23', flags, key, tmp_path / (key + '.json'),
+                           search=[search], reached={'0/cfloat': header})
+        report_ = json.loads(path.read_text())
+        reports.append(report_)
+        value = '2' if key == 'x87' else '0'
+        assert report_['headers']['cfloat']['macros'] == {'FLT_EVAL_METHOD': value}
+        assert report_['headers']['cfloat']['noninteger'] == ['NULL']
+        assert report_['headers']['cfloat']['function_like'] == ['assert']
+        assert root_macros(report_['audit'], report_['audit']['roots']['cfloat'])['FLT_EVAL_METHOD']['pairs'][value]['independent']
+        own_calls = [(args, src) for _, args, src in calls if src == '#include <cfloat>\n']
+        assert own_calls[-1][0] == ['-x', 'c++', '-std=c++23', *flags, '-dM', '-E', '-']
+    merged = merge(reports, ['default', 'x87'])
+    assert get_agreement(merged, '13', 'cfloat')['unknown'] == {'FLT_EVAL_METHOD': 'cross-build-disagreement'}
+    assert get_snapshot(merged, 'default', 'cfloat')['macros']['FLT_EVAL_METHOD'] == '0'
+    assert get_snapshot(merged, 'x87', 'cfloat')['macros']['FLT_EVAL_METHOD'] == '2'
+
+
+def test_standard_macro_dlib_values_and_unsupported_are_diagnostic_only():
+    data = report()
+    data['headers']['charconv']['macros'].update(FLT_EVAL_METHOD='2', NULL='__null')
+    generated = source(data, 'charconv')
+    assert '__distill_lib_s(FLT_EVAL_METHOD)' in generated
+    assert '__distill_lib_s(NULL)' not in generated
+    assert 'DLIB|charconv|NULL|<unsupported>' in generated
+    output = ('DLIB|charconv|<header>|ok\nDLIB|charconv|__cpp_lib_test|1L\n'
+              'DLIB|charconv|FLT_EVAL_METHOD|2\nDLIB|charconv|NULL|<unsupported>\n')
+    before = copy.deepcopy(data)
+    assert compare(data, 'charconv', output) == []
+    assert 'FLT_EVAL_METHOD' in compare(data, 'charconv', output.replace('METHOD|2', 'METHOD|0'))[0]
+    assert data == before
+
+
+def test_float_header_default_entry_absences_are_narrow_and_revocable():
+    text = ('#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || '
+            '(defined(__cplusplus) && __cplusplus >= 201103L)\n'
+            '#undef FLT_EVAL_METHOD\n#ifdef __STDC_WANT_IEC_60559_TYPES_EXT__\n'
+            '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD_TS_18661_3__\n#else\n'
+            '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__\n#endif\n#endif')
+    predefines = {'__cplusplus': '#define __cplusplus 202302L',
+                  '__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ 0',
+                  '__FLT_EVAL_METHOD_TS_18661_3__': '#define __FLT_EVAL_METHOD_TS_18661_3__ 0'}
+    data = classify({'0/cfloat': text}, predefines, roots=['cfloat'])
+    assert data['source_entry_absences'] == ['__STDC_VERSION__', '__STDC_WANT_IEC_60559_TYPES_EXT__']
+    assert data['roots']['cfloat']['macros']['FLT_EVAL_METHOD']['pairs']['0']['independent']
+    for name in ['__STDC_VERSION__', '__STDC_WANT_IEC_60559_TYPES_EXT__']:
+        for blocked, extra in [({name}, ''), (set(), '\n#define ' + name + ' 1')]:
+            entry = classify({'0/cfloat': text + extra}, predefines, blocked,
+                             roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']
+            assert not entry['pairs']['0']['independent']
+    other = text.replace('__STDC_WANT_IEC_60559_TYPES_EXT__', '_GLIBCXX_HAS_GTHREADS')
+    assert not classify({'0/cfloat': other}, predefines, roots=['cfloat'])['roots']['cfloat']['macros']['FLT_EVAL_METHOD']['pairs']['0']['independent']
+
+
+def test_function_like_presence_is_not_an_absence_claim():
+    from capture import function_macros
+    text = '#define FLT_EVAL_METHOD(x) x\n#define assert(x) x\n#define private_fn(x) x'
+    assert dump(text) == {}
+    assert function_macros(text) == ['FLT_EVAL_METHOD', 'assert']
+    a, b = report('a'), report('b', value=None)
+    b['headers']['charconv']['function_like'] = ['__cpp_lib_test']
+    merged = merge([a, b], ['a', 'b'])
+    assert get_agreement(merged, '14', 'charconv')['unknown'] == {'__cpp_lib_test': 'function-like-definition'}
+    generated = source(b, 'charconv')
+    assert '__distill_lib_s(__cpp_lib_test)' not in generated
+    assert 'DLIB|charconv|__cpp_lib_test|<function-like>' in generated
+
+
+def test_integer_candidate_audit_keeps_omitted_presence_and_fails_closed():
+    files = {'0/cfloat': '#define FLT_EVAL_METHOD __unsupported\n'
+                         '#define NULL __null\n#define assert(x) x\n'
+                         '#if NULL\n#define __cpp_lib_test 1L\n#endif'}
+    data = classify(files, (), roots=['cfloat'], integer_names=set())
+    root = data['roots']['cfloat']
+    assert root['noninteger'] == ['FLT_EVAL_METHOD', 'NULL', 'assert']
+    assert set(data['macros']) == {'__cpp_lib_test'}
+    assert not root['macros']['__cpp_lib_test']['independent']
+    assert 'NULL' in root['macros']['__cpp_lib_test']['unrecognised']
+
+
+def test_cross_build_integer_candidate_cannot_borrow_omitted_absence():
+    from test_embed import standard_report
+    a = standard_report()
+    b = standard_report('other', reproduced=False)
+    b['headers']['cfloat']['macros'] = {}
+    b['audit'] = classify({'0/cfloat': '#if SWITCH\n#define FLT_EVAL_METHOD __helper\n#endif'},
+                          (), roots=['cfloat'], integer_names=set())
+    data = merge([a, b], [a['build'], b['build']])
+    assert 'FLT_EVAL_METHOD' not in get_agreement(data, '14', 'cfloat')['absent']
+    assert not get_classification(data, '14', 'cfloat')['macros']['FLT_EVAL_METHOD']['independent']
+    # Synthetic blockers used for merging must not pollute the full evidence.
+    assert b['audit']['roots']['cfloat']['macros'] == {}

@@ -95,8 +95,10 @@ Result<CompileCommand> flatCommand(const CompileCommand& local, const Profile* p
 }
 Result<bool> satisfies(const Configuration& c, const InlineResult& raw, const CompileCommand& command,
                        const ResolveResult& resolution, ConditionEvaluator& evaluator,
-                       std::optional<std::chrono::steady_clock::time_point> deadline, ResolveResult* observed) {
+                       std::optional<std::chrono::steady_clock::time_point> deadline, ResolveResult* observed,
+                       bool assumeLibraryMacroValues) {
   ResolveOptions options; options.profile = &c.facts; options.deadline = deadline;
+  options.assumeLibraryMacroValues = assumeLibraryMacroValues;
   options.libraryAgreementOnly = true;
   auto rerun = resolveConditions(raw, command, evaluator, options);
   if (!rerun.ok()) return rerun.error();

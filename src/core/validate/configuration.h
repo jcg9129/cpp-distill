@@ -20,7 +20,7 @@ Result<CompileCommand> flatCommand(const CompileCommand&, const Profile*,
 Result<bool> satisfies(const Configuration&, const InlineResult&, const CompileCommand&,
                        const ResolveResult&, ConditionEvaluator&,
                        std::optional<std::chrono::steady_clock::time_point> deadline = {},
-                       ResolveResult* observed = nullptr);
+                       ResolveResult* observed = nullptr, bool assumeLibraryMacroValues = true);
 bool targetEquivalent(const Configuration&, const Profile*, bool hostDependentCommand);
 bool hostDependent(const CompileCommand&);
 } // namespace distill

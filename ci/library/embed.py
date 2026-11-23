@@ -6,13 +6,17 @@ from pathlib import Path
 import re
 import sys
 
-from merge import canonical, get_agreement, get_classification, get_snapshot
-from audit import INTEGER
+from merge import canonical, digest, get_agreement, get_classification, get_snapshot, standard_scope
+from audit import INTEGER, library_macro
 from member_inventory import validate_names
+from baseline import decode, record_text
 
 ROOT = Path(__file__).resolve().parents[2]
+# Reviewed baseline: 912,724 bytes. The corrected 14-build reset/argv
+# projection emits 989,083 bytes; share scoped selector spellings below.
+MAX_SOURCE_BYTES = 1_000_000
 VALUE = INTEGER
-NAME = re.compile(r'__cpp_lib_[A-Za-z_0-9]+\Z')
+NAME = re.compile(r'[A-Za-z_][A-Za-z_0-9]*\Z')
 
 
 def require(ok, message):
@@ -34,7 +38,8 @@ def standard_header(header, standard):
 
 
 def transitions(data, standard):
-    require(data['schema'] == 2 and data['generator'] in (3, 4), 'unsupported library schema/generator')
+    data = decode(data)
+    require(data['schema'] == 2 and data['generator'] in (3, 4, 5), 'unsupported library schema/generator')
     member_names(data)
     # Validate every content-address record, including unused audit records. Macro
     # set IDs describe their expanded maps, rather than the base/delta encoding.
@@ -64,8 +69,8 @@ def transitions(data, standard):
         require(isinstance(data[table], dict) and bool(data[table]), 'empty or malformed ' + table)
         for key, record in data[table].items():
             content = macro_set(key, set()) if table == 'macro_sets' else record
-            digest = hashlib.sha256(canonical(content).encode()).hexdigest()[:16]
-            require(key == digest, 'bad content address in ' + table)
+            address = hashlib.sha256(canonical(content).encode()).hexdigest()[:16]
+            require(key == address, 'bad content address in ' + table)
     for record in data['macro_classifications'].values():
         classification(record)
     for root in data['classifications'].values():
@@ -93,8 +98,21 @@ def transitions(data, standard):
                 isinstance(record['macros'], dict), 'malformed snapshot')
         require(record['status'] == 'ok' or not record['macros'], 'failed snapshot with facts')
         require(all(isinstance(v, str) for v in record['macros'].values()), 'non-string snapshot value')
+        functions = record.get('function_like', [])
+        noninteger = record.get('noninteger', [])
+        require(strings(functions) and len(functions) == len(set(functions)) and
+                all(NAME.fullmatch(n) and library_macro(n) for n in functions) and
+                not set(functions).intersection(record['macros']) and
+                (record['status'] == 'ok' or not functions), 'invalid function-like presence metadata')
+        require(strings(noninteger) and len(noninteger) == len(set(noninteger)) and
+                all(NAME.fullmatch(n) and library_macro(n) for n in noninteger) and
+                not set(noninteger).intersection(record['macros']) and
+                not set(noninteger).intersection(functions) and
+                (record['status'] == 'ok' or not noninteger), 'invalid noninteger presence metadata')
         names.update(record['macros'])
-    require(names and all(NAME.fullmatch(n) for n in names), 'invalid feature name')
+    require(names and all(NAME.fullmatch(n) and library_macro(n) for n in names), 'invalid library macro name')
+    require(data['generator'] >= 5 or all(n.startswith('__cpp_lib_') for n in names),
+            'standard macro facts require generator 5')
     names = sorted(names)
     rows, builds = {}, []
     require(data['versions'].keys() == data['agreement'].keys(), 'incomplete major agreement')
@@ -110,6 +128,31 @@ def transitions(data, standard):
             a = get_agreement(data, major, header)
             if standard_header(header, standard):
                 rows['gcc-' + major, header] = tuple(a['defined'].get(n, 0 if n in a['absent'] else 1) for n in names)
+    scopes = data.get('standard_scopes', {})
+    require(not scopes or data['generator'] >= 5, 'standard scopes require generator 5')
+    for selector, scope in scopes.items():
+        keys = scope['builds']
+        require(bool(keys) and keys == sorted(set(keys)), 'invalid standard scope builds')
+        inputs = standard_scope(data['builds'][keys[0]])
+        require(selector == 'gcc-' + inputs[0] + '@' + digest(inputs)[:16] and
+                keys == sorted(k for k, b in data['builds'].items() if standard_scope(b) == inputs),
+                'standard scope does not match target/dialect/argv')
+        roots = data['root_classifications'][scope['roots']]
+        agreements = data['root_agreements'][scope['agreement']]
+        require(roots.keys() == agreements.keys(), 'incomplete standard scope agreement')
+        for header in roots:
+            get_classification(data, selector, header)
+            a = get_agreement(data, selector, header)
+            require(all(not n.startswith('__cpp_lib_') for n in
+                        (*a['defined'], *a['absent'], *a['unknown'])), 'feature in standard scope')
+            base = rows.get(('gcc-' + inputs[0], header))
+            if base is not None:
+                row = tuple(old if n.startswith('__cpp_lib_') else
+                            a['defined'].get(n, 0 if n in a['absent'] else 1)
+                            for n, old in zip(names, base))
+                # C++ lookup falls back to the major row for identical headers.
+                if row != base:
+                    rows[selector, header] = row
     for key, build in sorted(data['builds'].items()):
         require(build['schema'] == 2 and build['generator'] == data['generator'] and build['build'] == key and
                 isinstance(build['reproduced'], bool), 'invalid build metadata')
@@ -133,7 +176,8 @@ def transitions(data, standard):
                 # Own build-dependent values are allowed, but native inputs still
                 # vary by host. Major dependencies conservatively overapproximate
                 # the own build's native dependencies, including absence claims.
-                if snapshot['status'] != 'ok' or volatile.intersection(entry['dependencies']) or (
+                if snapshot['status'] != 'ok' or name in snapshot.get('function_like', []) or volatile.intersection(entry['dependencies']) or (
+                        name in snapshot.get('noninteger', []) or
                         isinstance(value, str) and not VALUE.fullmatch(value)):
                     value = 1
                 values.append(value)
@@ -143,8 +187,16 @@ def transitions(data, standard):
             require(isinstance(build['provenance']['build'], str), 'invalid build provenance')
         # Agreement coverage needs every scanned build, including approximate
         # profiles and extension scans. Only reproduced profiles have snapshots.
+        scope = build.get('standard_scope', '')
+        require(not scope or scope in scopes and key in scopes[scope]['builds'], 'invalid build standard scope')
+        require(all(key not in s['builds'] or scope == k for k, s in scopes.items()), 'missing build standard scope')
+        inputs = build.get('standard_inputs', {})
+        require(isinstance(inputs, dict) and (not inputs or data['generator'] >= 5) and
+                all(NAME.fullmatch(n) and (v is None or isinstance(v, str) and
+                    re.match(r'#define ' + re.escape(n) + r'(?:\s|\(|$)', v)) for n, v in inputs.items()),
+                'invalid standard compiler inputs')
         builds.append((key if own else '', major, build['gcc'], build['std'], build['triple'],
-                       build['provenance']['build'] if own else '', build['flags']))
+                       build['provenance']['build'] if own else '', scope, inputs, build['flags']))
     require(rows, 'no library transitions')
     return names, rows, builds
 
@@ -192,8 +244,23 @@ def member_chunks(names):
 
 
 def generate(raw, standard):
-    data = json.loads(raw, object_pairs_hook=unique_object)
+    stored = json.loads(raw, object_pairs_hook=unique_object)
+    data = decode(stored)
+    # Preserve the original generated source, including provenance, across a
+    # storage-only migration. Legacy inputs still identify their exact bytes.
+    source_raw = record_text(data).encode() if stored["schema"] == 3 else raw
     names, rows, builds = transitions(data, standard)
+    if data['generator'] >= 5:
+        # The standard-name registry also contains functions, floating values,
+        # expressions and constants never supplied by any scanned header.
+        # They cannot provide integer facts. Leave those names to the resolver's
+        # ordinary reserved/standard-name invalidation, instead of multiplying
+        # every embedded header row by the entire registry.
+        integers = {n for s in data['snapshots'].values() for n, v in s['macros'].items()
+                    if VALUE.fullmatch(v)}
+        selected = [i for i, n in enumerate(names) if n.startswith('__cpp_lib_') or n in integers]
+        names = [names[i] for i in selected]
+        rows = {key: tuple(row[i] for i in selected) for key, row in rows.items()}
     values = sorted({v for row in rows.values() for v in row if isinstance(v, str)})
     require(len(values) + 2 <= 65536, 'too many values')
     indexes = {v: i + 2 for i, v in enumerate(values)}
@@ -204,25 +271,38 @@ def generate(raw, standard):
     quote = lambda s: json.dumps(s, ensure_ascii=False)
     out = ['// SPDX-License-Identifier: GPL-3.0-or-later', '// Generated by ci/library/embed.py; do not edit.',
            '#include "core/library/library.h"', '#include <string>', '#include <vector>',
+           *(['#include <array>'] if not names else []),
            'namespace distill { namespace {',
-           'constexpr std::string_view names[] = {' + ','.join(map(quote, names)) + '};',
+           ('constexpr std::string_view names[] = {' + ','.join(map(quote, names)) + '};'
+            if names else 'constexpr std::array<std::string_view,0> names{};'),
            'constexpr std::string_view values[] = {"","",' + ','.join(map(quote, values)) + '};']
     for i, row in enumerate(records):
         out.append('constexpr std::uint16_t s' + str(i) + '[] = {' +
-                   ','.join(str(indexes[v] if isinstance(v, str) else v) for v in row) + '};')
+                   ','.join(str(indexes[v] if isinstance(v, str) else v) for v in row) + '};'
+                   if row else 'constexpr std::array<std::uint16_t,0> s' + str(i) + '{};')
+    # Scoped selectors repeat across headers. Share their spelling while keeping
+    # legacy baseline output byte-identical and preserving the 1 MB source cap.
+    selectors = {s: 'q' + str(i) for i, s in enumerate(sorted({s for s, _ in rows if '@' in s}))}
+    for selector, symbol in selectors.items():
+        out.append('constexpr std::string_view ' + symbol + '=' + quote(selector) + ';')
     out.append('constexpr LibraryHeader headers[] = {')
     for (selector, header), row in sorted(rows.items()):
-        out.append('{' + quote(selector) + ',' + quote(header) + ',s' + str(record_ids[row]) + '},')
+        out.append('{' + selectors.get(selector, quote(selector)) + ',' + quote(header) + ',s' + str(record_ids[row]) + '},')
     out.append('};')
     for i, b in enumerate(builds):
         # GCC accepts zero-sized arrays only as an extension; an empty span is portable.
         if b[-1]:
             out.append('constexpr std::string_view f' + str(i) + '[] = {' + ','.join(map(quote, b[-1])) + '};')
+        if b[-2]:
+            out.append('constexpr LibraryInput r' + str(i) + '[] = {' +
+                       ','.join('{' + quote(n) + ',' + quote(v or '') + '}' for n, v in sorted(b[-2].items())) + '};')
     if builds:
         out.append('constexpr LibraryBuild builds[] = {')
     for i, b in enumerate(builds):
-        out.append('{' + ','.join(map(quote, b[:-1])) + ',' + ('f' + str(i) if b[-1] else '{}') + '},')
-    provenance = (f'ci/library generator={data["generator"]} schema=2 embed=1 sha256:' + hashlib.sha256(raw).hexdigest())
+        out.append('{' + ','.join(map(quote, b[:-3])) + ',' + ('f' + str(i) if b[-1] else '{}') +
+                   (',' + quote(b[-3]) if b[-3] or b[-2] else '') +
+                   (',r' + str(i) if b[-2] else '') + '},')
+    provenance = (f'ci/library generator={data["generator"]} schema=2 embed=1 sha256:' + hashlib.sha256(source_raw).hexdigest())
     if builds:
         out.append('};')
     inventory = member_names(data)
@@ -249,13 +329,16 @@ for (auto chunk : memberChunks) while (!chunk.empty()) {
 }
 };''']
     inventory_provenance = (f'worker headers + {len(data["builds"])} scanned builds (generator {data["generator"]})'
-                            if data['generator'] == 4 else 'worker headers; scanned-build inventory unavailable')
+                            if data['generator'] >= 4 else 'worker headers; scanned-build inventory unavailable')
     out += ['} const LibraryData& embeddedLibraryData() {',
             *(['static const MemberInventory inventory;'] if inventory else []),
             'static const LibraryData data{names,values,headers,' + ('builds' if builds else '{}') + ',' + quote(provenance) +
-            ',' + ('inventory.names' if inventory else '{}') + ',' + quote(inventory_provenance) + '};',
+            ',' + ('inventory.names' if inventory else '{}') + ',' + quote(inventory_provenance) +
+            ',' + ('true' if data['generator'] >= 5 else 'false') + '};',
             'return data;', '}', '}']
-    return '\n'.join(out) + '\n'
+    output = '\n'.join(out) + '\n'
+    require(len(output.encode('utf-8')) <= MAX_SOURCE_BYTES, 'embedded library source exceeds size budget')
+    return output
 
 
 def main():

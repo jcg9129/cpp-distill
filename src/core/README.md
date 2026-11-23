@@ -315,6 +315,39 @@ use, including preserving a binding through proven absence, carries A9 and the
 baseline generator/schema, digest and selected major/profile into the report.
 Local satisfaction reruns use the major's audited agreement.
 
+L1c generator 5 extends the approved feature-macro mechanism to object-like names
+in `data/names/standard-macros.txt`, including `FLT_EVAL_METHOD` after `<cfloat>`.
+Only identifier chains ending in one integer literal supply values; function-like
+macros are excluded, and expressions, parenthesized/unary-minus literals and other
+replacements remain unusable. The capture's own compiler and argv supply every
+value. Positive compiler aliases are audited; `float.h`'s initial undef prefix
+has a narrow positive-pair proof, preserving all raw writes in the evidence. The two explicit source-entry absence
+inputs (`__STDC_VERSION__`, `__STDC_WANT_IEC_60559_TYPES_EXT__`) are revoked by
+command/startup or reachable-header writes. Function-like presence metadata blocks
+false absence claims, including for reproduced snapshots.
+Reserved and standard-list user macro operations lose default library
+configuration and immediately revoke cached header facts, including writes to an
+underlying alias after the include. Include conflicts and GCC option pragmas keep
+these facts unknown;
+reported uses carry `FactOrigin::library`, A9 and capture provenance.
+A9 was widened on 2026-11-23 to cover the approved standard object-like integer
+macros and their captured compiler dependencies across include sequences.
+`--no-assume=library-macro-values` disables standard-macro header values and
+absence facts: these names become unknown after a standard include, while
+`__cpp_lib_*` facts retain A9. `CliOptions` → `DistillOptions` → `ResolveOptions`
+carries this switch, including local satisfaction reruns. The report records
+that the assumption is disabled; its A9 resolution line distinguishes
+standard-macro use from feature-test-only use.
+
+Generator-5 major agreement requires a compatible target triple and identical
+ordered non-harmless flags in one
+scanned build, in both directions: neither a default profile nor a profile with
+`-m32`/`-mfpmath=387` can borrow a different argv's value. Old generator-3/4 data
+still embeds using the legacy feature-only coverage rule and provides no new
+standard macro values. The generated-source cap is now 3,200,000 bytes; embedding
+the unchanged committed baseline measures 588,498 bytes. CI `library.yml` must
+regenerate the widened data for review/import before real profiles gain coverage.
+
 `EvaluationRequirements` records dialect and target integer layout separately
 from external macro facts. Missing fields in options inherit from a profile;
 without a profile only command dialect is available. Command-overridden
@@ -827,9 +860,10 @@ library-hook refusals are unchanged. See the
 [review](../../docs/reviews/2026-11-20-instantiation-effects.md) for the proof,
 A11 exclusions, compiler probes and measurements.
 `--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
-accepts repetition and comma lists; `instantiation-effects` and
-`library-spelled-members` are the switchable names. Other names (including
-assumption IDs) are usage errors (exit 1) listing both names. `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
+accepts repetition and comma lists; `instantiation-effects`,
+`library-spelled-members` and `library-macro-values` are the switchable names.
+Other names (including assumption IDs) are usage errors (exit 1) listing all
+three names. For A11 and A12, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
 the worker. Pruning protocol **7** serializes both flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.

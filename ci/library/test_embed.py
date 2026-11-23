@@ -9,8 +9,10 @@ import sys
 import pytest
 
 from audit import classify, VERSION
-from embed import generate, transitions, ROOT
+from embed import generate, transitions, ROOT, MAX_SOURCE_BYTES
 from merge import merge, baseline_text, get_agreement, get_snapshot
+from member_inventory import inventory
+from baseline import decode, record_text
 
 NAME = '__cpp_lib_test'
 
@@ -91,14 +93,18 @@ def test_embed_approximate_build_never_emits_own_snapshot():
 
 def test_embed_baseline_round_trip_is_small_and_deterministic():
     raw = (ROOT / 'data/library/library.json').read_bytes()
-    data = json.loads(raw)
+    data = decode(json.loads(raw))
     standard = {s for s in (ROOT / 'data/names/standard-headers.txt').read_text().splitlines()
                 if s and not s.startswith('#')}
     names, rows, builds = transitions(data, standard)
     for (key, header), row in rows.items():
         if key.startswith('gcc-'):
-            agreement = get_agreement(data, key[4:], header)
-            assert row == tuple(agreement['defined'].get(n, 0 if n in agreement['absent'] else 1) for n in names)
+            major = key[4:].split('@')[0]
+            feature_agreement = get_agreement(data, major, header)
+            standard_agreement = get_agreement(data, key if '@' in key else major, header)
+            for name, value in zip(names, row):
+                agreement = feature_agreement if name.startswith('__cpp_lib_') else standard_agreement
+                assert value == agreement['defined'].get(name, 0 if name in agreement['absent'] else 1)
         else:
             snapshot = get_snapshot(data, key, header)
             assert all(value == 1 or value == snapshot['macros'].get(n, 0) for n, value in zip(names, row))
@@ -109,15 +115,16 @@ def test_embed_baseline_round_trip_is_small_and_deterministic():
         assert embedded[-1] == build['flags']
     text = generate(raw, standard)
     assert text == generate(raw, standard)
-    # ~305 KB of transitions plus ~283 KB of front-coded member-name source.
-    # 620 KB allows 5% growth while rejecting the former 852 KB literal array.
-    assert len(text.encode('utf-8')) < 620_000
-    assert hashlib.sha256(raw).hexdigest() in text
+    # Widened header facts can add standard names and distinct header rows.
+    # CI's next reviewed capture determines the actual new baseline size.
+    assert len(text.encode('utf-8')) <= MAX_SOURCE_BYTES
+    source_hash = hashlib.sha256(record_text(data).encode() if json.loads(raw)['schema'] == 3 else raw).hexdigest()
+    assert source_hash in text
     # Dictionary order is irrelevant to table layout; exact bytes still identify
     # distinct baselines in provenance.
     reordered = json.dumps(data, sort_keys=True).encode()
     other = generate(reordered, standard)
-    assert text.replace(hashlib.sha256(raw).hexdigest(), '') == other.replace(hashlib.sha256(reordered).hexdigest(), '')
+    assert text.replace(source_hash, '') == other.replace(hashlib.sha256(reordered).hexdigest(), '')
 
 
 @pytest.mark.parametrize('baseline', [False, True])
@@ -125,7 +132,7 @@ def test_embed_compiled_member_inventory_round_trip(tmp_path, baseline):
     compiler = shutil.which('g++') or shutil.which('clang++')
     if compiler is None:
         pytest.skip('C++20 compiler unavailable')
-    data = json.loads((ROOT / 'data/library/library.json').read_bytes()) if baseline else combined(report())
+    data = decode(json.loads((ROOT / 'data/library/library.json').read_bytes())) if baseline else combined(report())
     if not baseline:
         # Short suffixes, long prefixes, UTF-8 prefixes, and multiple chunks.
         data['member_names'] = sorted({'a', 'aa', 'café', 'caféine', '𐐀', '𐐀x',
@@ -192,3 +199,229 @@ def test_embed_includes_dynamic_standard_pbds_prefix():
     _, rows, _ = transitions(combined(r), {'charconv'})
     assert rows['gcc-14', 'ext/pb_ds/assoc_container.hpp'] == ('1L',)
     assert rows['profile-test', 'ext/pb_ds/assoc_container.hpp'] == ('1L',)
+
+
+def standard_report(build='profile-test', value='0', *, reproduced=True):
+    data = report(build, reproduced=reproduced)
+    text = '#undef FLT_EVAL_METHOD\n#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__'
+    data['headers'] = {'cfloat': dict(status='ok', macros={'FLT_EVAL_METHOD': value})}
+    data['audit'] = classify({'0/cfloat': text},
+                             {'__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ ' + value}, roots=['cfloat'])
+    data['member_inventory'] = inventory({'0/cfloat': text})
+    return data
+
+
+def test_embed_standard_integer_values_agreement_and_reproduced_argv():
+    a = standard_report()
+    b = standard_report('other', '2', reproduced=False)
+    b['flags'] = ['-m32', '-mfpmath=387']
+    data = combined(a, b)
+    names, rows, builds = transitions(data, {'cfloat'})
+    assert names == ['FLT_EVAL_METHOD']
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == ('0',)
+    assert next(b for b in builds if not b[0])[-1] == ['-m32', '-mfpmath=387']
+    text = generate(baseline_text(data).encode(), {'cfloat'})
+    assert 'generator=5 schema=2' in text
+    assert text.endswith(',true};\nreturn data;\n}\n}\n')
+    data = combined(standard_report(), standard_report('other', reproduced=False))
+    _, rows, _ = transitions(data, {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == ('0',)
+
+
+def test_standard_scopes_separate_native_target_and_ordered_argv():
+    ordinary = standard_report('profile-ordinary', reproduced=False)
+    ordinary['flags'] = ['-O2', '-Wall']
+    native = standard_report('profile-native', reproduced=False)
+    native['flags'] = ['-O2', '-march=native']
+    native['volatile'] = ['__FLT_EVAL_METHOD__']
+    native['audit'] = classify({'0/cfloat': '#define FLT_EVAL_METHOD __FLT_EVAL_METHOD__'},
+                               {}, {'__FLT_EVAL_METHOD__'}, roots=['cfloat'])
+    x87 = standard_report('other', '2', reproduced=False)
+    x87['flags'] = ['-O2', '-m32', '-mfpmath=387']
+    data = combined(ordinary, native)
+    names, rows, builds = transitions(data, {'cfloat'})
+    assert names == ['FLT_EVAL_METHOD']
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    for key, expected in [('profile-ordinary', '0'), ('profile-native', 1)]:
+        scope = data['builds'][key]['standard_scope']
+        assert rows.get((scope, 'cfloat'), rows['gcc-14', 'cfloat']) == (expected,)
+        assert get_agreement(data, scope, 'cfloat')['defined'].get('FLT_EVAL_METHOD', 1) == expected
+    assert {b[-3] for b in builds} == set(data['standard_scopes'])
+    assert data['builds']['profile-ordinary']['standard_inputs'] == {
+        '__FLT_EVAL_METHOD__': '#define __FLT_EVAL_METHOD__ 0'}
+    assert 'standard_scope' not in json.dumps(data['snapshots'])
+    # A different observed value still revokes all approximate agreements,
+    # including those with a matching argv and an independent own proof.
+    disagrees = combined(ordinary, native, x87)
+    for scope in disagrees['standard_scopes']:
+        assert get_agreement(disagrees, scope, 'cfloat')['unknown']['FLT_EVAL_METHOD'] == 'cross-build-disagreement'
+    # Metadata edits cannot borrow a scope captured with different flags.
+    data['builds']['profile-ordinary']['flags'].append('-m32')
+    with pytest.raises(ValueError, match='standard scope does not match'):
+        transitions(data, {'cfloat'})
+
+
+def test_standard_scope_keeps_major_feature_agreement():
+    a, b = report(reproduced=False), report('other', '2L', reproduced=False)
+    b['flags'] = ['-O2']
+    a['headers']['charconv']['macros']['FLT_EVAL_METHOD'] = '0'
+    a['audit'] = classify({'0/charconv': '#define __cpp_lib_test 1L\n#define FLT_EVAL_METHOD 0'},
+                          (), roots=['charconv'])
+    b['headers']['charconv']['macros']['FLT_EVAL_METHOD'] = '0'
+    b['audit'] = classify({'0/charconv': '#define __cpp_lib_test 1L\n#if CONFIG\n'
+                          '#define FLT_EVAL_METHOD 0\n#endif'}, (), roots=['charconv'])
+    data = combined(a, b)
+    names, rows, _ = transitions(data, {'charconv'})
+    scope = data['builds']['profile-test']['standard_scope']
+    assert rows[scope, 'charconv'][names.index('FLT_EVAL_METHOD')] == '0'
+    assert rows[scope, 'charconv'][names.index(NAME)] == 1
+
+
+def test_native_alternative_write_blocks_an_independent_positive_pair():
+    a = standard_report(reproduced=False)
+    a['flags'] = ['-march=native']
+    a['volatile'] = ['__AVX2__']
+    a['audit'] = classify({'0/cfloat': '#define FLT_EVAL_METHOD 0\n#if __AVX2__\n'
+                          '#define FLT_EVAL_METHOD 1\n#endif'}, {}, {'__AVX2__'}, roots=['cfloat'])
+    assert a['audit']['roots']['cfloat']['macros']['FLT_EVAL_METHOD']['pairs']['0']['independent']
+    data = combined(a)
+    assert get_agreement(data, '14', 'cfloat')['unknown']['FLT_EVAL_METHOD'] == 'config-dependent'
+    _, rows, _ = transitions(data, {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == (1,)
+
+
+def test_compiler_input_missing_from_another_capture_remains_a_snapshot_requirement():
+    a = standard_report('first', reproduced=False)
+    b = standard_report('second', reproduced=False)
+    b['audit'] = classify({'0/cfloat': '#define FLT_EVAL_METHOD 0'}, {}, roots=['cfloat'])
+    data = combined(a, b)
+    assert data['builds']['first']['standard_inputs']['__FLT_EVAL_METHOD__'] == '#define __FLT_EVAL_METHOD__ 0'
+    assert data['builds']['second']['standard_inputs']['__FLT_EVAL_METHOD__'] is None
+
+
+def test_standard_scope_absence_uses_major_name_universe_but_keeps_omitted_blocker():
+    a = standard_report('first', reproduced=False)
+    a['flags'] = ['-O2']
+    b = standard_report('second', reproduced=False)
+    b['headers']['cfloat']['macros'] = {}
+    b['audit'] = classify({'0/cfloat': ''}, {}, roots=['cfloat'], integer_names=set())
+    for build in (a, b):
+        build['headers']['cmath'] = dict(status='ok', macros={})
+        build['audit']['roots']['cmath'] = dict(macros={}, taint=[])
+    data = combined(a, b)
+    scope = data['builds']['second']['standard_scope']
+    assert get_agreement(data, scope, 'cmath')['absent'] == ['FLT_EVAL_METHOD']
+    b['audit'] = classify({'0/cfloat': '', '0/cmath': '#if __AVX2__\n#define FLT_EVAL_METHOD(x) x\n#endif'},
+                          {}, {'__AVX2__'}, roots=['cfloat', 'cmath'], integer_names=set())
+    b['volatile'] = ['__AVX2__']
+    data = combined(a, b)
+    assert get_agreement(data, scope, 'cmath')['unknown']['FLT_EVAL_METHOD'] == 'config-dependent'
+    other_scope = data['builds']['first']['standard_scope']
+    assert get_agreement(data, other_scope, 'cmath')['unknown']['FLT_EVAL_METHOD'] == 'config-dependent'
+
+
+@pytest.mark.parametrize('value', ['(0)', '-1', '0 + 0', '__unknown', '0.0', '08', '1uu'])
+def test_embed_standard_noninteger_replacements_stay_unknown(value):
+    data = combined(standard_report(value=value))
+    _, rows, _ = transitions(data, {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_embed_older_format_cannot_license_standard_values():
+    data = combined(standard_report())
+    data['generator'] = 4
+    with pytest.raises(ValueError, match='standard macro facts require generator 5'):
+        transitions(data, {'cfloat'})
+
+
+def test_embed_native_input_cannot_hide_behind_standard_value_aliases():
+    for alias in ['', '#define __eval_alias __AVX2__\n']:
+        data = standard_report(value='1')
+        text = alias + '#define FLT_EVAL_METHOD ' + ('__eval_alias' if alias else '__AVX2__')
+        data['audit'] = classify({'0/cfloat': text}, {}, {'__AVX2__'}, roots=['cfloat'])
+        data['volatile'] = ['__AVX2__']
+        _, rows, _ = transitions(combined(data), {'cfloat'})
+        assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_embed_enforces_source_size_budget(monkeypatch):
+    monkeypatch.setattr('embed.MAX_SOURCE_BYTES', 1)
+    with pytest.raises(ValueError, match='source exceeds size budget'):
+        generate(baseline_text(combined(report())).encode(), {'charconv'})
+
+
+def test_embed_reproduced_function_like_name_is_unknown_not_absent():
+    a = standard_report()
+    a['headers']['cfloat'].update(macros={}, function_like=['FLT_EVAL_METHOD'])
+    _, rows, _ = transitions(combined(a), {'cfloat'})
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+@pytest.mark.parametrize('conditional_include', [False, True])
+def test_embed_native_conditions_in_unsupported_value_helpers_stay_unknown(conditional_include):
+    data = standard_report(value='2')
+    if conditional_include:
+        files = {'0/cfloat': '#if __AVX2__\n#include <helper>\n#endif\n'
+                             '#define FLT_EVAL_METHOD __eval_alias',
+                 '0/helper': '#define __eval_alias 2'}
+    else:
+        files = {'0/cfloat': '#if __AVX2__\n#define __eval_alias 2\n#else\n'
+                             '#define __eval_alias 0\n#endif\n#define FLT_EVAL_METHOD __eval_alias'}
+    data['audit'] = classify(files, {}, {'__AVX2__'}, roots=['cfloat'])
+    data['volatile'] = ['__AVX2__']
+    _, rows, _ = transitions(combined(data), {'cfloat'})
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_noninteger_presence_is_unknown_for_both_own_and_major():
+    a = standard_report()
+    a['headers']['cfloat'].update(macros={}, noninteger=['FLT_EVAL_METHOD'])
+    names, rows, _ = transitions(combined(a), {'cfloat'})
+    assert names == ['FLT_EVAL_METHOD']
+    assert rows['gcc-14', 'cfloat'] == (1,)
+    assert rows['profile-test', 'cfloat'] == (1,)
+
+
+def test_embed_excludes_standard_names_never_observed_as_integers():
+    data = combined(standard_report(value='__unsupported'))
+    text = generate(baseline_text(data).encode(), {'cfloat'})
+    assert '"FLT_EVAL_METHOD"' not in text
+    assert 'std::array<std::string_view,0> names{}' in text
+    assert 'std::array<std::uint16_t,0> s0{}' in text
+    assert text.index('#include <array>') < text.index('namespace distill')
+
+
+@pytest.mark.parametrize('presence', [['FLT_EVAL_METHOD', 'FLT_EVAL_METHOD'], ['bad name'], ['assert']])
+def test_embed_rejects_bad_noninteger_presence(presence):
+    data = combined(standard_report())
+    snapshot = next(iter(data['snapshots'].values()))
+    snapshot['noninteger'] = presence
+    if presence == ['assert']:
+        snapshot['function_like'] = ['assert']
+    # Re-address the mutated snapshot so validation reaches its contents.
+    from merge import digest
+    new = digest(snapshot)[:16]
+    data['snapshots'] = {new: snapshot}
+    mapping = next(iter(data['build_headers'].values()))
+    mapping['cfloat'] = new
+    new_headers = digest(mapping)[:16]
+    data['build_headers'] = {new_headers: mapping}
+    data['builds']['profile-test']['headers'] = new_headers
+    with pytest.raises(ValueError, match='invalid noninteger presence metadata'):
+        transitions(data, {'cfloat'})
+
+
+@pytest.mark.parametrize('other_major', ['14', '16'])
+def test_omitted_native_conditional_write_cannot_prove_own_absence(other_major):
+    a = standard_report()
+    a['major'], a['gcc'] = other_major, other_major + '.2.0'
+    b = standard_report('profile-other')
+    b['volatile'] = ['__AVX2__']
+    b['headers']['cfloat']['macros'] = {}
+    b['audit'] = classify({'0/cfloat': '#if __AVX2__\n#define FLT_EVAL_METHOD(x) x\n#endif'},
+                          (), {'__AVX2__'}, roots=['cfloat'], integer_names=set())
+    _, rows, _ = transitions(combined(a, b), {'cfloat'})
+    assert rows['profile-other', 'cfloat'] == (1,)

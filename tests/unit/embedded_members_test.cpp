@@ -32,7 +32,7 @@ int main(int argc, char** argv) try {
   CHECK(model.libraryMemberNames.empty());
   CHECK(result.memberDisabledReasons.empty());
   CHECK(result.families[1].kept); CHECK(!result.families[2].kept);
-  CHECK(take(renderPruningReport(model, result)).find("worker headers + 1 scanned builds (generator 4)") != std::string::npos);
+  CHECK(take(renderPruningReport(model, result)).find("worker headers + 1 scanned builds (generator 5)") != std::string::npos);
   if (argc == 2) {
     test::TempDirectory temp; temp.write("main.cpp", "int main(){}\n");
     const std::string gcc = std::getenv("DISTILL_TEST_GXX") ? std::getenv("DISTILL_TEST_GXX") : "g++";

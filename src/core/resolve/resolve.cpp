@@ -56,6 +56,7 @@ struct Engine {
   std::map<std::size_t, SourceLocation> markerAt; // Generated markers by first line.
   PresumedFile presumed; // Of the output, for short markers.
   std::string librarySelector;
+  std::string featureLibrarySelector;
   std::size_t verbatim = 0; // Depth of enclosing demoted blocks.
   Engine(const InlineResult& r, const CompileCommand& c, ConditionEvaluator& e, const ResolveOptions& o)
       : raw(r), cmd(c), evaluator(e), options(o), requirements(o.requirements) {}
@@ -81,6 +82,9 @@ struct Engine {
     if (options.profile && options.libraryData)
       librarySelector = options.libraryData->selector(*options.profile, options.libraryAgreementOnly,
                                                        &result.libraryDisabledReason);
+    featureLibrarySelector = librarySelector;
+    if (options.profile && options.libraryData && options.libraryAgreementOnly && librarySelector.empty())
+      featureLibrarySelector = options.libraryData->featureAgreementSelector(*options.profile);
     if (options.profile) {
       auto inherited = profileRequirements(*options.profile);
       if (!requirements.dialect) requirements.dialect = inherited.dialect;
@@ -290,8 +294,17 @@ struct Engine {
   void transition(std::size_t i, States& state) {
     const auto& l = scan.lines[i]; if (!l.directive) return;
     const auto& d = *l.directive; const auto& t = d.tokens;
-    if ((d.name == "define" || d.name == "undef") && !t.empty() && isReserved(t[0].text))
+    if ((d.name == "define" || d.name == "undef") && !t.empty() &&
+        (isReserved(t[0].text) || isStandardMacroName(t[0].text))) {
       state.defaultLibrary = false;
+      // Captured values flatten aliases: a later write to an underlying
+      // reserved name can change an already included macro's expansion.
+      // Revoke cached header facts immediately, before applying this write.
+      for (auto& [name, fact] : state) {
+        (void)name;
+        if (origin(fact, FactOrigin::library)) fact = {MacroState::unknown, {}, {FactOrigin::source}};
+      }
+    }
     if (d.name == "pragma" && !t.empty() && (t[0].text == "push_macro" || t[0].text == "pop_macro"))
       state.defaultLibrary = false; // prepare() retains the existing global refusal.
     if (d.name == "define" && !t.empty()) {
@@ -324,12 +337,16 @@ struct Engine {
         return h.location == includeLocation && h.spelling == header;
       });
       const LibraryHeader* library = nullptr;
-      if (standard && state.defaultLibrary && !librarySelector.empty() && hit != raw.systemIncludes.end() &&
-          hit->found && hit->compilerSystem && options.libraryData)
-        library = options.libraryData->find(librarySelector, header);
+      const LibraryHeader* features = nullptr;
+      if (standard && state.defaultLibrary && hit != raw.systemIncludes.end() &&
+          hit->found && hit->compilerSystem && options.libraryData) {
+        if (options.assumeLibraryMacroValues) library = options.libraryData->find(librarySelector, header);
+        features = options.libraryData->find(featureLibrarySelector, header);
+      }
       for (auto& [name, f] : state) {
-        if (name.starts_with("__cpp_lib_")) {
-          const auto value = library ? options.libraryData->state(*library, name) : 1;
+        if (name.starts_with("__cpp_lib_") || isStandardMacroName(name)) {
+          const auto* facts = name.starts_with("__cpp_lib_") ? features : library;
+          const auto value = facts ? options.libraryData->state(*facts, name) : 1;
           if (value == 0) {
             // Keeping a known binding across this include also relies on the
             // header's absence evidence, and must carry A9 into the report.
@@ -368,7 +385,9 @@ struct Engine {
     } else if (d.name == "pragma" && t.size() >= 2 && t[0].text == "GCC" &&
         (t[1].text == "target" || t[1].text == "optimize" || t[1].text == "push_options" || t[1].text == "pop_options")) {
       state.defaultLibrary = false;
-      for (const auto& name : featureNames) state[name] = {MacroState::unknown, {}, {FactOrigin::pragma}};
+      for (auto& [name, fact] : state)
+        if (featureNames.contains(name) || name.starts_with("__cpp_lib_") || isStandardMacroName(name))
+          fact = {MacroState::unknown, {}, {FactOrigin::pragma}};
     }
   }
   States join(const std::vector<States>& paths) {
@@ -503,7 +522,8 @@ struct Engine {
       // cmd is the extra user command; the profile's own ordered operations
       // are already represented by its snapshots and must not be subtracted.
       for (const auto& op : cmd.localMacros())
-        if (isReserved(op.value.substr(0, op.value.find_first_of("(=")))) state.defaultLibrary = false;
+        if (const auto name = op.value.substr(0, op.value.find_first_of("(="));
+            isReserved(name) || isStandardMacroName(name)) state.defaultLibrary = false;
       for (const auto& arg : cmd.args)
         if (arg.option.starts_with("-include") || arg.option.starts_with("-imacros")) state.defaultLibrary = false;
       if (options.profile) for (const auto& flag : options.profile->flags)
@@ -515,8 +535,11 @@ struct Engine {
       const auto key = d.decision == Decision::trueValue ? "true" : d.decision == Decision::falseValue ? "false" : d.decision == Decision::dead ? "dead" : "unknown: " + d.reason;
       ++result.counts[key];
       if (d.decision == Decision::trueValue || d.decision == Decision::falseValue)
-        for (const auto& u : d.external) if (origin(u.fact, FactOrigin::library))
-          result.libraryProvenance.insert(std::string(options.libraryData->provenance) + " selector=" + librarySelector);
+        for (const auto& u : d.external) if (origin(u.fact, FactOrigin::library)) {
+          result.libraryProvenance.insert(std::string(options.libraryData->provenance) + " selector=" +
+              (u.name.starts_with("__cpp_lib_") ? featureLibrarySelector : librarySelector));
+          if (!u.name.starts_with("__cpp_lib_")) result.libraryMacroValuesUsed = true;
+        }
       if (d.decision == Decision::unknown) result.unknownInUserCode = true;
     }
     return std::move(result);

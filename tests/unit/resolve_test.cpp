@@ -44,6 +44,7 @@ Profile profile() {
 }
 Profile featureProfile(bool reproduced = false) {
   auto p = profile(); p.reproduced = reproduced; p.snapshot = "synthetic-empty-source.txt";
+  p.triple = "x86_64-linux-gnu";
   p.snapshotFacts["__cpp_constexpr"] = {MacroState::known, Macro{false, {}, false, "201907L"}, {FactOrigin::compilerBuiltin}};
   // Exercise both explicit negative facts and names absent from the snapshot.
   p.snapshotFacts["__cpp_lib_ranges"] = {MacroState::undefined, {}, {FactOrigin::compilerBuiltin}};
@@ -499,13 +500,15 @@ TEST(resolve_library_shipped_acceptance_and_provenance) {
   for (const auto* judge : {"cses", "codeforces"}) {
     auto p = lookupProfile(judge).value(); ResolveOptions o; o.profile = &p;
     const auto& data = embeddedLibraryData();
-    CHECK_EQ(data.selector(p), judge == std::string_view("cses") ? "gcc-13" : "gcc-14");
+    const std::string major = judge == std::string_view("cses") ? "gcc-13" : "gcc-14";
+    const auto selector = data.selector(p);
+    CHECK(selector == major || selector.starts_with(major + "@"));
     auto r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
     CHECK_EQ(r.decisions[0].decision, Decision::trueValue); CHECK(!r.unknownInUserCode);
     CHECK_EQ(r.decisions[0].external[0].fact.provenance, (std::vector{FactOrigin::library}));
     CHECK_EQ(r.decisions[0].external[0].fact.definition->replacement, "201611L");
     CHECK_EQ(r.libraryProvenance.size(), 1u);
-    CHECK(r.libraryProvenance.begin()->find("generator=4 schema=2 embed=1 sha256:") != std::string::npos);
+    CHECK(r.libraryProvenance.begin()->find(data.provenance) != std::string::npos);
     CHECK(r.libraryProvenance.begin()->find("selector=" + data.selector(p)) != std::string::npos);
     // Check actual replacement arithmetic with a model the local oracle can
     // represent (the Codeforces profile itself has MinGW's LLP64 layout).
@@ -531,6 +534,106 @@ TEST(resolve_library_shipped_acceptance_and_provenance) {
     auto r = libraryResolve("#include <thread>\n#ifdef __cpp_lib_jthread\nx\n#endif\n", *e, o);
     CHECK_EQ(r.decisions[0].decision, Decision::unknown); CHECK(r.libraryProvenance.empty());
   }
+}
+TEST(resolve_library_macro_values_switch_keeps_feature_facts) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  auto p = lookupProfile("cses").value();
+  ResolveOptions o; o.profile = &p; o.requirements.integers = localIntegerModel(temp.path);
+  const std::string source = "#include <cfloat>\n#if FLT_EVAL_METHOD != 0\nnonzero\n#else\nzero\n#endif\n"
+                             "#include <charconv>\n" + toCharsCheck;
+  auto r = libraryResolve(source, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::falseValue);
+  CHECK_EQ(r.decisions.at(3).decision, Decision::trueValue);
+  CHECK(r.libraryMacroValuesUsed);
+  PipelineResult report; report.assumptions.insert("A9"); report.resolution = r;
+  const auto command = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
+  CHECK(renderReport(report, command, &p).find("resolution assumption: A9 (standard-macro facts used)\n") != std::string::npos);
+  o.assumeLibraryMacroValues = false;
+  r = libraryResolve(source, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+  CHECK_EQ(r.decisions.at(3).decision, Decision::trueValue);
+  CHECK(r.text.find("#if FLT_EVAL_METHOD != 0") != std::string::npos);
+  CHECK(!r.libraryMacroValuesUsed); CHECK(!r.libraryProvenance.empty());
+  report.resolution = r;
+  CHECK(renderReport(report, command, &p).find("resolution assumption: A9 (feature-test macro facts only)\n") != std::string::npos);
+  // Local satisfaction reruns must obey the switch as well.
+  Configuration c; c.facts = p;
+  ResolveResult observed;
+  CHECK(satisfies(c, libraryRaw(source), command, r, *e, {}, &observed, false).value());
+  CHECK_EQ(observed.decisions.at(0).decision, Decision::unknown);
+  CHECK_EQ(observed.decisions.at(3).decision, Decision::trueValue);
+  CHECK(!observed.libraryMacroValuesUsed);
+}
+TEST(resolve_library_all_bundled_profiles) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  const auto catalog = listProfiles().value();
+  const auto& data = embeddedLibraryData();
+  CHECK(!catalog.profiles.empty());
+  const auto integers = localIntegerModel(temp.path);
+  for (const auto& p : catalog.profiles) {
+    std::string reason;
+    const auto selector = data.selector(p, false, &reason);
+    CHECK(!selector.empty()); CHECK(reason.empty());
+    if (p.reproduced) CHECK_EQ(selector, "profile-" + p.name);
+    else CHECK(selector == "gcc-" + std::to_string(p.compiler.major) ||
+               selector.starts_with("gcc-" + std::to_string(p.compiler.major) + "@"));
+    ResolveOptions o; o.profile = &p; o.requirements.integers = integers;
+    auto r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
+    CHECK(!r.unknownInUserCode); CHECK(!r.libraryProvenance.empty());
+    const auto* header = data.find(selector, "cfloat");
+    CHECK(header); if (!header) continue;
+    const auto value = data.state(*header, "FLT_EVAL_METHOD");
+    // Captured integers still require audited independence/native coverage.
+    // This also works before CI imports the corrected audit/argv agreements.
+    const auto literal = value >= 2 ? std::string(data.values[value]) : "0";
+    r = libraryResolve("#include <cfloat>\n#if defined(FLT_EVAL_METHOD) && FLT_EVAL_METHOD == " + literal + "\nx\n#endif\n", *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, value >= 2 ? Decision::trueValue : value == 0 ? Decision::falseValue : Decision::unknown);
+    std::cout << p.name << ": selector=" << selector << ", __cpp_lib_to_chars=known, FLT_EVAL_METHOD="
+              << (value >= 2 ? literal : value == 0 ? "absent" : "unknown (baseline audit)") << '\n';
+  }
+}
+TEST(resolve_library_satisfaction_feature_agreement_keeps_standard_target_checks) {
+  test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
+  constexpr std::string_view names[]{"FLT_EVAL_METHOD", "__cpp_lib_to_chars"}, values[]{"", "", "0", "201611L"};
+  constexpr std::uint16_t cfloat[]{2, 0}, charconv[]{0, 3};
+  constexpr std::string_view flags[]{"-O2", "-DONLINE_JUDGE"};
+  const LibraryHeader headers[]{{"gcc-14", "cfloat", cfloat}, {"gcc-14", "charconv", charconv}};
+  const LibraryBuild builds[]{{"", "14", "14.2.0", "c++23", "x86_64-w64-mingw32", "", flags}};
+  LibraryData data{names, values, headers, builds, "synthetic"}; data.exactFlags = true;
+  auto p = lookupProfile("codeforces").value();
+  ResolveOptions o; o.profile = &p; o.libraryData = &data;
+  const auto source = "#include <charconv>\n" + toCharsCheck + "#include <cfloat>\n#ifdef FLT_EVAL_METHOD\nx\n#endif\n";
+  auto r = libraryResolve(source, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
+  CHECK_EQ(r.decisions.at(3).decision, Decision::trueValue);
+  for (const auto* triple : {"x86_64-linux-gnu", "x86_64-apple-darwin"}) {
+    p.triple = triple;
+    CHECK(data.selector(p, true).empty());
+    // Judge resolution itself keeps the exact target requirement.
+    r = libraryResolve(source, *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+    o.libraryAgreementOnly = true;
+    r = libraryResolve(source, *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
+    CHECK_EQ(r.decisions.at(3).decision, Decision::unknown);
+    CHECK(r.libraryProvenance.contains("synthetic selector=gcc-14"));
+    PipelineResult report; report.resolution = r; report.assumptions.insert("A9");
+    const auto command = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
+    const auto text = renderReport(report, command, &p);
+    CHECK(text.find("library facts: none") == std::string::npos);
+    CHECK(text.find("standard library macro facts: unavailable (") != std::string::npos);
+    p.flags.push_back("-ffreestanding");
+    r = libraryResolve(source, *e, o);
+    CHECK_EQ(r.decisions.at(0).decision, Decision::unknown);
+    p.flags.pop_back(); o.libraryAgreementOnly = false;
+  }
+  p = lookupProfile("codeforces").value(); p.flags = {"-DONLINE_JUDGE", "-O2"};
+  CHECK(data.selector(p, true).empty());
+  o.libraryAgreementOnly = true;
+  r = libraryResolve(source, *e, o);
+  CHECK_EQ(r.decisions.at(0).decision, Decision::trueValue);
+  CHECK_EQ(r.decisions.at(3).decision, Decision::unknown);
 }
 TEST(resolve_library_default_configuration_monotone_and_entry) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
@@ -577,10 +680,10 @@ TEST(resolve_library_default_configuration_monotone_and_entry) {
 TEST(resolve_library_agreement_requires_scanned_dialect_and_flags) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
   const auto& data = embeddedLibraryData();
-  auto p = featureProfile(); p.provenance.origin = "user";
-  p.dialect = {"c++23", false, 202302};
+  // Scoped agreements require the captured compiler inputs as well as flags.
+  auto p = lookupProfile("cses").value(); p.provenance.origin = "user";
   ResolveOptions o; o.profile = &p;
-  CHECK_EQ(data.selector(p), "gcc-15");
+  CHECK(data.selector(p).starts_with("gcc-13"));
   auto r = libraryResolve("#include <version>\n#ifdef __cpp_lib_ranges\nx\n#endif\n", *e, o);
   CHECK_EQ(r.decisions[0].decision, Decision::trueValue);
   p.dialect = {"c++17", false, 201703};
@@ -595,27 +698,32 @@ TEST(resolve_library_agreement_requires_scanned_dialect_and_flags) {
     r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
     CHECK_EQ(r.decisions[0].decision, Decision::unknown);
     CHECK(data.selector(p).empty()); CHECK(r.libraryProvenance.empty());
-    CHECK_EQ(r.libraryDisabledReason, "profile flags not covered by scanned builds: " + std::string(flag));
+    CHECK_EQ(r.libraryDisabledReason, (data.exactFlags ? "profile ordered flags not matched by a scanned build: " :
+                                                     "profile flags not covered by scanned builds: ") + std::string(flag));
     PipelineResult report; report.resolution = r;
     const auto command = parseCompileCommand({"g++", "main.cpp"}, temp.path).value();
     CHECK(renderReport(report, command, &p).find("library facts: none (" + r.libraryDisabledReason + ")\n") != std::string::npos);
   }
   // Match flags within the same dialect, never borrowing from another dialect.
   p.flags = {"-fmodules"}; CHECK(data.selector(p).empty());
-  p.dialect = {"gnu++23", true, 202302}; CHECK_EQ(data.selector(p), "gcc-15");
+  p.dialect = {"gnu++23", true, 202302};
+  CHECK(data.selector(p).empty());
   // Debug and diagnostic flags are harmless; optimization still needs coverage.
   p = lookupProfile("codeforces").value(); p.provenance.origin = "user";
+  const auto selector = data.selector(p); CHECK(!selector.empty());
   p.flags.push_back("-Wshadow");
-  CHECK_EQ(data.selector(p), "gcc-14");
+  CHECK_EQ(data.selector(p), selector);
   r = libraryResolve("#include <charconv>\n" + toCharsCheck, *e, o);
   CHECK_EQ(r.decisions[0].decision, Decision::trueValue); CHECK(!r.libraryProvenance.empty());
   for (const auto* flag : {"-g3", "-pipe", "-fconstexpr-depth=4096", "-fconstexpr-loop-limit=1048576",
                           "-fconstexpr-ops-limit=2097152", "-fdiagnostics-color=always"}) {
-    p.flags.push_back(flag); CHECK_EQ(data.selector(p), "gcc-14"); p.flags.pop_back();
+    p.flags.push_back(flag); CHECK_EQ(data.selector(p), selector); p.flags.pop_back();
   }
   // The reproduced path still requires its exact identity, even for warnings.
-  p = lookupProfile("atcoder").value(); p.flags.push_back("-Wshadow");
-  CHECK(data.selector(p).empty()); CHECK_EQ(data.selector(p, true), "gcc-15");
+  p = lookupProfile("atcoder").value();
+  const auto agreement = data.selector(p, true); CHECK(!agreement.empty());
+  p.flags.push_back("-Wshadow");
+  CHECK(data.selector(p).empty()); CHECK_EQ(data.selector(p, true), agreement);
 }
 TEST(resolve_library_agreement_rejects_flags_from_separate_builds) {
   constexpr std::string_view first[]{"-O2"}, second[]{"-fno-exceptions"};
@@ -663,7 +771,7 @@ TEST(resolve_library_agreement_accepts_flags_in_one_build) {
 }
 TEST(resolve_library_satisfaction_uses_configuration_coverage) {
   test::TempDirectory temp; auto e = testing::testEvaluator(temp.path); if (!e) throw test::Skip{"GCC unavailable"};
-  auto p = featureProfile(); p.dialect = {"c++23", false, 202302};
+  auto p = lookupProfile("cses").value();
   ResolveOptions o; o.profile = &p;
   const auto source = libraryRaw("#include <charconv>\n" + toCharsCheck);
   const auto command = parseCompileCommand({"g++", "main.cpp", "-std=c++23"}, temp.path).value();
@@ -677,8 +785,9 @@ TEST(resolve_library_satisfaction_uses_configuration_coverage) {
   CHECK_EQ(observed.decisions[0].decision, Decision::unknown);
   c.facts.dialect = p.dialect; c.facts.flags = {"-ffreestanding"};
   CHECK(!satisfies(c, source, command, resolution, *e, {}, &observed).value());
-  CHECK_EQ(observed.libraryDisabledReason, "profile flags not covered by scanned builds: -ffreestanding");
-  c.facts.flags = {"-Wshadow"};
+  // Generator 5 matches the entire ordered argv, including absent flags.
+  CHECK_EQ(observed.libraryDisabledReason, "profile ordered flags not matched by a scanned build: -ffreestanding");
+  c.facts.flags = p.flags; c.facts.flags.push_back("-Wshadow");
   CHECK(satisfies(c, source, command, resolution, *e).value());
 }
 TEST(resolve_library_joins_and_dead_paths) {

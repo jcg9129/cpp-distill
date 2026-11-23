@@ -1,3 +1,5 @@
 # YAML parsing for workflow wiring and L1c matrix planning; pytest for L1c self-tests.
 PyYAML==6.0.3
 pytest==8.4.2
+# Streaming library evidence: keep one per-header audit record in memory.
+ijson==3.4.0.post0

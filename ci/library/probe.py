@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 import re
 
+from audit import INTEGER
+
 
 def build_inputs(compiler, std, flags, search, audit, command):
     """Record actual build facts, including context-sensitive header queries.
@@ -82,7 +84,13 @@ def expected(report, header):
     names = sorted(set(report['audit']['macros']) |
                    set().union(*(set(h['macros']) for h in report['headers'].values())))
     snapshot = report['headers'][header]
-    return {name: snapshot['macros'].get(name, '<undefined>') for name in names}
+    # Nonliteral replacements remain evidence, but are not safe to expand in a
+    # diagnostic TU (they can contain quotes, contextual builtins or calls).
+    return {name: '<function-like>' if name in snapshot.get('function_like', []) else
+            '<unsupported>' if name in snapshot.get('noninteger', []) else
+            (value if INTEGER.fullmatch(value) else '<unsupported>')
+            if (value := snapshot['macros'].get(name)) is not None else '<undefined>'
+            for name in names}
 
 
 def source(report, header):
@@ -95,8 +103,10 @@ def source(report, header):
              '#define __distill_lib_s(x) __distill_lib_s1(x)',
              'extern "C" int puts(const char*);', 'int main() {',
              f'puts("DLIB|{header}|<header>|ok");']
-    for name in expected(report, header):
-        lines += [f'#ifdef {name}', f'puts("DLIB|{header}|{name}|" __distill_lib_s({name}));',
+    for name, value in expected(report, header).items():
+        present = (f'puts("DLIB|{header}|{name}|{value}");' if value in ('<unsupported>', '<function-like>') else
+                   f'puts("DLIB|{header}|{name}|" __distill_lib_s({name}));')
+        lines += [f'#ifdef {name}', present,
                   '#else', f'puts("DLIB|{header}|{name}|<undefined>");', '#endif']
     lines += ['}', '#else', 'extern "C" int puts(const char*);',
               f'int main() {{ puts("DLIB|{header}|<header>|missing"); }}', '#endif']

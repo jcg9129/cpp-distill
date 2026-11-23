@@ -439,10 +439,18 @@ TEST(pipeline_library_fact_reports_a9_and_survives_local_satisfaction) {
   CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "flat");
   CHECK(!r.resolution.unknownInUserCode);
   CHECK(r.assumptions.contains("A9"));
-  CHECK(r.report.find("library facts: ci/library generator=4 schema=2 embed=1 sha256:") != r.report.npos);
+  CHECK(r.report.find("library facts: " + std::string(embeddedLibraryData().provenance)) != r.report.npos);
   CHECK(r.report.find("selector=gcc-14") != r.report.npos);
   CHECK(r.report.find("__cpp_lib_to_chars: A9 library") != r.report.npos);
   CHECK_EQ(r.resolution.decisions[0].decision, Decision::trueValue);
+  CHECK(r.report.find("resolution assumption: A9 (feature-test macro facts only)\n") != r.report.npos);
+  f.options.assumeLibraryMacroValues = false;
+  r = f.run();
+  CHECK_EQ(r.exitCode, 0); CHECK_EQ(r.artifact, "flat");
+  CHECK_EQ(r.resolution.decisions[0].decision, Decision::trueValue);
+  CHECK(r.assumptions.contains("A9")); CHECK(!r.resolution.libraryMacroValuesUsed);
+  CHECK(r.report.find("resolution assumption: A9 (feature-test macro facts only)\n") != r.report.npos);
+  CHECK(r.report.find("resolution assumption disabled: A9 library-macro-values (--no-assume=library-macro-values); __cpp_lib_* facts retained\n") != r.report.npos);
 }
 TEST(pipeline_compact_checked_with_stringizing_and_keep) {
   Fixture f("#define TEXT(x) #x\n"

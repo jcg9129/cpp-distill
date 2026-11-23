@@ -2,26 +2,36 @@
 """Regenerate reviewed L1c data from the complete CI matrix; compare, never union old facts."""
 import argparse
 from difflib import unified_diff
-import hashlib
-import json
 from pathlib import Path
 import sys
+import tempfile
+from time import perf_counter
 
-from audit import ROOT, VERSION, apply_trust
-from capture import write
+from audit import ROOT, VERSION, apply_trust, root_macros
 from probe import trusted_build_inputs
 from member_inventory import validate_inventory
+from report_store import ReportStore, report_digest, write_evidence
+from baseline import canonical, digest, delta_sets, baseline_text, decode
 
 
-def canonical(data):
-    return json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+def harmless_flag(flag):
+    # Keep aligned with LibraryData::selector. In particular -Wp, can write
+    # macros, and optimization options change compiler predefines.
+    return (flag.startswith('-W') and not flag.startswith('-Wp,') or
+            flag.startswith(('-g', '-fdiagnostics-', '-fconstexpr-depth=',
+                             '-fconstexpr-cache-depth=', '-fconstexpr-loop-limit=',
+                             '-fconstexpr-ops-limit=')) or flag == '-pipe')
 
 
-def digest(data):
-    return hashlib.sha256(canonical(data).encode('utf-8')).hexdigest()
+def standard_scope(build):
+    triple = build['triple'].split('-')
+    if len(triple) >= 4 or len(triple) == 3 and triple[-1] == 'mingw32':
+        del triple[1]
+    return (build['major'], build['std'], '-'.join(triple),
+            tuple(f for f in build['flags'] if not harmless_flag(f)))
 
 
-def merge(reports, expected):
+def merge(reports, expected, progress=None):
     builds = {}
     for report in reports:
         if (report.get('schema') != 2 or report.get('generator') != VERSION or
@@ -58,20 +68,53 @@ def merge(reports, expected):
         tables[table][key] = entry
         return key
 
-    versions, agreement = {}, {}
-    for major in sorted({b['major'] for b in builds.values()}, key=int):
-        rows = [builds[k] for k in sorted(builds) if builds[k]['major'] == major]
+    # Embedding uses a global name universe, including names seen only in a
+    # different GCC major. Its own native-dependent absences need blockers too.
+    universe = {n for b in builds.values() for n in b['audit']['macros']}
+    universe.update(n for b in builds.values() for s in b['headers'].values() for n in s['macros'])
+    versions, agreement, standard_scopes, scope_dependencies = {}, {}, {}, {}
+    groups = {}
+    for build in builds.values():
+        groups.setdefault(standard_scope(build), []).append(build['build'])
+    matrices = {major: sorted(k for k, b in builds.items() if b['major'] == major)
+                for major in sorted({b['major'] for b in builds.values()}, key=int)}
+    build_scopes = {}
+    for scope, keys in sorted(groups.items()):
+        keys.sort()
+        if keys != matrices[scope[0]]:
+            selector = 'gcc-' + scope[0] + '@' + digest(scope)[:16]
+            matrices[selector] = keys
+            build_scopes.update(dict.fromkeys(keys, selector))
+    for matrix, keys in matrices.items():
+        rows = [builds[k] for k in keys]
+        scoped = matrix.startswith('gcc-')
+        name_rows = [builds[k] for k in matrices[rows[0]['major']]] if scoped else rows
         names = sorted(set().union(*(set(b['audit']['macros']) |
-                      set().union(*(set(h['macros']) for h in b['headers'].values())) for b in rows)))
+                      set().union(*(set(h['macros']) for h in b['headers'].values())) for b in name_rows)))
+        if scoped:
+            names = [n for n in names if not n.startswith('__cpp_lib_')]
         headers = sorted(set().union(*(set(b['headers']) for b in rows)))
-        versions[major] = dict(builds=[b['build'] for b in rows], roots={})
-        agreement[major] = {}
+        volatile = set().union(*(set(b.get('volatile', [])) for b in rows))
+        versions[matrix] = dict(builds=keys, roots={})
+        agreement[matrix] = {}
+        scope_dependencies[matrix] = set()
         for header in headers:
             roots = [b['audit']['roots'].get(header, dict(macros={}, taint=['<missing-root>'])) for b in rows]
+            for i, (build, root) in enumerate(zip(rows, roots)):
+                # A non-candidate in this capture can be an integer candidate
+                # in another build. Unanalysed writes never establish absence;
+                # all native inputs conservatively block own absence as well.
+                if root.get('noninteger') or 'root_records' in build['audit']:
+                    roots[i] = root = dict(root, macros=root_macros(build['audit'], root))
+                for name in universe.intersection(root.get('noninteger', [])):
+                    root['macros'][name] = dict(independent=False, pairs={},
+                        dependencies=build['volatile'], unrecognised=['<noninteger-candidate>'])
             taint = sorted(set().union(*(set(r['taint']) for r in roots)))
             default = dict(independent=not taint, values=[], dependencies=taint)
             classification = {}
             for name in sorted(set().union(*(set(r['macros']) for r in roots))):
+                if scoped and name.startswith('__cpp_lib_'):
+                    continue
                 entries = [r['macros'].get(name) for r in roots]
                 # Missing definitions in a complete root closure prove absence,
                 # but cannot license a positive value in that build.
@@ -85,34 +128,62 @@ def merge(reports, expected):
             common = set.intersection(*(set(e['dependencies']) for e in classification.values())) if classification else set()
             stored = {n: dict(e, dependencies=sorted(set(e['dependencies']) - common))
                       for n, e in classification.items()}
-            versions[major]['roots'][header] = intern('classifications', dict(
+            versions[matrix]['roots'][header] = intern('classifications', dict(
                 default=default, dependencies=sorted(common),
                 macros=intern('macro_sets', {n: intern('macro_classifications', e) for n, e in stored.items()})))
             defined, absent, unknown = {}, [], {}
-            snapshots = [b['headers'].get(header) for b in rows]
+            # Keep the major-wide observation requirement. A scoped proof can
+            # discharge unrelated native/configuration blockers, but must not
+            # turn a target/argv value disagreement into a new positive fact.
+            snapshots = [b['headers'].get(header) for b in name_rows]
+            unavailable = not all(s and s['status'] == 'ok' for s in snapshots)
+            functions = set().union(*(s.get('function_like', []) for s in snapshots if s))
+            nonintegers = set().union(*(s.get('noninteger', []) for s in snapshots if s))
             for name in names:
                 entry = classification.get(name, default)
                 values = {s['macros'].get(name) for s in snapshots if s and s['status'] == 'ok'}
                 reason = None
-                if not all(s and s['status'] == 'ok' for s in snapshots):
+                if unavailable:
                     reason = 'unavailable-header'
+                elif name in functions:
+                    reason = 'function-like-definition'
+                elif name in nonintegers:
+                    reason = 'noninteger-definition'
                 elif len(values) != 1:
                     reason = 'cross-build-disagreement'
                 elif values == {None}:
-                    if entry['independent']:
+                    major_absent = (not scoped or name in tables['agreements'][
+                        agreement[rows[0]['major']][header]]['absent'])
+                    # Scope refinement licenses positive header values only.
+                    # Keep absence/identity claims at their existing major-wide
+                    # strength, including every omitted-write blocker.
+                    if entry['independent'] and major_absent:
                         absent.append(name)
                     else:
                         reason = 'config-dependent'
                 elif next(iter(values)) in entry['values']:
-                    defined[name] = next(iter(values))
+                    # A different reachable write can still replace this pair
+                    # on another native host. Its real dependency must block
+                    # approximate agreement just as it blocks own snapshots.
+                    if not name.startswith('__cpp_lib_') and volatile.intersection(entry['dependencies']):
+                        reason = 'config-dependent'
+                    else:
+                        defined[name] = next(iter(values))
                 else:
                     reason = 'config-dependent' if not entry['independent'] else 'unaudited-value'
                 if reason:
                     unknown[name] = reason
-            agreement[major][header] = intern('agreements', dict(defined=defined, absent=absent, unknown=unknown))
+                elif not name.startswith('__cpp_lib_'):
+                    scope_dependencies[matrix].update(entry['dependencies'])
+            agreement[matrix][header] = intern('agreements', dict(defined=defined, absent=absent, unknown=unknown))
+        if progress:
+            progress('Classified ' + matrix)
     for major in versions:
         versions[major]['roots'] = intern('root_classifications', versions[major]['roots'])
         agreement[major] = intern('root_agreements', agreement[major])
+    for selector in build_scopes.values():
+        if selector in versions:
+            standard_scopes[selector] = dict(versions.pop(selector), agreement=agreement.pop(selector))
     compact_builds = {}
     for key, build in sorted(builds.items()):
         compact_builds[key] = {k: v for k, v in build.items() if k not in ('audit', 'headers', 'member_inventory')}
@@ -120,44 +191,52 @@ def merge(reports, expected):
         compact_builds[key]['member_inventory'] = dict(
             names_sha256=digest(inv['names']), name_count=len(inv['names']),
             reachable_headers=inv['reachable_headers'], token_pasting=inv['token_pasting'])
-        compact_builds[key].update(evidence_sha256=digest(build),
+        compact_builds[key].update(evidence_sha256=report_digest(build),
                                   headers=intern('build_headers', {h: intern('snapshots', s) for h, s in sorted(build['headers'].items())}))
+        if key in build_scopes:
+            compact_builds[key]['standard_scope'] = build_scopes[key]
+        selector = build_scopes.get(key, build['major'])
+        compiler = build['audit'].get('compiler_inputs', {})
+        absent = set(build['audit'].get('source_entry_absences', []))
+        # GNU dialects do not predefine __STRICT_ANSI__. Like the C version
+        # gate, its absence is part of the captured compiler invocation.
+        if '__STRICT_ANSI__' not in compiler and '__STRICT_ANSI__' not in build['audit'].get('blocked_inputs', []):
+            absent.add('__STRICT_ANSI__')
+        compiler_names = set().union(*(set(builds[k]['audit'].get('compiler_inputs', {}))
+                                       for k in matrices[selector]))
+        # A compiler input used by another capture in this scope must not
+        # disappear from the checks merely because this compiler lacks it.
+        # Its source-entry absence is a required snapshot fact too.
+        inputs = {n: compiler.get(n) for n in sorted(scope_dependencies[selector] & (compiler_names | absent))}
+        if inputs or key in build_scopes:
+            compact_builds[key]['standard_inputs'] = inputs
+        if progress:
+            progress('Hashed evidence for ' + key)
+    if progress:
+        progress(f'Compacting {len(tables["macro_sets"])} macro sets')
     tables['macro_sets'] = delta_sets(tables['macro_sets'])
     member_names = sorted(set().union(*(set(b['member_inventory']['names']) for b in builds.values())))
     return dict(schema=2, generator=VERSION, builds=compact_builds, member_names=member_names,
-                versions=versions, agreement=agreement, **tables)
-
-
-def delta_sets(sets):
-    """Share repeated name maps with deterministic, acyclic base-plus-deltas."""
-    result, previous = {}, []
-    for key, entries in sorted(sets.items(), key=lambda kv: (len(kv[1]), canonical(kv[1]))):
-        best = dict(entries=entries)
-        cost = len(canonical(best))
-        for base, old in previous:
-            changes = {n: v for n, v in entries.items() if old.get(n) != v}
-            removed = sorted(old.keys() - entries.keys())
-            candidate = dict(base=base, entries=changes)
-            if removed:
-                candidate['removed'] = removed
-            size = len(canonical(candidate))
-            if size < cost:
-                best, cost = candidate, size
-        result[key] = best
-        previous.append((key, entries))
-    return result
+                versions=versions, agreement=agreement, **tables,
+                **(dict(standard_scopes=standard_scopes) if standard_scopes else {}))
 
 
 def get_snapshot(data, build, header):
+    data = decode(data)
     return data['snapshots'][data['build_headers'][data['builds'][build]['headers']][header]]
 
 
 def get_agreement(data, major, header):
-    return data['agreements'][data['root_agreements'][data['agreement'][major]][header]]
+    data = decode(data)
+    ref = (data['standard_scopes'][major]['agreement'] if major in data.get('standard_scopes', {})
+           else data['agreement'][major])
+    return data['agreements'][data['root_agreements'][ref][header]]
 
 
 def get_classification(data, major, header):
-    root = data['classifications'][data['root_classifications'][data['versions'][major]['roots']][header]]
+    data = decode(data)
+    version = data.get('standard_scopes', {}).get(major, data['versions'].get(major))
+    root = data['classifications'][data['root_classifications'][version['roots']][header]]
     def entries(key):
         chain = []
         while True:
@@ -177,18 +256,6 @@ def get_classification(data, major, header):
         entry = data['macro_classifications'][key]
         macros[name] = dict(entry, dependencies=sorted(set(root['dependencies']) | set(entry['dependencies'])))
     return dict(default=root['default'], macros=macros)
-
-
-def baseline_text(data):
-    """Sorted JSON with one record per line, including content-address tables."""
-    sections = []
-    for key, value in sorted(data.items()):
-        if isinstance(value, dict):
-            entries = [f'    {json.dumps(k)}: {canonical(v)}' for k, v in sorted(value.items())]
-            sections.append(f'  {json.dumps(key)}: {{\n' + ',\n'.join(entries) + '\n  }')
-        else:
-            sections.append(f'  {json.dumps(key)}: {canonical(value)}')
-    return '{\n' + ',\n'.join(sections) + '\n}\n'
 
 
 def inventory_bytes(data):
@@ -217,9 +284,9 @@ def check(actual, committed):
         return True
     if old.replace(b'\r\n', b'\n') == actual.replace(b'\r\n', b'\n'):
         print('L1c bytes differ in line endings')
-    print(''.join(unified_diff(old.decode('utf-8', errors='backslashreplace').splitlines(True),
+    sys.stdout.writelines(unified_diff(old.decode('utf-8', errors='backslashreplace').splitlines(True),
                                actual.decode('utf-8', errors='backslashreplace').splitlines(True),
-                               fromfile=str(committed), tofile='CI/library.json')), end='')
+                               fromfile=str(committed), tofile='CI/library.json'))
     return False
 
 
@@ -229,14 +296,29 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--check', type=Path)
     parser.add_argument('--evidence-output', type=Path, help='full artifact (default: beside --output)')
+    parser.add_argument('--allow-subset', action='store_true',
+                        help='benchmark/test only: accept an incomplete matrix; never use for reviewed data')
     args = parser.parse_args()
+    if args.allow_subset and args.check:
+        parser.error('--allow-subset cannot be used with --check')
     try:
-        reports = [json.loads(p.read_text(encoding='utf-8')) for p in sorted(args.artifacts.rglob('*-library.json'))]
-        data = merge(reports, expected_builds())
+        started = perf_counter()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='library-merge-', dir=args.output.parent) as scratch:
+            store = ReportStore(Path(scratch) / 'roots.sqlite')
+            try:
+                reports = []
+                for i, path in enumerate(sorted(args.artifacts.rglob('*-library.json'))):
+                    reports.append(store.load(path, i))
+                    print(f'Loaded {reports[-1]["build"]}: {perf_counter() - started:.1f}s', flush=True)
+                data = merge(reports, [r['build'] for r in reports] if args.allow_subset else expected_builds(),
+                             progress=lambda message: print(f'{message}: {perf_counter() - started:.1f}s', flush=True))
+                print(f'Merged {len(reports)} builds: {perf_counter() - started:.1f}s', flush=True)
+                write_evidence(args.evidence_output or args.output.with_name('library-evidence.json'), reports, VERSION)
+            finally:
+                store.close()
         print(f'A12 member inventory: {len(data["member_names"])} names, '
               f'{len(data["builds"])} scanned builds, {inventory_bytes(data)} added compact JSON bytes')
-        full = dict(schema=2, generator=VERSION, builds={r['build']: r for r in reports})
-        write(args.evidence_output or args.output.with_name('library-evidence.json'), full)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(baseline_text(data), encoding='utf-8', newline='\n')
         if args.check and not check(args.output.read_bytes(), args.check):
