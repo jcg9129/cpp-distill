@@ -18,6 +18,11 @@ on:
         type: string
         default: cses
         required: true
+      atl_patch:
+        description: Optional repository path to a git format-patch series for atl-cpp
+        type: string
+        default: ''
+        required: false
   pull_request:
     paths:
       - .github/workflows/atl-sweep.yml
@@ -87,6 +92,35 @@ jobs:
           git -C out/atl-sweep/atl fetch --depth 1 -- origin "$ATL_REF"
           git -C out/atl-sweep/atl checkout --detach FETCH_HEAD
           git -C out/atl-sweep/atl rev-parse HEAD
+      - name: Apply optional atl-cpp patch series
+        if: ${{ inputs.atl_patch != '' }}
+        env:
+          ATL_PATCH_INPUT: ${{ inputs.atl_patch }}
+          GIT_COMMITTER_NAME: atl-sweep
+          GIT_COMMITTER_EMAIL: atl-sweep@example.invalid
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch_path=$ATL_PATCH_INPUT
+          case "$patch_path" in
+            /*|..|../*|*/../*|*/..) echo 'atl_patch must be a repository-relative path.' >&2; exit 1 ;;
+          esac
+          patch_file=$(realpath -e -- "$patch_path") || {
+            echo "atl_patch does not name an existing file: $patch_path" >&2
+            exit 1
+          }
+          case "$patch_file" in
+            "$GITHUB_WORKSPACE"/*) ;;
+            *) echo 'atl_patch must resolve to a file inside the repository.' >&2; exit 1 ;;
+          esac
+          [[ -f $patch_file ]] || { echo "atl_patch is not a file: $patch_path" >&2; exit 1; }
+          if ! git -C out/atl-sweep/atl am --3way -- "$patch_file"; then
+            echo "Failed to apply atl_patch: $patch_path" >&2
+            git -C out/atl-sweep/atl am --abort || true
+            exit 1
+          fi
+          echo "Patched atl HEAD: $(git -C out/atl-sweep/atl rev-parse HEAD)"
+          echo "atl_patch SHA-256: $(sha256sum -- "$patch_file" | awk '{print $1}')"
       - name: Measure and verify all four variants
         shell: bash
         run: bash ci/atl-sweep/sweep.sh out/atl-sweep/atl "$DISTILL" out/atl-sweep/results "$JUDGE"
