@@ -1,0 +1,1141 @@
+{
+  "examples": 126,
+  "checks": 378,
+  "passed": 378,
+  "rows": [
+    {
+      "example": "aggregate-queue-deque-sliding-window",
+      "tokens": 2622,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "aho-corasick-quick",
+      "tokens": 5166,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "arrangement-quick",
+      "tokens": 19630,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "assignment-quick",
+      "tokens": 3420,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "bipartite-matching-dag",
+      "tokens": 9823,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "bipartite-matching-quick",
+      "tokens": 9015,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "bit-utilities-combinations",
+      "tokens": 550,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "bitwise-convolution-quick",
+      "tokens": 10094,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "calipers-quick",
+      "tokens": 13290,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "centroid-decomposition-quick",
+      "tokens": 9266,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "circle-quick",
+      "tokens": 14963,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "closest-pair-quick",
+      "tokens": 3404,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "convex-hull-quick",
+      "tokens": 8727,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "convex-piecewise-linear-forest-quick",
+      "tokens": 6256,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "convex-piecewise-linear-moving",
+      "tokens": 3998,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "convex-piecewise-linear-quick",
+      "tokens": 3378,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "convex-polygon-operations-quick",
+      "tokens": 22087,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "convolution-quick",
+      "tokens": 17794,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "coordinate-compression-basic",
+      "tokens": 4654,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "coordinate-compression-move-only",
+      "tokens": 4732,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "counting-sort-stable-records",
+      "tokens": 1149,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "crt-quick",
+      "tokens": 3388,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "delaunay-quick",
+      "tokens": 17897,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "difference-fenwick-basic",
+      "tokens": 3847,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "discrete-log-quick",
+      "tokens": 16935,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dp-optimization-interval-merge",
+      "tokens": 2487,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dp-optimization-partition",
+      "tokens": 3732,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dp-optimization-quick",
+      "tokens": 1999,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dp-optimization-row-minima",
+      "tokens": 2028,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dsu-history",
+      "tokens": 5166,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dual-segment-tree-quick-start",
+      "tokens": 2459,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dynamic-lazy-segment-tree-quick-start",
+      "tokens": 2731,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "dynamic-segment-tree-quick-start",
+      "tokens": 1639,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "euler-tour-tree-basic",
+      "tokens": 15957,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "exact-count-optimum-quick",
+      "tokens": 4914,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "factorization-quick",
+      "tokens": 5656,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "fast-io-roundtrip",
+      "tokens": 10836,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "fenwick-tree-basic",
+      "tokens": 3601,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "flat-hash-basic",
+      "tokens": 8966,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "floor-sum-quick",
+      "tokens": 2207,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "functional-graphs-quick",
+      "tokens": 11258,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "gcd-bezout",
+      "tokens": 1329,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "geometry-primitives-boxes-and-angles",
+      "tokens": 7084,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "geometry-primitives-quick",
+      "tokens": 5156,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "geometry-primitives-segments-and-lines",
+      "tokens": 8951,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "graph-callbacks",
+      "tokens": 6809,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "graph-components-blocks",
+      "tokens": 6875,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "graph-components-bridges",
+      "tokens": 6339,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "graph-components-scc",
+      "tokens": 6019,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "graph-quick",
+      "tokens": 6975,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "halfplane-intersection-quick",
+      "tokens": 15702,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "hierarchical-bitset-basic",
+      "tokens": 1388,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "int128-arithmetic",
+      "tokens": 140,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "lazy-segment-tree-quick-start",
+      "tokens": 2726,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "lca-path-sum",
+      "tokens": 6873,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "lca-quick",
+      "tokens": 5279,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "lexicographic-order-quick",
+      "tokens": 2417,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "li-chao-tree-basic",
+      "tokens": 5647,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "linear-recurrence-quick",
+      "tokens": 22846,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "link-cut-tree-basic",
+      "tokens": 19836,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "lyndon-quick",
+      "tokens": 6072,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "manhattan-mst-quick",
+      "tokens": 3114,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "matching-quick",
+      "tokens": 1609,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "matrix-quick",
+      "tokens": 13054,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "max-flow-bounds",
+      "tokens": 6148,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "max-flow-quick",
+      "tokens": 4335,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "meldable-heap-forest-basic",
+      "tokens": 2902,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "min-cost-flow-quick",
+      "tokens": 7575,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "min-cost-flow-supplies",
+      "tokens": 6319,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "modular-arithmetic-residues",
+      "tokens": 9614,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "multiplicative-functions-quick",
+      "tokens": 2977,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "online-convolution-partitions",
+      "tokens": 21201,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "online-convolution-quick",
+      "tokens": 21095,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "palindrome-lengths-quick",
+      "tokens": 1001,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "palindromic-tree-quick",
+      "tokens": 3442,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-array-versions",
+      "tokens": 4802,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-heap-basic",
+      "tokens": 3964,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-lazy-segment-tree-basic",
+      "tokens": 4727,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-list-basic",
+      "tokens": 2866,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-queue-deque-basic",
+      "tokens": 6945,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-segment-tree-basic",
+      "tokens": 3061,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-treap-sequence-basic",
+      "tokens": 9644,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "persistent-vector-basic",
+      "tokens": 11114,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "point-location-quick",
+      "tokens": 24624,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "polygon-overlay-quick",
+      "tokens": 21520,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "polygon-quick",
+      "tokens": 8558,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "polynomial-gcd-pade",
+      "tokens": 23993,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "polynomial-gcd-quick",
+      "tokens": 24372,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "polynomial-points-quick",
+      "tokens": 25951,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "polynomial-points-sampling",
+      "tokens": 22199,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "power-monoid",
+      "tokens": 6937,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "power-series-powers-and-roots",
+      "tokens": 24875,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "power-series-prime-field-helpers",
+      "tokens": 11138,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "power-series-quick",
+      "tokens": 21218,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "radial-sweep-quick",
+      "tokens": 4106,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "rmq-basic",
+      "tokens": 1690,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "segment-intersections-quick",
+      "tokens": 9374,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "segment-tree-beats-quick-start",
+      "tokens": 6666,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "segment-tree-quick-start",
+      "tokens": 2142,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "series-composition-quick",
+      "tokens": 30282,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "sieve-quick",
+      "tokens": 2190,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "sorted-dictionary-quick",
+      "tokens": 5235,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "sparse-table-basic",
+      "tokens": 1613,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "splay-engine-quick-start",
+      "tokens": 3346,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "splay-map-quick-start",
+      "tokens": 10848,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "splay-sequence-quick-start",
+      "tokens": 10727,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "static-trie-quick",
+      "tokens": 3895,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "static-vector-basic",
+      "tokens": 1264,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "string-hash-quick",
+      "tokens": 4492,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "subtree-link-cut-tree-basic",
+      "tokens": 21318,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "suffix-array-quick",
+      "tokens": 2487,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "suffix-automaton-quick",
+      "tokens": 4174,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "suffix-tree-quick",
+      "tokens": 4860,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "time-divide-and-conquer-connectivity",
+      "tokens": 12184,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "top-tree-basic",
+      "tokens": 29483,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "treap-map-quick-start",
+      "tokens": 8380,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "treap-sequence-quick-start",
+      "tokens": 8276,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "triangulation-quick",
+      "tokens": 19044,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "trie-quick",
+      "tokens": 3345,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "types-and-utilities-composite-key",
+      "tokens": 3047,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "virtual-tree-quick",
+      "tokens": 6856,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "virtual-tree-separation",
+      "tokens": 7055,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "wavelet-matrix-basic",
+      "tokens": 2892,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "weighted-dsu-matrix",
+      "tokens": 8519,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "weighted-dsu-potentials",
+      "tokens": 9999,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    },
+    {
+      "example": "xor-basis-queries",
+      "tokens": 1903,
+      "checks": {
+        "t1": true,
+        "t2": true,
+        "both": true
+      }
+    }
+  ]
+}
