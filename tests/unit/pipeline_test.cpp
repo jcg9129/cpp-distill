@@ -163,7 +163,7 @@ TEST(pipeline_pruned_core_exact_checked_bytes_and_samples) {
   const auto r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
   CHECK_EQ(r.runtime,"compared 1 samples"); CHECK_EQ(r.bytes,f.built.at("pruned"));
   CHECK(r.bytes.find("unused") == r.bytes.npos); CHECK(r.assumptions.contains("A6")); CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
-  CHECK(r.report.find("assumptions: A11 instantiation-effects A6 A7 D3f unspelled-functions\n") != r.report.npos);
+  CHECK(r.report.find("assumptions: A11 instantiation-effects A14 unobserved-guard-macros A6 A7 D3f unspelled-functions\n") != r.report.npos);
   CHECK(r.report.find("parse configuration:") != r.report.npos);
   CHECK(r.report.find("primary structural bytes") != r.report.npos);
   // Default (R4-G): markers always, and no line-marker report lines.
@@ -235,7 +235,7 @@ TEST(pipeline_pruned_without_deletions_still_reports_a7) {
   Fixture f("int main(){return 0;}\n");
   const auto r = f.run(); CHECK_EQ(r.artifact,"pruned");
   CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
-  CHECK(r.report.find("assumptions: A11 instantiation-effects A7 D3f unspelled-functions\n") != r.report.npos);
+  CHECK(r.report.find("assumptions: A11 instantiation-effects A14 unobserved-guard-macros A7 D3f unspelled-functions\n") != r.report.npos);
 }
 TEST(pipeline_pruned_reproduced_diagnostic_separate_from_result_line) {
   Fixture f("int unused(){return 7;}\nint main(){return 0;}\n");
@@ -378,7 +378,7 @@ TEST(pipeline_written_artifacts_only_name_original_sources) {
       } else if (l.directive) presumed.directive(l.directive->name);
       CHECK(markers > 0);
       if (std::string_view(artifact) == "pruned") CHECK(shortMarkers > 0);
-      CHECK(bytes.find("#define DISTILL_ONCE_") != bytes.npos);
+      CHECK((bytes.find("#define DISTILL_ONCE_") != bytes.npos) == (std::string_view(artifact) != "pruned"));
       if (std::string_view(artifact) == "raw") CHECK(bytes.find("#ifndef DISTILL_ONCE_") != bytes.npos);
       else CHECK(bytes.find("#ifndef DISTILL_ONCE_") == bytes.npos);
     }
@@ -490,4 +490,25 @@ TEST(pipeline_compact_refused_or_failed_keeps_checked_bytes) {
       CHECK_EQ(r.lineMarkers,"omitted");
     } else CHECK(!f.built.contains("compact"));
   }
+}
+
+TEST(pipeline_pp_trimming_preserves_raw_flat_and_position_gate) {
+  Fixture f("#include <vector>\n#include \"once.h\"\n#include <vector>\nint main(){return __LINE__ != 4;}\n");
+  f.temp.write("once.h","#pragma once\n");
+  f.options.noLineMarkers = true;
+  const auto trimmed = f.run("position");
+  CHECK_EQ(trimmed.artifact,"pruned"); CHECK(trimmed.lineMarkers.starts_with("kept:"));
+  CHECK_EQ(trimmed.retention->trimming.includeLines,1u);
+  CHECK_EQ(trimmed.retention->trimming.guardLines,1u);
+  CHECK(trimmed.bytes.find("#define DISTILL_ONCE_") == trimmed.bytes.npos);
+  const auto raw = f.built.at("raw"), flat = f.built.at("flat");
+  f.options.assumeIdempotentStandardHeaders = false;
+  f.options.assumeUnobservedGuardMacros = false;
+  const auto opted = f.run("position");
+  CHECK_EQ(opted.artifact,"pruned"); CHECK_EQ(opted.runtime,"compared 1 samples");
+  CHECK_EQ(opted.retention->trimming.includeLines,0u);
+  CHECK_EQ(opted.retention->trimming.guardLines,0u);
+  CHECK(opted.bytes.find("#define DISTILL_ONCE_") != opted.bytes.npos);
+  CHECK_EQ(raw,f.built.at("raw")); CHECK_EQ(flat,f.built.at("flat"));
+  CHECK(!opted.assumptions.contains("A14"));
 }

@@ -119,6 +119,28 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                 check('member pruning disabled: --no-assume=library-spelled-members' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
+    with case('preprocessor trimming switches are independent and modes do not mix'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'once.h').write_text('#pragma once\n')
+        (root / 'main.cpp').write_text('#include <vector>\n#include "once.h"\n#include <vector>\nint main(){}\n')
+        selections = [[], ['idempotent-standard-headers'], ['unobserved-guard-macros'],
+                      ['idempotent-standard-headers', 'unobserved-guard-macros'], []]
+        for disabled in selections:
+            flags = ['--no-assume=' + ','.join(disabled * 2)] if disabled else []
+            result = subprocess.run([binary, *flags, '--report', 'report.txt', 'g++', '-std=c++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=30)
+            check(result.returncode == 0 and 'wrote pruned' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            duplicate = 'idempotent-standard-headers' in disabled
+            guard = 'unobserved-guard-macros' in disabled
+            check(result.stdout.count('#include <vector>') == (2 if duplicate else 1), result.stdout)
+            check(('#define DISTILL_ONCE_' in result.stdout) == guard, result.stdout)
+            check(('pruning assumption: A14 unobserved-guard-macros\n' in report) == (not guard), report)
+            check(f'idempotent-includes-removed: lines={0 if duplicate else 1} bytes=' in report, report)
+            check(f'guard-defines-removed: lines={0 if guard else 1} bytes=' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'once.h').unlink()
+        (root / 'report.txt').unlink()
     with case('library-macro-values switch reaches resolution and reports A9 scope'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('#include <cfloat>\n#if FLT_EVAL_METHOD != 0\n'

@@ -455,3 +455,69 @@ TEST(render_compact_continuations_byte_exact) {
     CHECK(unmarkedInvariant(input,compact).ok());
   }
 }
+
+TEST(render_pp_include_scope_spelling_and_trivia) {
+  const std::string text =
+      "#include <vector> // first\n#include <vector> // drop\n"
+      "#include <cassert>\n#define NDEBUG\n#include <cassert>\n"
+      "#include <cstdio>\n#include <stdio.h>\n"
+      "#include <bits/stdc++.h>\n#include <bits/stdc++.h>\n"
+      "#include <intrin.h>\n#include <intrin.h>\n"
+      "#include \"user.h\"\n#include \"user.h\"\n"
+      "extern \"C++\" {\n#include <vector>\n}\n"
+      "namespace N {\n#include <vector>\n}\n"
+      "int v =\n#include <vector>\n0;\n"
+      "#if UNKNOWN\n#include <vector>\n#endif\n";
+  auto m = source(text); PruningResult r;
+  const auto out = take(renderSource(m,&r));
+  take(renderingInvariant(m,&r,out.provenance.text));
+  CHECK_EQ(out.trimming.includeLines,1u);
+  CHECK_EQ(out.trimming.includeBytes,std::string("#include <vector> // drop\n").size());
+  CHECK(out.provenance.text.find("// first") != std::string::npos);
+  CHECK(out.provenance.text.find("// drop") == std::string::npos);
+  m.assumeIdempotentStandardHeaders = false;
+  const auto opted = take(renderSource(m,&r));
+  CHECK_EQ(opted.trimming.includeLines,0u);
+  CHECK(opted.provenance.text.find("// drop") != std::string::npos);
+  CHECK_EQ(take(renderSource(m)).trimming.includeLines,0u);
+}
+TEST(render_pp_first_eligible_include_stays) {
+  auto m = source("extern \"C++\" {\n#include <vector>\n}\n#include <vector> // first global\n#include <vector> // later global\n");
+  PruningResult r; const auto out = take(renderSource(m,&r));
+  take(renderingInvariant(m,&r,out.provenance.text));
+  CHECK_EQ(out.trimming.includeLines,1u);
+  CHECK(out.provenance.text.find("// first global") != std::string::npos);
+  CHECK(out.provenance.text.find("// later global") == std::string::npos);
+}
+TEST(render_pp_include_macro_scope_uncertainty) {
+  auto m = source("#include <vector>\nOPEN;\n#include <vector>\n");
+  PruneMacroExpansion e; e.offset = m.text.find("OPEN"); e.name = "OPEN";
+  m.expansions.push_back(e);
+  PruningResult r; CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+}
+TEST(render_pp_guard_provenance_and_observers) {
+  const std::string name = "DISTILL_ONCE_0123456789abcdef";
+  for (const std::string& use : std::vector<std::string>{"", "#ifdef " + name + "\n#endif\n", "#if defined(" + name + ")\n#endif\n",
+                               "#undef " + name + "\n", "#define OTHER " + name + "\n", "int " + name + ";\n"}) {
+    auto m = source("#line 2 \"a.cpp\"\n#define " + name + "\n#line 4 \"a.cpp\"\n" + use + "int main(){}\n");
+    m.lineMap[0].reset(); m.lineMap[1].reset(); m.lineMap[2].reset();
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    take(renderingInvariant(m,&r,out.provenance.text));
+    CHECK_EQ(out.trimming.guardLines,use.empty() ? 1u : 0u);
+    CHECK_EQ(out.trimming.guardBytes,use.empty() ? 38u : 0u);
+    m.assumeUnobservedGuardMacros = false;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.guardLines,0u);
+    m.assumeUnobservedGuardMacros = true; m.lineMap[1] = SourceLocation{"a.cpp",2};
+    CHECK_EQ(take(renderSource(m,&r)).trimming.guardLines,0u);
+    CHECK_EQ(take(renderSource(m)).trimming.guardLines,0u);
+  }
+}
+TEST(render_pp_guard_observer_removed_with_family) {
+  const std::string name = "DISTILL_ONCE_0123456789abcdef";
+  auto m = source("#line 2 \"a.cpp\"\n#define " + name + "\n#line 4 \"a.cpp\"\nint dead(){return " + name + ";}\nint main(){}\n");
+  m.lineMap[0].reset(); m.lineMap[1].reset(); m.lineMap[2].reset();
+  const auto start = m.text.find("int dead");
+  const auto out = render(m,{{start,m.text.find("int main")}});
+  CHECK_EQ(out.trimming.guardLines,1u);
+}

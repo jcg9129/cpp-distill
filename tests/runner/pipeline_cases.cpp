@@ -305,6 +305,8 @@ int run(int argc, char** argv) {
           o.assumeLibrarySpelledMembers = flags.assumeLibrarySpelledMembers;
           o.assumeLibraryMacroValues = flags.assumeLibraryMacroValues;
           o.assumeUnspelledFunctions = flags.assumeUnspelledFunctions;
+          o.assumeIdempotentStandardHeaders = flags.assumeIdempotentStandardHeaders;
+          o.assumeUnobservedGuardMacros = flags.assumeUnobservedGuardMacros;
         }
         if (value("prune") == "yes" || value("samples") == "yes") {
           write(cwd / "sample.in",value("sample")); o.samples = {{"sample.in",cwd / "sample.in"}};
@@ -421,6 +423,11 @@ int run(int argc, char** argv) {
         check(report.find(line) != report.npos, "missing report line: " + line + "\n" + report);
       for (const auto& [key,text] : expected) {
         if (key == "diagnostic" || key.starts_with("diagnostic.")) check(diagnostic.find(text) != diagnostic.npos,"missing diagnostic: " + text);
+        if (key.starts_with("count.")) {
+          std::size_t count = 0, at = 0;
+          while ((at = bytes.find(text,at)) != bytes.npos) { ++count; at += text.size(); }
+          check(count == std::stoul(key.substr(6)),"wrong output count: " + text + "\n" + bytes);
+        }
         if (key == "contains" || key.starts_with("contains.")) check(bytes.find(text) != bytes.npos,"missing output: " + text + "\n" + bytes);
         if (key == "absent" || key.starts_with("absent.")) check(bytes.find(text) == bytes.npos,"unexpected output: " + text + "\n" + bytes);
       }

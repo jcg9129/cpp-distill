@@ -1,0 +1,11 @@
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+api=yes
+no-assume=
+count.1=#include <vector>
+absent.guard=#define DISTILL_ONCE_
+report=idempotent-includes-removed: lines=1 bytes=18
+report.1=guard-defines-removed: lines=1 bytes=38

@@ -11,6 +11,7 @@ inline constexpr std::string_view pruningPolicyVersion = "D3e";
 inline std::string_view assumptionLabel(std::string_view id) {
   if (id == "A11") return "A11 instantiation-effects";
   if (id == "A12") return "A12 library-spelled-members";
+  if (id == "A14") return "A14 unobserved-guard-macros";
   if (id == "D3f") return "D3f unspelled-functions";
   return id;
 }
@@ -86,6 +87,8 @@ struct PruningModel {
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
   bool assumeUnspelledFunctions = true;
+  // Pruned-renderer settings, also immutable worker input/result identity.
+  bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   // Raw system-header identifiers plus identifiers emitted through system macro
   // expansion in the full unpruned TU, unioned with all scanned-library names.
   bool libraryMemberNamesComputed = false;
@@ -114,7 +117,13 @@ struct FamilyRetention {
   std::string reason = "removed: outside the retention closure";
   FamilyId cause = noFamily, initialCause = noFamily;
 };
+// Unique deleted input physical lines/bytes, including directive trivia;
+// generated marker bytes and declaration ownership are accounted separately.
+struct TrimmingStats {
+  std::size_t includeLines = 0, includeBytes = 0, guardLines = 0, guardBytes = 0;
+};
 struct PruningResult {
+  TrimmingStats trimming;
   std::vector<FamilyRetention> families;
   std::vector<std::string> disabledReasons, memberDisabledReasons;
   std::string policy = std::string(pruningPolicyVersion), registryVersion, registryDigest, dialect;

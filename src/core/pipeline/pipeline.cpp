@@ -153,6 +153,8 @@ struct Pipeline {
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
       m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
       m.assumeUnspelledFunctions = options.assumeUnspelledFunctions;
+      m.assumeIdempotentStandardHeaders = options.assumeIdempotentStandardHeaders;
+      m.assumeUnobservedGuardMacros = options.assumeUnobservedGuardMacros;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
@@ -175,6 +177,7 @@ struct Pipeline {
       if (options.noPrune) { result.diagnostic += "pruning disabled: --no-prune\n"; return; }
       step("render pruned");
       auto rendered = take(renderSource(*result.pruningModel,&*result.retention,options.stripComments));
+      result.retention->trimming = rendered.trimming;
       const auto& bytes = rendered.provenance.text;
       take(renderingInvariant(*result.pruningModel,&*result.retention,bytes));
       take(staticNameInvariant(*result.pruningModel,*result.retention,bytes));
@@ -462,6 +465,10 @@ struct Pipeline {
       result.diagnostic += "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
     if (!options.assumeUnspelledFunctions && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)\n";
+    if (!options.assumeIdempotentStandardHeaders && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning policy disabled: idempotent-standard-headers (--no-assume=idempotent-standard-headers)\n";
+    if (!options.assumeUnobservedGuardMacros && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: A14 unobserved-guard-macros (--no-assume=unobserved-guard-macros)\n";
     if (!options.assumeLibraryMacroValues)
       result.diagnostic += "resolution assumption disabled: A9 library-macro-values (--no-assume=library-macro-values); __cpp_lib_* facts retained\n";
     result.report = renderReport(result, command, options.profile);

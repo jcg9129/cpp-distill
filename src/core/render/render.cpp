@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/render/render.h"
+#include "core/names/names.h"
 #include "core/validate/preprocess.h"
 #include <algorithm>
 #include <cctype>
@@ -12,7 +13,8 @@ bool contains(EditRange a, EditRange b) { return a.begin <= b.begin && b.end <= 
 struct Input {
   const PruningModel& model;
   ScanResult scan;
-  std::vector<EditRange> deletions, markers;
+  std::vector<EditRange> deletions, markers, trimmedDirectives;
+  TrimmingStats trimming;
   std::vector<SourceLocation> locations;
   std::map<std::size_t, SourceLocation> markerAt; // Parsed generated markers by begin offset.
   Input(const PruningModel& m, const PruningResult* r) : model(m), scan(take(scanDirectives(m.text))) {
@@ -26,6 +28,8 @@ struct Input {
     joinDeletions();
     if (r) removeEmptyShells();
     joinDeletions();
+    if (r) trimPreprocessor();
+    joinDeletions();
     std::map<std::size_t, std::string_view> directives; // Other directives by physical start.
     for (const auto& l : scan.lines) {
       const bool generated = generatedMarker(l);
@@ -33,7 +37,8 @@ struct Input {
       else if (l.directive) directives[l.begin] = l.directive->name;
       for (const auto& t : l.tokens) for (auto d : touching({t.begin,t.end}))
         if (!contains(d,{t.begin,t.end})) throw Error{"deletion splits token '" + t.text + "' at byte " + std::to_string(t.begin)};
-      if (l.directive && !generated && !touching({l.begin,l.end}).empty())
+      if (l.directive && !generated && !touching({l.begin,l.end}).empty() &&
+          std::find(trimmedDirectives.begin(),trimmedDirectives.end(),EditRange{l.begin,l.end}) == trimmedDirectives.end())
         throw Error{"deletion touches source directive #" + l.directive->name + " at line " + std::to_string(l.firstLine)};
     }
     for (auto c : scan.comments) for (auto d : touching({c.begin,c.end}))
@@ -74,6 +79,108 @@ struct Input {
       else joined.push_back(d);
     }
     deletions = std::move(joined);
+  }
+  void trimPreprocessor() {
+    if (!model.assumeIdempotentStandardHeaders && !model.assumeUnobservedGuardMacros) return;
+    // Plan whole logical-line deletions in immutable flat coordinates, after
+    // declaration/shell deletion. Never apply this to raw or flat rendering.
+    auto drop = [&](const LogicalLine& l, bool include) {
+      trimmedDirectives.push_back({l.begin,l.end});
+      const auto lines = l.lastLine-l.firstLine+1, bytes = l.end-l.begin;
+      if (include) { trimming.includeLines += lines; trimming.includeBytes += bytes; }
+      else { trimming.guardLines += lines; trimming.guardBytes += bytes; }
+    };
+    std::set<std::size_t> expansionOffsets;
+    for (const auto& e : model.expansions) if (!deleted({e.offset,e.offset+1})) expansionOffsets.insert(e.offset);
+    std::set<std::string> seen;
+    std::size_t braces = 0, parens = 0, brackets = 0, conditional = 0;
+    bool pending = false, uncertain = false, scopeBody = false;
+    std::vector<std::string> prefix;
+    for (const auto& l : scan.lines) {
+      if (generatedMarker(l)) continue;
+      if (l.directive) {
+        const auto& d = *l.directive;
+        if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef") {
+          ++conditional;
+          // Different alternatives may open different scopes. Do not infer
+          // the lexical scope after a surviving conditional from one parse.
+          uncertain = true;
+        }
+        if (model.assumeIdempotentStandardHeaders && !uncertain && !conditional &&
+            !braces && !parens && !brackets && !pending && d.name == "include" &&
+            d.tokens.size() == 1 && d.tokens[0].kind == TokenKind::header &&
+            std::none_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+              return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin <= l.begin && l.begin < r.end; });
+            })) {
+          const auto& spelling = d.tokens[0].text;
+          if (spelling.starts_with('<') && spelling.ends_with('>')) {
+            const auto h = std::string_view(spelling).substr(1,spelling.size()-2);
+            // The broader A1 list also contains GNU extensions. The standard
+            // headers all have simple names; extension paths are ineligible.
+            if (h != "cassert" && h != "assert.h" && h.find('/') == h.npos && isStandardHeader(h) &&
+                !seen.insert(spelling).second) drop(l,true);
+          }
+        }
+        if (d.name == "endif" && conditional) --conditional;
+        continue;
+      }
+      // Macro replacement tokens can introduce scopes/declarations absent
+      // from this lexical stream. From such a use onward scope is unproved.
+      if (auto e = expansionOffsets.lower_bound(l.begin); e != expansionOffsets.end() && *e < l.end) uncertain = true;
+      for (const auto& t : l.tokens) if (!deleted({t.begin,t.end})) {
+        const auto& v = t.text;
+        if (!braces) prefix.push_back(v);
+        if (v == "(") ++parens;
+        else if (v == ")" && parens) --parens;
+        else if (v == "[" || v == "<:") ++brackets;
+        else if ((v == "]" || v == ":>") && brackets) --brackets;
+        else if (v == "{" || v == "<%") {
+          if (!braces) {
+            // Namespace/linkage blocks and function bodies finish at '}'.
+            // Record bodies and braced initializers still require a ';'.
+            scopeBody = std::find(prefix.begin(),prefix.end(),"namespace") != prefix.end() ||
+                (prefix.size() >= 2 && prefix[0] == "extern" && (prefix[1] == "\"C\"" || prefix[1] == "\"C++\"")) ||
+                (std::find(prefix.begin(),prefix.end(),")") != prefix.end() &&
+                 std::find(prefix.begin(),prefix.end(),"=") == prefix.end() &&
+                 std::find(prefix.begin(),prefix.end(),"struct") == prefix.end() &&
+                 std::find(prefix.begin(),prefix.end(),"class") == prefix.end());
+          }
+          ++braces;
+        } else if ((v == "}" || v == "%>") && braces) {
+          --braces;
+          if (!braces && scopeBody) { pending = false; prefix.clear(); continue; }
+        }
+        if (v == ";" && !braces && !parens && !brackets) { pending = false; prefix.clear(); }
+        else pending = true;
+      }
+    }
+    // Count every surviving identifier, including all directive operands and
+    // macro replacements. Comments/literals are not macro observations.
+    if (model.assumeUnobservedGuardMacros) {
+      constexpr std::string_view guardPrefix = "DISTILL_ONCE_";
+      std::map<std::string,std::size_t,std::less<>> uses;
+      for (const auto& l : scan.lines)
+        if (std::find(trimmedDirectives.begin(),trimmedDirectives.end(),EditRange{l.begin,l.end}) == trimmedDirectives.end())
+          for (const auto& t : l.tokens) if (t.kind == TokenKind::identifier && t.text.starts_with(guardPrefix) && !deleted({t.begin,t.end})) ++uses[t.text];
+      // Token pasting can observe a guard without spelling its complete name
+      // in the source. Keep observed surviving expansions as well.
+      for (const auto& e : model.expansions)
+        if (e.name.starts_with(guardPrefix) && !deleted({e.offset,e.offset+1})) ++uses[e.name];
+      conditional = 0;
+      for (const auto& l : scan.lines) if (l.directive) {
+        const auto& d = *l.directive;
+        if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef") ++conditional;
+        if (!conditional && d.name == "define" && d.tokens.size() == 1) {
+          const auto& name = d.tokens[0].text;
+          const bool generated = l.lastLine <= model.lineMap.size() &&
+              std::all_of(model.lineMap.begin()+l.firstLine-1,model.lineMap.begin()+l.lastLine,[](const auto& at) { return !at; });
+          if (generated && name.starts_with(guardPrefix) && name.size() == guardPrefix.size()+16 &&
+              name.find_first_not_of("0123456789abcdef",guardPrefix.size()) == name.npos && uses[name] == 1) drop(l,false);
+        }
+        if (d.name == "endif" && conditional) --conditional;
+      }
+    }
+    deletions.insert(deletions.end(),trimmedDirectives.begin(),trimmedDirectives.end());
   }
   void removeEmptyShells() {
     // Shells do not participate in retention. Ignore comments/literals as
@@ -296,7 +403,7 @@ struct InvariantToken {
 };
 std::vector<InvariantToken> intended(const Input& in) {
   std::vector<InvariantToken> out;
-  for (const auto& l : in.scan.lines) if (!in.marker(l)) {
+  for (const auto& l : in.scan.lines) if (!in.marker(l) && !in.deleted({l.begin,l.end})) {
     // A directive's internal physical lines can contract when its comments
     // become spaces. Its logical start and complete token sequence must stay.
     const auto at = in.locations.at(l.firstLine-1);
@@ -318,7 +425,7 @@ std::optional<std::size_t> RenderedSource::mapOffset(std::size_t p) const {
 Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* retention, bool strip) {
   try {
     Input in(m,retention);
-    RenderedSource out; out.provenance = m;
+    RenderedSource out; out.provenance = m; out.trimming = in.trimming;
     auto& p = out.provenance;
     p.text.clear(); p.lineMap.clear(); p.generatedMarkers.clear(); p.sourceDirectives.clear();
     p.keepOffsets.clear(); p.annotations.clear(); p.expansions.clear();

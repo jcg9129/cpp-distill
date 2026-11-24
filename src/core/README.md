@@ -861,11 +861,12 @@ library-hook refusals are unchanged. See the
 A11 exclusions, compiler probes and measurements.
 `--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
 accepts repetition and comma lists; `instantiation-effects`,
-`library-spelled-members`, `library-macro-values` and `unspelled-functions` are
+`library-spelled-members`, `library-macro-values`, `unspelled-functions`,
+`idempotent-standard-headers` and `unobserved-guard-macros` are
 the switchable names.
 Other names (including assumption IDs) are usage errors (exit 1) listing all
-four names. For A11, A12 and D3f, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
-the worker. Pruning protocol **8** serializes the A11, A12 and D3f flags, and the parent rejects a worker
+six names. For A11, A12, D3f and the trimming settings, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
+the worker. Pruning protocol **10** serializes the A11, A12, D3f and both trimming flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.
 Both report formats print the readable A11 name; the flag mode lists it as
@@ -1420,7 +1421,7 @@ The worker inventories raw included system headers and identifiers emitted by
 the full TU's system macro expansions, including pasted results and user arguments.
 An incomplete inventory disables only member pruning.
 `--no-assume=library-spelled-members` also keeps records whole. Both flags are
-immutable protocol-v8 identity fields. Reports list A12 whenever members can be
+immutable protocol-v10 identity fields. Reports list A12 whenever members can be
 pruned, even without a deletion. Units retained with their owner by rules 1–4/8
 share its whole-record effect component and incoming system-dispatch analysis.
 Member spelling is stored separately from namespace-scope names; forward
@@ -1441,3 +1442,35 @@ syntax stays aggregated with every entity it introduces. Reports list
 `rule3-unkept`. `--no-assume=unspelled-functions` restores the old rule 3;
 like `instantiation-effects`, `library-spelled-members` and
 `library-macro-values`, it accepts repeated options and comma lists.
+
+
+## Pruned preprocessor trimming (2026-11-24)
+
+The renderer plans whole logical-line deletions after declaration/empty-shell
+pruning, before marker regeneration, static-name/rendering invariants, builds
+and sample comparisons. Raw and flat artifacts retain their existing bytes.
+`idempotent-standard-headers` removes later top-level includes of the same
+standard C/C++ header spelling, keeping the first in place. It excludes
+`cassert`/`assert.h`, GNU extensions, other system headers, user headers,
+linkage blocks, namespaces, declarations and surviving conditionals. After a
+surviving conditional or a retained non-directive macro expansion, scope is
+unproved and later includes stay. Disable with
+`--no-assume=idempotent-standard-headers`.
+
+A14 `unobserved-guard-macros` removes provenance-confirmed generated empty
+`DISTILL_ONCE_<hash>` defines whose name has no other surviving identifier
+(including directives and macro replacements), and no surviving worker-observed
+expansion, including a name synthesized by token pasting. The input-wide collision check
+covers worker input; A14 covers judge-only library/compiler headers. Generated
+defines in surviving conditionals stay to protect conditional position uses.
+Disable with `--no-assume=unobserved-guard-macros`. Both flags are immutable
+worker/renderer identity in protocol 10 and independent of A11/A12/A9/D3f.
+Reports list their enabled/disabled state and unique source-byte/physical-line
+counts as `idempotent-includes-removed: lines=N bytes=B` and
+`guard-defines-removed: lines=N bytes=B`.
+
+The normal renderer recomputes markers for every surviving token/directive;
+`--no-line-markers` and `--compact-whitespace` still require the existing
+position-observation gate. Both opt-outs together preserve the pre-change
+pruned bytes; the case runner's `--baseline <snapshot-directory>` mode verifies
+this on the original prune corpus, including expected refusals.
