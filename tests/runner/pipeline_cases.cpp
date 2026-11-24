@@ -511,6 +511,11 @@ int run(int argc, char** argv) {
       check(code == std::stoi(value("exit")), "wrong exit: " + std::to_string(code) + "\n" + diagnostic);
       for (const auto& [key, line] : expected) if (key == "report" || key.starts_with("report."))
         check(report.find(line) != report.npos, "missing report line: " + line + "\n" + report);
+      if (!value("report-any").empty()) {
+        const auto alternatives = words(value("report-any"));
+        check(std::any_of(alternatives.begin(),alternatives.end(),[&](const auto& line) { return report.find(line) != report.npos; }),
+              "missing report alternative: " + value("report-any") + "\n" + report);
+      }
       for (const auto& [key,text] : expected) {
         if (key == "diagnostic" || key.starts_with("diagnostic.")) check(diagnostic.find(text) != diagnostic.npos,"missing diagnostic: " + text);
         if (key.starts_with("count.")) {

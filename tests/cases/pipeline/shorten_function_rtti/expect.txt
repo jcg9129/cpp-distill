@@ -5,6 +5,8 @@ artifact=pruned
 verification=local
 exit=0
 configuration=local
-report=shorten-names: kept: function name expression
+# Library assertions can expose __PRETTY_FUNCTION__ and block compaction first.
+# Without those expressions, target_type().name() still refuses renaming.
+report-any="shorten-names: kept: function name expression" "shorten-names: kept: semantic name observation:"
 contains=LongUserCallable
 direct-shorten-names=observation

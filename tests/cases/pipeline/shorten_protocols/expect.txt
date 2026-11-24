@@ -5,9 +5,10 @@ artifact=pruned
 verification=local
 exit=0
 configuration=local
-report=shorten-names: kept: function name expression
+# Library assertions can expose __PRETTY_FUNCTION__ and prevent compaction.
+# Otherwise shortening is safe; the direct audit below checks protocol names.
+report-any="shorten-names: kept: function name expression" "shorten-names: renamed="
 contains=tuple_size
 contains.1=tuple_element
 contains.2=begin
-contains.3=LongPair
 direct-shorten-names=protocol
