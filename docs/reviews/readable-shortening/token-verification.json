@@ -1,0 +1,1267 @@
+{
+  "examples": 126,
+  "checks": 630,
+  "passed": 630,
+  "rows": [
+    {
+      "example": "aggregate-queue-deque-sliding-window",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "aho-corasick-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "arrangement-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "assignment-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "bipartite-matching-dag",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "bipartite-matching-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "bit-utilities-combinations",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "bitwise-convolution-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "calipers-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "centroid-decomposition-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "circle-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "closest-pair-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "convex-hull-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "convex-piecewise-linear-forest-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "convex-piecewise-linear-moving",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "convex-piecewise-linear-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "convex-polygon-operations-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "convolution-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "coordinate-compression-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "coordinate-compression-move-only",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "counting-sort-stable-records",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "crt-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "delaunay-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "difference-fenwick-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "discrete-log-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dp-optimization-interval-merge",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dp-optimization-partition",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dp-optimization-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dp-optimization-row-minima",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dsu-history",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dual-segment-tree-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dynamic-lazy-segment-tree-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "dynamic-segment-tree-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "euler-tour-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "exact-count-optimum-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "factorization-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "fast-io-roundtrip",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "fenwick-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "flat-hash-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "floor-sum-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "functional-graphs-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "gcd-bezout",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "geometry-primitives-boxes-and-angles",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "geometry-primitives-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "geometry-primitives-segments-and-lines",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "graph-callbacks",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "graph-components-blocks",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "graph-components-bridges",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "graph-components-scc",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "graph-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "halfplane-intersection-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "hierarchical-bitset-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "int128-arithmetic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "lazy-segment-tree-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "lca-path-sum",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "lca-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "lexicographic-order-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "li-chao-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "linear-recurrence-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "link-cut-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "lyndon-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "manhattan-mst-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "matching-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "matrix-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "max-flow-bounds",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "max-flow-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "meldable-heap-forest-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "min-cost-flow-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "min-cost-flow-supplies",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "modular-arithmetic-residues",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "multiplicative-functions-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "online-convolution-partitions",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "online-convolution-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "palindrome-lengths-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "palindromic-tree-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-array-versions",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-heap-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-lazy-segment-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-list-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-queue-deque-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-segment-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-treap-sequence-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "persistent-vector-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "point-location-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "polygon-overlay-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "polygon-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "polynomial-gcd-pade",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "polynomial-gcd-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "polynomial-points-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "polynomial-points-sampling",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "power-monoid",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "power-series-powers-and-roots",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "power-series-prime-field-helpers",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "power-series-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "radial-sweep-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "rmq-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "segment-intersections-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "segment-tree-beats-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "segment-tree-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "series-composition-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "sieve-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "sorted-dictionary-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "sparse-table-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "splay-engine-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "splay-map-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "splay-sequence-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "static-trie-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "static-vector-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "string-hash-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "subtree-link-cut-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "suffix-array-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "suffix-automaton-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "suffix-tree-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "time-divide-and-conquer-connectivity",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "top-tree-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "treap-map-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "treap-sequence-quick-start",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "triangulation-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "trie-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "types-and-utilities-composite-key",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "virtual-tree-quick",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "virtual-tree-separation",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "wavelet-matrix-basic",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "weighted-dsu-matrix",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "weighted-dsu-potentials",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    },
+    {
+      "example": "xor-basis-queries",
+      "checks": {
+        "r": true,
+        "r_spaces": true,
+        "compact_pr129": true,
+        "r_pr129": true,
+        "r_spaces_pr129": true
+      }
+    }
+  ]
+}
