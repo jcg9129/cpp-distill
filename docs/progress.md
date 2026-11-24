@@ -732,7 +732,33 @@ container memory limit; the unoptimized diagnostic build also hit the unit
 suite's time cap before switching to the analysis's optimized build settings.
 The complete final optimized run is green.
 
-Six-example ATL comparison follows (read-only revision `5b14f2d`, CSES
+**CI atl sweep (merged result, #125).** Sweep 45350133687 against main sweep
+45141534042, atl `5b14f2d`, judge cses, 126 examples: 126/126 pruned, 0 run
+failures, no example grew. nlm 4,535,428 → 4,271,706 B (−263,722, −5.81%);
+compact 4,051,059 → 3,811,229 B (−239,830, −5.92%); `rule3-unkept` totals 267
+declarations / 197,525 B (transitive dependencies freed with them account for
+the rest). Largest drops (nlm): delaunay-quick 141,794 → 70,810, circle-quick
+71,572 → 55,756, convex-polygon-operations-quick 94,343 → 83,075,
+halfplane-intersection-quick 73,995 → 63,491. Outputs over 64 KiB: nlm 23 → 21,
+compact 20 → 17. 83 examples are unchanged. The analysis estimate (3.3%) counted
+only owned bytes. Follow-up reviews added fixtures for redeclaration
+certificates, macro declarators (only the declaration before the body vetoes),
+C-linkage statics, mangled alias targets and the counter.
+
+**caide comparison (2026-11-24).** The user's caide fork (`a8b990b`, public at
+github.com/jcg9129-cp/caide-cpp-inliner, branch `personal/master`) ran on the
+same 126 examples in CI (branch `caide-compare`, run 45360241444, not merged).
+With its own verification all 126 pass, but 37 fall back to the unpruned
+inline; with `--no-verify` 36 outputs fail to compile. Where caide's pruning
+succeeds (89 examples) it is smaller than distill compact before D3f in every
+case (1,489,583 vs 2,102,269 B; median ratio 0.77; delaunay 41 KB vs 127 KB);
+on the 37 fallbacks it is larger (2,818,735 vs 1,948,790 B). Totals: caide
+4,308,318 B vs distill compact 3,811,229 B after D3f. Open: a side-by-side
+analysis of what distill keeps that caide drops on those 89 examples. The
+workflow must first save outputs, detect fallback (it reported none) and not
+fail on `--no-verify` compile failures.
+
+Six-example local ATL comparison (pre-review version; read-only revision `5b14f2d`, CSES
 `cses-gcc13-cpp23`, local GCC 13.3, `-O2 --strip-comments --no-line-markers`).
 
 
