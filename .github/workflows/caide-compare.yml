@@ -8,6 +8,11 @@ on:
       - ci/caide-compare/run.sh
   workflow_dispatch:
     inputs:
+      release_run:
+        description: Release run id for the Linux x86_64 distill binary
+        type: string
+        default: '45348154942'
+        required: true
       caide_ref:
         description: caide-cpp-inliner branch, tag or commit
         type: string
@@ -20,6 +25,7 @@ on:
         required: true
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: caide-compare-${{ github.ref }}
   cancel-in-progress: true
@@ -158,6 +164,45 @@ jobs:
           sudo bash out/caide-compare/llvm.sh 22
           sudo apt-get install -y clang-22 libclang-22-dev llvm-22-dev
           chmod +x out/caide-compare/bin/cmd
+      - name: Download Linux x86_64 Release binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_INPUT: ${{ inputs.release_run || '45348154942' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_run=$RELEASE_RUN_INPUT
+          if [[ -z $release_run ]]; then
+            # Do not filter by conclusion: another platform may have been cancelled.
+            run_ids=$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?branch=main&per_page=100" \
+              --jq '.workflow_runs[].id')
+            while IFS= read -r candidate; do
+              [[ -n $candidate ]] || continue
+              artifact_ids=$(gh api --paginate \
+                "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/artifacts?per_page=100" \
+                --jq '.artifacts[] | select(.name == "release-platform-linux-x86_64" and .expired == false) | .id')
+              if [[ -n $artifact_ids ]]; then
+                release_run=$candidate
+                break
+              fi
+            done <<< "$run_ids"
+          fi
+          if [[ ! $release_run =~ ^[1-9][0-9]*$ ]]; then
+            echo 'No eligible Release run found, or release_run is not a positive run id.' >&2
+            exit 1
+          fi
+          echo "Using Release run $release_run"
+          mkdir -p out/caide-compare/release out/caide-compare/unpacked
+          gh run download "$release_run" --repo "$GITHUB_REPOSITORY" \
+            --name release-platform-linux-x86_64 --dir out/caide-compare/release
+          mapfile -d '' -t archives < <(find out/caide-compare/release -type f -name 'distill-*-linux-x86_64.tar.gz' -print0)
+          [[ ${#archives[@]} -eq 1 ]] || { echo 'Expected exactly one Linux x86_64 archive.' >&2; exit 1; }
+          tar -xzf "${archives[0]}" -C out/caide-compare/unpacked
+          mapfile -d '' -t binaries < <(find "$PWD/out/caide-compare/unpacked" -type f -name distill -executable -print0)
+          [[ ${#binaries[@]} -eq 1 ]] || { echo 'Expected exactly one distill executable.' >&2; exit 1; }
+          "${binaries[0]}" --version
+          echo "DISTILL=${binaries[0]}" >> "$GITHUB_ENV"
       - name: Check out the same public ATL commit in every shard
         shell: bash
         run: |
@@ -167,9 +212,9 @@ jobs:
           git -C out/caide-compare/atl fetch --depth 1 -- origin "$ATL_COMMIT"
           git -C out/caide-compare/atl checkout --detach FETCH_HEAD
           git -C out/caide-compare/atl rev-parse HEAD
-      - name: Compare both variants on this example-index shard
+      - name: Compare caide and distill on this example-index shard
         shell: bash
-        run: bash ci/caide-compare/run.sh out/caide-compare/atl out/caide-compare/bin/cmd out/caide-compare/results "$SHARD" 4
+        run: bash ci/caide-compare/run.sh out/caide-compare/atl out/caide-compare/bin/cmd "$DISTILL" out/caide-compare/results "$SHARD" 4
       - name: Upload shard summary and per-example diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -180,6 +225,7 @@ jobs:
             out/caide-compare/results/examples.txt
             out/caide-compare/results/**/*.log
             out/caide-compare/results/**/*.rep
+            out/caide-compare/results/**/*.cpp
           if-no-files-found: warn
   merge:
     if: always()
@@ -191,7 +237,10 @@ jobs:
         with:
           pattern: caide-compare-*
           path: out/caide-compare/artifacts
-      - name: Merge summaries and check complete two-variant coverage
+      - name: Merge summaries and check complete four-variant coverage
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          SWEEP_RESULT: ${{ needs.sweep.result }}
         shell: bash
         run: |
           set -euo pipefail
@@ -203,15 +252,19 @@ jobs:
 
           root = Path('out/caide-compare')
           root.mkdir(parents=True, exist_ok=True)
-          fields = 'example variant caide_exit fallback bytes compile run_check seconds'.split()
+          fields = 'example variant caide_exit distill_exit fallback fallback_reason bytes compile run_check seconds'.split()
+          variants = ('verify', 'noverify', 'distill-nlm', 'distill-compact')
           rows, expected, problems = [], set(), []
+          for job in ('BUILD', 'SWEEP'):
+              if os.environ[f'{job}_RESULT'] != 'success':
+                  problems.append(f'{job.lower()} infrastructure did not succeed')
           for shard in range(4):
               part = root / 'artifacts' / f'caide-compare-shard-{shard}'
               if not (part / 'summary.tsv').is_file() or not (part / 'examples.txt').is_file():
                   problems.append(f'Missing shard {shard}')
                   continue
               for example in (part / 'examples.txt').read_text().splitlines():
-                  for variant in ('verify', 'noverify'):
+                  for variant in variants:
                       key = (example, variant)
                       if key in expected:
                           problems.append(f'Duplicate example assignment: {key}')
@@ -230,10 +283,10 @@ jobs:
               writer = csv.DictWriter(stream, fieldnames=fields, delimiter='\t', lineterminator='\n')
               writer.writeheader()
               writer.writerows(rows)
-          lines = ['### caide / ATL comparison', '',
+          lines = ['### caide / distill / ATL comparison', '',
                    '| Variant | Examples | Median bytes | Compile FAIL | Sample FAIL | Fallback yes / unknown |',
                    '| --- | ---: | ---: | ---: | ---: | ---: |']
-          for variant in ('verify', 'noverify'):
+          for variant in variants:
               group = [row for row in rows if row['variant'] == variant]
               sizes = [int(row['bytes']) for row in group]
               lines.append(f'| {variant} | {len(group)} | {statistics.median(sizes) if sizes else "-"} | '
@@ -241,9 +294,10 @@ jobs:
                            f'{sum(row["run_check"] == "FAIL" for row in group)} | '
                            f'{sum(row["fallback"] == "yes" for row in group)} / '
                            f'{sum(row["fallback"] == "unknown" for row in group)} |')
-          lines.extend(['', f'Non-zero caide exits: {sum(row["caide_exit"] != "0" for row in rows)}.',
+          lines.extend(['', f'Non-zero caide exits: {sum(row["caide_exit"] not in ("0", "-") for row in rows)}.',
+                        f'Non-zero distill exits: {sum(row["distill_exit"] not in ("0", "-") for row in rows)}.',
                         '', 'Fallback: explicit caide diagnostic/report; unknown means an incomplete invocation.',
-                        'Source audit and per-example diagnostics are included in the artifact.', *problems])
+                        'Source audit, generated C++ and per-example diagnostics are included in the artifact.', *problems])
           markdown = '\n'.join(lines) + '\n'
           print(markdown)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
