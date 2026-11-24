@@ -8,6 +8,8 @@ struct ShortenedSource {
   RenameMap renames;
   std::string namesKept; // Renaming refused; the compact artifact is kept.
 };
+// Name/position observations in raw user tokens or expanded user macros.
+bool shorteningObservesNames(std::string_view);
 Result<ShortenedSource> shortenNamesSource(std::string_view compact, const PruningModel&);
 // Independent scan of the actual candidate, including directive membership,
 // object/function macro definition adjacency and literal bytes.

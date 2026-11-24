@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "clang/prune_extract.h"
 #include "core/names/names.h"
+#include "core/render/shorten_names.h"
 #include "core/library/library.h"
 #include "resources.h"
 #include "clang/AST/ASTConsumer.h"
@@ -628,10 +629,7 @@ public:
       // invocation. Its declarations/references elsewhere must keep that name.
       if (token.is(tok::identifier) && e.sm.isWrittenInScratchSpace(e.sm.getSpellingLoc(token.getLocation())))
         e.model.shorteningExcludedNames.insert(spelling);
-      static const std::set<std::string,std::less<>> observable = {
-        "typeid", "__func__", "__FUNCTION__", "__PRETTY_FUNCTION__", "source_location", "__builtin_FUNCTION"
-      };
-      if (observable.contains(spelling)) e.model.shorteningRefused = "observable names: " + spelling;
+      if (shorteningObservesNames(spelling)) e.model.shorteningRefused = "observable names: " + spelling;
     }
     // Keywords carry identifier info too; annotation and literal tokens don't.
     if (!token.isAnnotation() && !token.isLiteral()) {

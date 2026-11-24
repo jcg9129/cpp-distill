@@ -497,7 +497,11 @@ struct Pipeline {
         keepMarkers(result.pruningModel ? "no checked pruned artifact" : "no parse");
       if ((options.compactWhitespace || options.shortenNames) && result.compactWhitespace.empty())
         keepWhitespace(result.lineMarkers.starts_with("kept: ") ? result.lineMarkers.substr(6) : "no checked pruned artifact");
-      if (options.shortenNames && result.shortenNames.empty()) keepShortenNames(result.compactWhitespace.starts_with("kept: ") ? result.compactWhitespace.substr(6) : "no checked compact artifact");
+      if (options.shortenNames && result.shortenNames.empty()) {
+        if (result.pruningModel && result.pruningModel->shorteningRefused.starts_with("observable names:"))
+          keepShortenNames(result.pruningModel->shorteningRefused);
+        else keepShortenNames(result.compactWhitespace.starts_with("kept: ") ? result.compactWhitespace.substr(6) : "no checked compact artifact");
+      }
       if (result.verification == "target") result.assumptions.insert("A4");
       result.exitCode = options.strict && (result.artifact != "pruned" || result.verification != "target") ? 3 : 0;
       result.resultLine = "distill: wrote " + result.artifact + " (" + result.verification + "), runtime " + result.runtime;

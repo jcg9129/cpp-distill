@@ -102,7 +102,7 @@ void inject(const ProcessSpec& spec, const std::string& fault) {
 // Compile the exact compact and shortened/fallback bytes independently of the
 // pipeline's sample gate. This catches candidates accepted only as extensions.
 void compareShortened(const std::filesystem::path& cwd, const CompileCommand& command,
-                     std::string_view compact, std::string_view shortened) {
+                     std::string_view compact, std::string_view shortened, std::string_view input = {}) {
   auto layout = [](std::string_view source) {
     const auto scan = take(scanDirectives(source));
     std::string gaps; std::size_t end = 0;
@@ -114,6 +114,7 @@ void compareShortened(const std::filesystem::path& cwd, const CompileCommand& co
     gaps += source.substr(end); return gaps;
   };
   check(layout(compact) == layout(shortened),"shortening changed compact layout or non-identifier bytes");
+  write(cwd / "regression.in",std::string(input));
   std::vector<ProcessResult> outputs;
   for (const auto& [name,bytes] : std::vector<std::pair<std::string,std::string_view>>{
       {"regression-compact",compact},{"regression-shortened",shortened}}) {
@@ -125,6 +126,7 @@ void compareShortened(const std::filesystem::path& cwd, const CompileCommand& co
     const auto built = take(runProcess(build));
     check(!built.exitCode && !built.signal && !built.timedOut,"regression build failed: " + built.stderrText);
     ProcessSpec run; run.cwd = cwd; run.argv = {pathToUtf8(program)}; run.timeout = std::chrono::seconds(10);
+    run.stdinFile = cwd / "regression.in";
     auto output = take(runProcess(run));
     check(!output.timedOut && !output.signal && !output.stdoutTruncated && !output.stderrTruncated,
           "regression run failed: " + output.stderrText);
@@ -161,6 +163,7 @@ int run(int argc, char** argv) {
   std::sort(dirs.begin(), dirs.end());
   for (const auto& dir : dirs) {
     const auto name = pathToUtf8(dir.filename());
+    if (const auto* filter = std::getenv("DISTILL_PIPELINE_CASE_FILTER"); filter && name.find(filter) == name.npos) continue;
     std::string caseDiagnostics, caseReport;
     try {
       const auto cwd = temp.path / dir.filename(); std::filesystem::create_directory(cwd);
@@ -203,6 +206,11 @@ int run(int argc, char** argv) {
       }
       auto command = words(uncomment(read(cwd / "cmd.txt")));
       check(!command.empty(), "empty cmd.txt"); command[0] = pathToUtf8(*gcc);
+      if (value("compiler") == "clang") {
+        const auto clang = resolveExecutable("clang++",cwd);
+        if (!clang.ok()) { std::cout << "SKIP " << name << ": Clang unavailable\n"; continue; }
+        command[0] = pathToUtf8(clang.value());
+      }
       std::optional<Profile> profile;
       if (value("profile") == "fixture") profile = fixture;
       else if (!value("profile").empty()) profile = take(lookupProfile(value("profile")));
@@ -440,11 +448,11 @@ int run(int argc, char** argv) {
         }
         if (value("compare-compact") == "yes") {
           check(builtInputs.contains("compact"),"missing compiled compact regression baseline");
-          compareShortened(cwd,cmd,builtInputs.at("compact"),result.bytes);
+          compareShortened(cwd,cmd,builtInputs.at("compact"),result.bytes,value("regression-input"));
         }
         if (!value("direct-shorten-names").empty()) {
-          // Some library/coroutine cases hit earlier pruning/position gates.
-          // Test final spelling on the whole program without removing families.
+          // Test the original compact program when resolution removes branches
+          // or earlier pruning/position gates prevent the final spelling pass.
           check(result.pruningModel.has_value(),"missing direct shortenNames configuration");
           PruningModel input; input.text = take(compactWhitespace(read(cwd / "main.cpp")));
           input.parseArgv = result.pruningModel->parseArgv; input.dialect = result.pruningModel->dialect;
@@ -460,13 +468,19 @@ int run(int argc, char** argv) {
           if (value("direct-shorten-names") == "observation") {
             check(shortened.namesKept.starts_with("semantic name observation:"),"missed direct semantic observation: " + shortened.namesKept);
             check(shortened.renames.empty(),"renamed observable names");
+          } else if (value("direct-shorten-names") == "observable" || value("direct-shorten-names") == "conditional") {
+            const auto reason = value("direct-shorten-names") == "observable" ? "observable names: " : "surviving conditional directive: #";
+            check(shortened.namesKept.starts_with(reason),"missed direct refusal: " + shortened.namesKept);
+            check(shortened.renames.empty() && shortened.text == input.text,"refusal changed compact bytes");
+            if (value("direct-shorten-names") == "observable")
+              check(model.shorteningRefused.starts_with("observable names: "),"worker missed observable builtin");
           } else {
             check(shortened.namesKept.empty(),"direct shortenNames unexpectedly refused shortening");
             for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"})
               check(!shortened.renames.contains(name),"renamed compiler protocol name: " + std::string(name));
             check(!shortened.renames.empty(),"direct shortenNames did not exercise shortening");
           }
-          compareShortened(cwd,cmd,input.text,shortened.text);
+          compareShortened(cwd,cmd,input.text,shortened.text,value("regression-input"));
         }
         diagnostic = result.diagnostic; bytes = result.bytes;
         if (code != 1)

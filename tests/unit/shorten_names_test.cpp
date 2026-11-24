@@ -55,9 +55,12 @@ TEST(shorten_names_preserves_all_layout_and_literal_bytes) {
   CHECK_EQ(take(shortenNamesSource(text,m)).text,text);
 }
 TEST(shorten_names_observable_names_keep_compact_bytes) {
-  for (const auto* name : {"typeid","__func__","__FUNCTION__","__PRETTY_FUNCTION__","source_location","__builtin_FUNCTION"}) {
+  for (const auto* name : {"typeid","__func__","__FUNCTION__","__PRETTY_FUNCTION__","source_location","__builtin_FUNCTION",
+      "__builtin_dump_struct","__builtin_FILE","__builtin_LINE","__builtin_COLUMN","__builtin_FILE_NAME",
+      "__builtin_FUNCSIG","__builtin_source_location","__builtin_sycl_unique_stable_name",
+      "__builtin_get_device_side_mangled_name","L__FUNCTION__","L__FUNCSIG__"}) {
     auto m = model(); const auto out = take(shortenNamesSource("int longestName; "+std::string(name)+";\n",m));
-    CHECK(out.renames.empty()); CHECK(out.namesKept.find(name) != out.namesKept.npos);
+    CHECK(out.renames.empty()); CHECK_EQ(out.namesKept,"observable names: " + std::string(name));
   }
   auto m = model(); m.shorteningRefused = "observable names: typeid";
   CHECK(take(shortenNamesSource("int longestName;\n",m)).renames.empty());
@@ -178,8 +181,71 @@ TEST(shorten_names_spliced_identifiers_keep_their_physical_lines) {
   CHECK(out.renames.empty()); CHECK_EQ(out.text,text);
 }
 
-TEST(shorten_names_literal_prefix_collision_fails_the_invariant) {
+TEST(shorten_names_literal_prefixes_are_never_allocated) {
+  const std::set<std::string> prefixes = {"L","u","U","u8","R","LR","uR","UR","u8R"};
+  for (const auto* original : {"Looooo","uaaaaa","Uaaaaa","Raaaaa","LoooooRaaaaa",
+       "uaaaaaRaaaaa","UaaaaaRaaaaa","u8Raaaaa"}) {
+    const auto out = take(shortenNamesSource("int " + std::string(original) + ";",model()));
+    CHECK(out.renames.contains(original));
+    CHECK(!prefixes.contains(out.renames.at(original)));
+  }
   auto m = model();
-  const std::string text = "#define M Loooo\"literal\"\n";
-  CHECK(!shortenNamesSource(text,m).ok());
+  m.shorteningExcludedNames = {"ua","uaa","uaaa","u1","u2","u3","u4","u5","u6","u7"};
+  CHECK_EQ(take(shortenNamesSource("int uaaaaa;",m)).renames.at("uaaaaa"),"u9");
+  const std::string text = "#define IGNORE(...) 0\nint main(){return IGNORE(Looooo\"x\");}\n";
+  const auto out = take(shortenNamesSource(text,model()));
+  CHECK_EQ(out.renames.at("Looooo"),"Lo");
+  CHECK(take(shortenNamesInvariant(text,out.text,out.renames)));
+  // Keep the independent invariant even though the allocator avoids prefixes.
+  CHECK(!shortenNamesInvariant("Looooo\"x\"", "L\"x\"",{{"Looooo","L"}}).ok());
+}
+
+TEST(shorten_names_surviving_conditionals_keep_every_byte) {
+  for (const auto* directive : {"if 0","ifdef ENABLE","ifndef ENABLE","elif 0","elifdef ENABLE",
+       "elifndef ENABLE","else","endif"}) {
+    const std::string text = "#" + std::string(directive) + "\nint long_identifier;\n";
+    const auto out = take(shortenNamesSource(text,model()));
+    CHECK(out.renames.empty()); CHECK_EQ(out.text,text);
+    CHECK(out.namesKept.starts_with("surviving conditional directive: #"));
+  }
+  const std::string text = "#define STR(x) #x\n#define OPEN_STRINGIZE STR(\n#if 0\n"
+      "const char* text=OPEN_STRINGIZE long_identifier);\n#endif\n"
+      "int long_identifier=7; int main(){return long_identifier;}\n";
+  const auto out = take(shortenNamesSource(text,model()));
+  CHECK_EQ(out.text,text); CHECK(out.renames.empty());
+  CHECK_EQ(out.namesKept,"surviving conditional directive: #if");
+}
+
+TEST(shorten_names_allocator_skips_keywords_without_dialect_or_source_inventory) {
+  auto m = model();
+  // None of these candidate keywords occurs in the input or worker inventory.
+  auto out = take(shortenNamesSource("int aenode,aseme,typeoffoo,restrictxx;",m));
+  CHECK_EQ(out.renames.at("aenode"),"aeno");
+  CHECK(!out.renames.contains("aseme"));
+  CHECK(out.renames.at("typeoffoo") != "typeof");
+  m.shorteningExcludedNames = {"typf","typeo","rstr","restr","restri","restric"};
+  out = take(shortenNamesSource("int typeoffoo,restrictxx;",m));
+  CHECK_EQ(out.renames.at("typeoffoo"),"typeoff");
+  CHECK_EQ(out.renames.at("restrictxx"),"rstr1");
+  m.shorteningExcludedNames = {"typf_unql","typeof_unql","typeof_unqua","hlf"};
+  out = take(shortenNamesSource("int typeof_unqualooo,halfooo;",m));
+  CHECK_EQ(out.renames.at("typeof_unqualooo"),"typeof_unqualo");
+  CHECK_EQ(out.renames.at("halfooo"),"halfo");
+  m.shorteningExcludedNames = {"_cdcl"};
+  CHECK_EQ(take(shortenNamesSource("int _cdeclxx;",m)).renames.at("_cdeclxx"),"_cdcl1");
+  for (const auto* keyword : {"and","and_eq","asm","bitand","bitor","compl","not","not_eq",
+       "or","or_eq","xor","xor_eq","typeof","typeof_unqual","restrict","char8_t",
+       "consteval","constinit","co_await","co_return","co_yield","contract_assert"}) {
+    const auto kept = take(shortenNamesSource("int " + std::string(keyword) + ";",model()));
+    CHECK(kept.renames.empty());
+  }
+}
+
+TEST(shorten_names_ascii_case_and_non_ascii_bytes) {
+  const std::string text = "int INTEGER,ReadStreamMagnitude,\xc3\x89quantity_count;";
+  const auto out = take(shortenNamesSource(text,model()));
+  CHECK_EQ(out.renames.at("INTEGER"),"INT");
+  CHECK_EQ(out.renames.at("ReadStreamMagnitude"),"RdStrmMgnt");
+  CHECK(out.text.find("\xc3\x89") != out.text.npos);
+  CHECK(take(shortenNamesInvariant(text,out.text,out.renames)));
 }

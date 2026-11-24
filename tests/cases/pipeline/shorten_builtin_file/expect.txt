@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+shorten-names=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+direct-shorten-names=observable
+report=shorten-names: kept: observable names: __builtin_FILE

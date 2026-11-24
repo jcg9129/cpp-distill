@@ -334,7 +334,10 @@ Identifiers up to four characters and words containing digits (`uint32`,
 `float64`, `uint128`) stay unchanged. Each abbreviated word saves at least two
 characters; `Graph` stays readable as `Graph`. The dictionary lives in
 [`data/names/abbreviations.txt`](data/names/abbreviations.txt). Collisions lengthen
-word prefixes, then try a digit suffix. The compact line layout is preserved.
+word prefixes, then try a digit suffix. Keywords and literal encoding/raw prefixes
+are never allocated. The compact line layout is preserved. Name-observing builtins
+and any surviving conditional directives refuse shortening, since inactive macro
+arguments have no expansion-based exclusion audit.
 A15 assumes the library spelling inventory covers names the judge may use;
 `--no-assume=library-spelled-names` keeps names unchanged. Reports say
 `shorten-names: renamed=N spellings saved=B bytes` or

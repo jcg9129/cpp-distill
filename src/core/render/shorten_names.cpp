@@ -3,7 +3,6 @@
 #include "core/names/adl.h"
 #include "core/names/names.h"
 #include <algorithm>
-#include <cctype>
 #include <sstream>
 
 namespace distill {
@@ -21,17 +20,34 @@ const Names& keywords() {
       "operator or or_eq private protected public reflexpr register reinterpret_cast requires return short signed "
       "sizeof static static_assert static_cast struct switch synchronized template this thread_local throw true try "
       "typedef typeid typename union unsigned using virtual void volatile wchar_t while xor xor_eq final override "
-      "import module typeof typeof_unqual restrict contract_assert transaction_safe transaction_safe_dynamic defined __has_include __has_include_next "
+      "import module typeof typeof_unqual restrict half vec_step addrspace_cast contract_assert transaction_safe transaction_safe_dynamic defined __has_include __has_include_next "
       "__has_cpp_attribute __has_attribute __has_builtin __has_feature __has_extension __VA_ARGS__ __VA_OPT__ "
-      "define undef include include_next ifdef ifndef elif elifdef elifndef endif pragma error warning line "
-      "main _Pragma");
+      "define undef include include_next embed ifdef ifndef elif elifdef elifndef endif pragma error warning line "
+      "main _Pragma _Alignas _Alignof _Atomic _BitInt _Bool _Complex _Decimal32 _Decimal64 _Decimal128 "
+      "_Generic _Imaginary _Noreturn _Static_assert _Thread_local _Float16 _Float32 _Float32x _Float64 "
+      "_Float64x _Float128 _Float128x __int128 __float128 "
+      // Clang's single-underscore extension aliases are not all covered by
+      // isReserved(). Block them even when the current dialect disables them.
+      "_alignof _asm _cdecl _declspec _fastcall _finally _forceinline _inline _int8 _int16 _int32 _int64 "
+      "_leave _multiple_inheritance _pascal _ptr32 _ptr64 _restrict _stdcall _thiscall _try _unaligned "
+      "_uptr _uuidof _vectorcall _virtual_inheritance _w64");
     for (std::string s; in >> s;) out.insert(s);
     return out;
   }();
   return names;
 }
-bool start(unsigned char c) { return std::isalpha(c) || c == '_' || c >= 128; }
-bool rest(unsigned char c) { return start(c) || std::isdigit(c); }
+bool upper(unsigned char c) { return c >= 'A' && c <= 'Z'; }
+bool lower(unsigned char c) { return c >= 'a' && c <= 'z'; }
+char toLower(char c) { return upper(c) ? static_cast<char>(c + ('a'-'A')) : c; }
+char toUpper(char c) { return lower(c) ? static_cast<char>(c - ('a'-'A')) : c; }
+bool start(unsigned char c) { return upper(c) || lower(c) || c == '_' || c >= 128; }
+bool rest(unsigned char c) { return start(c) || (c >= '0' && c <= '9'); }
+bool literalPrefix(std::string_view name) {
+  // Complete encoding/raw prefixes only: these can fuse with an adjacent
+  // literal before macro expansion, even in an argument discarded by IGNORE.
+  return name == "L" || name == "u" || name == "U" || name == "u8" ||
+         name == "R" || name == "LR" || name == "uR" || name == "UR" || name == "u8R";
+}
 void words(std::string_view text, Names& out) {
   for (std::size_t i = 0; i < text.size();) {
     if (!start(text[i])) { ++i; continue; }
@@ -71,8 +87,6 @@ std::vector<Token> tokens(const ScanResult& s) {
 // Digits belong to their word, so uint32 and float64 are never abbreviated.
 std::vector<std::string> parts(std::string_view name) {
   std::vector<std::string> out;
-  const auto upper = [](char c) { return c >= 'A' && c <= 'Z'; };
-  const auto lower = [](char c) { return c >= 'a' && c <= 'z'; };
   for (std::size_t begin = 0; begin < name.size();) {
     auto end = begin+1;
     if (name[begin] == '_') {
@@ -103,7 +117,7 @@ std::string abbreviate(const std::string& word) {
     return out;
   }();
   std::string lower = word;
-  for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (auto& c : lower) c = toLower(c);
   std::string shortWord;
   if (const auto i = dictionary.find(lower); i != dictionary.end()) shortWord = i->second;
   else {
@@ -112,10 +126,10 @@ std::string abbreviate(const std::string& word) {
       if (std::string_view("aeiou").find(lower[i]) == std::string_view::npos) shortWord += lower[i];
   }
   if (shortWord.size()+2 > word.size()) return word;
-  if (std::all_of(word.begin(),word.end(),[](unsigned char c) { return std::isupper(c); })) {
-    for (auto& c : shortWord) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  } else if (std::isupper(static_cast<unsigned char>(word.front())))
-    shortWord.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(shortWord.front())));
+  if (std::all_of(word.begin(),word.end(),[](unsigned char c) { return upper(c); })) {
+    for (auto& c : shortWord) c = toUpper(c);
+  } else if (upper(word.front()))
+    shortWord.front() = toUpper(shortWord.front());
   return shortWord;
 }
 std::string join(const std::vector<std::string>& words) {
@@ -129,7 +143,7 @@ std::string readableName(const std::string& name, const Names& blocked) {
   const auto base = join(shortWords);
   if (base == name) return name;
   const auto available = [&](const std::string& candidate) {
-    return candidate.size()+2 <= name.size() && !blocked.contains(candidate) && !isReserved(candidate);
+    return candidate.size()+2 <= name.size() && !blocked.contains(candidate) && !isReserved(candidate) && !literalPrefix(candidate);
   };
   if (available(base)) return base;
   // Left-to-right rounds restore prefixes one letter at a time. Restore a word
@@ -184,6 +198,19 @@ std::vector<Signature> signature(std::string_view text, const RenameMap& map) {
   return out;
 }
 } // namespace
+bool shorteningObservesNames(std::string_view name) {
+  // Clang LanguageExtensions: dump-struct, source-location-builtins and
+  // sycl-unique-stable-name; GCC Other-Builtins: FUNCTION, FILE and LINE.
+  // Keep this shared by the raw artifact scan and the worker's expanded tokens.
+  static const Names observable = {
+    "typeid", "__func__", "__FUNCTION__", "__PRETTY_FUNCTION__", "source_location",
+    "__FUNCSIG__", "__FUNCDNAME__", "L__FUNCTION__", "L__FUNCSIG__",
+    "__builtin_dump_struct", "__builtin_FUNCTION", "__builtin_FUNCSIG",
+    "__builtin_FILE", "__builtin_FILE_NAME", "__builtin_LINE", "__builtin_COLUMN",
+    "__builtin_source_location", "__builtin_sycl_unique_stable_name", "__builtin_get_device_side_mangled_name"
+  };
+  return observable.contains(name);
+}
 Result<bool> shortenNamesInvariant(std::string_view compact, std::string_view candidate, const RenameMap& map) {
   try {
     const auto original = take(scanDirectives(compact));
@@ -211,7 +238,6 @@ Result<ShortenedSource> shortenNamesSource(std::string_view compact, const Pruni
     result.namesKept = model.shorteningRefused;
     if (!model.assumeLibrarySpelledNames) result.namesKept = "A15 library-spelled-names disabled";
     else if (!model.libraryMemberNamesComputed) return Error{"library-spelled identifier set was not computed"};
-    static const Names observable = {"typeid","__func__","__FUNCTION__","__PRETTY_FUNCTION__","source_location","__builtin_FUNCTION"};
     for (const auto& [name,fact] : model.judgeInitial) {
       excluded.insert(name);
       if (fact.definition) for (const auto& p : fact.definition->parameters) excluded.insert(p);
@@ -221,7 +247,7 @@ Result<ShortenedSource> shortenNamesSource(std::string_view compact, const Pruni
       const auto& t = all[i];
       // Keep identifiers spanning physical splices, preserving every line break.
       if (t.kind == TokenKind::identifier && compact.substr(t.begin,t.end-t.begin) != t.text) excluded.insert(t.text);
-      if (observable.contains(t.text)) result.namesKept = "observable names: " + t.text;
+      if (shorteningObservesNames(t.text)) result.namesKept = "observable names: " + t.text;
       if (t.kind == TokenKind::literal) literalNames(t.text,excluded);
       if (t.kind == TokenKind::number) {
         // Exponents and hex digits can precede a suffix; protect every possible
@@ -247,7 +273,7 @@ Result<ShortenedSource> shortenNamesSource(std::string_view compact, const Pruni
       else if (gnu && t.text == ")") --gnu;
       if (attribute || gnu) excluded.insert(t.text);
       if (t.text == "]" && i && all[i-1].text == "]" && attribute) --attribute;
-      if (t.text.find("__") != t.text.npos || (t.text.size() > 1 && t.text[0] == '_' && std::isupper(static_cast<unsigned char>(t.text[1])))) excluded.insert(t.text);
+      if (t.text.find("__") != t.text.npos || (t.text.size() > 1 && t.text[0] == '_' && upper(t.text[1]))) excluded.insert(t.text);
       // asm goto labels and compiler-interpreted names are conservatively kept
       // throughout each asm construct (strings were handled above).
       if (t.text == "asm" || t.text == "__asm" || t.text == "__asm__" || t.text == "_Pragma") {
@@ -255,6 +281,14 @@ Result<ShortenedSource> shortenNamesSource(std::string_view compact, const Pruni
       }
     }
     for (const auto& l : scan.lines) if (l.directive) {
+      const auto& directive = l.directive->name;
+      // Inactive macro arguments receive no expansion callbacks. Refuse the
+      // entire artifact rather than treating a partial exclusion audit as proof.
+      if (!result.namesKept.starts_with("surviving conditional directive:") &&
+          (directive == "if" || directive == "ifdef" || directive == "ifndef" ||
+          directive == "elif" || directive == "elifdef" || directive == "elifndef" ||
+          directive == "else" || directive == "endif"))
+        result.namesKept = "surviving conditional directive: #" + directive;
       const auto& t = l.tokens;
       if (l.directive->name == "pragma") for (const auto& x : t) if (x.kind == TokenKind::identifier) excluded.insert(x.text);
       if ((l.directive->name == "define" || l.directive->name == "undef") && t.size() > 2) excluded.insert(t[2].text);

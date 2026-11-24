@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+shorten-names=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+compare-compact=yes
+report=shorten-names: renamed=
+report.1=pruned with shortened names: passed
+absent=aenode
+contains=aseme
