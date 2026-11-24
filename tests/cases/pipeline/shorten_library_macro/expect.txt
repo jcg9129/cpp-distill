@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+shorten-names=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+report=shorten-names: renamed=
+report.1=pruned with shortened names: passed
+contains=size
+contains.1=value_type
+contains.2=begin
+contains.3=LOCAL_MACRO(parameterSpelling)
+contains.5=longCFunction
+contains.6=_longSuffix
+contains.7=longArgument +  longArgument
+absent=longCounter
+absent.1=LongContainer
+contains.8=longExpandedIdentifier

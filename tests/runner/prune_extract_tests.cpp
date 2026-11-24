@@ -1043,27 +1043,17 @@ int main(int argc, char** argv) {
       check(kept("storage"),"pointer destination dependency lost");
       check(!kept("unrelated"),"unrelated function retained");
     });
-    run("minify preprocessing physical invocation extents", [&] {
+    run("shorten names misnested stringizing arguments", [&] {
       Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
       ResolveResult flat; flat.text = "#define STRINGIZE(x) #x\n#define OPEN_STRINGIZE STRINGIZE(\n"
-          "const char* first=OPEN_STRINGIZE a + b);\nconst char* second=OPEN_STRINGIZE a + b);\nint main(){}\n";
-      auto input = take(preparePruning(c,{},flat)); input.minify = true;
+          "const char* first=OPEN_STRINGIZE longArgument + otherArgument);\nconst char* second=OPEN_STRINGIZE longArgument + otherArgument);\nint main(){}\n";
+      auto input = take(preparePruning(c,{},flat)); input.shortenNames = true;
       m = extracted(input,o);
-      for (const auto* variable : {"first=","second="}) {
-        const auto begin = m.text.find("OPEN_STRINGIZE",m.text.find(variable));
-        const auto end = m.text.find(')',begin)+1;
-        check(std::any_of(m.expansions.begin(),m.expansions.end(),[&](const auto& x) {
-          return x.hashOperator && x.offset == begin && x.invocationEnd == end;
-        }),"missing actual misnested invocation extent for " + std::string(variable));
-      }
-      const auto encoded = take(serializePruningModel(m));
-      const auto decoded = take(parsePruningModel(encoded));
-      check(decoded.expansions.size() == m.expansions.size(),"extent protocol roundtrip");
-      for (std::size_t i = 0; i < m.expansions.size(); ++i)
-        check(decoded.expansions[i].invocationEnd == m.expansions[i].invocationEnd,"lost invocation end");
+      check(m.shorteningExcludedNames.contains("longArgument") && m.shorteningExcludedNames.contains("otherArgument"),
+            "misnested stringizing arguments must keep their spellings");
     });
-    run("minify semantic library name observation", [&] {
-      const auto dir = temp.path / "minify-observation-system"; std::filesystem::create_directories(dir);
+    run("shortenNames semantic library name observation", [&] {
+      const auto dir = temp.path / "shortenNames-observation-system"; std::filesystem::create_directories(dir);
       { std::ofstream h(dir / "observed.h"); h <<
           "namespace std { struct type_info { const char* name() const; }; struct type_index {};"
           "struct source_location {}; struct stacktrace_entry {}; template<class...> struct basic_stacktrace {};"
@@ -1076,7 +1066,7 @@ int main(int argc, char** argv) {
       SearchDirectory d; d.path = dir; d.kind = IncludeKind::system; c.probe.searchLists.directories.push_back(d);
       auto audit = [&](std::string body) {
         ResolveResult flat; flat.text = "#include <observed.h>\n" + body;
-        auto input = take(preparePruning(c,{},flat)); input.minify = true;
+        auto input = take(preparePruning(c,{},flat)); input.shortenNames = true;
         m = extracted(input,o);
         check(m.disabledReasons.empty(),"semantic observation fixture did not parse");
       };
@@ -1092,11 +1082,11 @@ int main(int argc, char** argv) {
           "int main(){(void)&std::type_info::name;}",
           "int main(){(void)abi::current();}", "int main(){return abi::ordinary;}",
           "abi::integer value; int main(){}", "abi::category value; int main(){}"}) {
-        audit(body); check(m.minifyNamesRefused.starts_with("semantic name observation:"),
+        audit(body); check(m.shorteningRefused.starts_with("semantic name observation:"),
                           "missed semantic observation: " + std::string(body));
       }
       audit("struct type_info {}; struct type_index {}; struct any {int type(){return 7;}}; int main(){any x; return x.type()-7;}");
-      check(m.minifyNamesRefused.empty(),"source spelling confused with std declaration identity");
+      check(m.shorteningRefused.empty(),"source spelling confused with std declaration identity");
     });
     // --no-line-markers observations (docs/reviews/2026-11-18-no-line-markers.md).
     auto hasUse = [&](std::string_view what) {

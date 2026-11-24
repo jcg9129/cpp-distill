@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+shorten-names=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+contains=assert(x > 0)
+report=shorten-names: kept:
+report.1=line markers kept:
+excluded=x

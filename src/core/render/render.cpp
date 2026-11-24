@@ -681,10 +681,6 @@ Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* 
     for (auto offset : m.keepOffsets) if (auto mapped = out.mapOffset(offset)) p.keepOffsets.push_back(*mapped);
     for (auto a : m.annotations) if (auto mapped = out.mapOffset(a.offset)) { a.offset = *mapped; p.annotations.push_back(a); }
     for (auto e : m.expansions) if (auto mapped = out.mapOffset(e.offset)) {
-      if (e.invocationEnd) {
-        const auto stop = out.mapOffset(*e.invocationEnd-1);
-        e.invocationEnd = stop ? std::optional<std::size_t>{*stop+1} : std::nullopt;
-      }
       e.offset = *mapped; p.expansions.push_back(std::move(e));
     }
     p.positionUses.clear();

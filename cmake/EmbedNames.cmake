@@ -16,6 +16,11 @@ foreach(kind headers macros protocols compiler)
   endforeach()
   string(APPEND names_source "};\nextern const std::size_t ${kind}Count = sizeof(${kind}) / sizeof(${kind}[0]);\n")
 endforeach()
+# Readable shortening dictionary, embedded so installed binaries need no data files.
+set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/abbreviations.txt")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
+file(READ "${input}" abbreviations)
+string(APPEND names_source "extern const std::string_view abbreviations = R\"DISTILL(${abbreviations})DISTILL\";\n")
 # A2 identity registry: keep names and library coverage aligned and sorted.
 set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/identity-macros.txt")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")

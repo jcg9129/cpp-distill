@@ -1487,3 +1487,29 @@ The normal renderer recomputes markers for every surviving token/directive;
 position-observation gate. Both opt-outs together preserve the pre-change
 pruned bytes; the case runner's `--baseline <snapshot-directory>` mode verifies
 this on the original prune corpus, including expected refusals.
+
+## Readable identifier shortening
+
+`--shorten-names` opts into A15 `library-spelled-names` after checked pruning and
+compaction. It implies `--strip-comments --no-line-markers --compact-whitespace`.
+The renderer in `render/shorten_names.cpp` retains the compact line layout and
+replaces identifier tokens simultaneously, using the embedded dictionary in
+`data/names/abbreviations.txt`, case-aware word splitting, vowel dropping and a
+four-letter cap. Identifiers of length at most four and words containing digits
+stay unchanged; each abbreviated word must save at least two characters.
+`read_stream_magnitude` can become `rd_strm_mgnt`; `isUnsignedIntegral` can become
+`isUnsgIntg`. Collisions restore word prefixes in deterministic left-to-right
+rounds, then try a decimal suffix on the readable base, keeping the original
+when no candidate saves at least two bytes. All original spellings remain reserved.
+
+The exact compact artifact gets its own worker audit. Library names (including
+when A12 member pruning is disabled), compiler protocols, target/predefined
+macros, builtins, literal/attribute/pragma/asm names, C-linkage names and
+stringizing/pasting macro arguments remain protected. RTTI and semantic name
+observations refuse renaming. The token/directive/literal invariant, compilation
+and configured sample runs must pass before the candidate replaces the checked
+compact bytes. Failures report `shorten-names: kept: <why>`; success reports
+`shorten-names: renamed=N spellings saved=B bytes`. A15 appears only if a spelling
+changes. `--no-assume=library-spelled-names` retains every name while the implied
+compact layout still applies. The version-12 worker protocol rejects older models and carries the option and
+exclusion/refusal facts; no whitespace-minimization invocation extents are needed.

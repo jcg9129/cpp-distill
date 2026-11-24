@@ -40,7 +40,7 @@ if(TARGET distill)
     set_tests_properties(caide_${CASE_NAME} PROPERTIES TIMEOUT 120 LABELS caide)
   endforeach()
   add_test(NAME pipeline_cli COMMAND distill_pipeline_cases --cli $<TARGET_FILE:distill>)
-  # Includes independent compact/minified compile/run regressions.
+  # Includes independent compact/shortened compile/run regressions.
   set_tests_properties(pipeline_cli PROPERTIES TIMEOUT 300)
   add_test(NAME pipeline_pruning COMMAND distill_pipeline_cases --worker $<TARGET_FILE:distill_prune_worker>)
   set_tests_properties(pipeline_pruning PROPERTIES TIMEOUT 240)

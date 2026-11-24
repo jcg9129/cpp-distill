@@ -2,7 +2,7 @@
 #include "core/pipeline/pipeline.h"
 #include "core/report/report.h"
 #include "core/render/render.h"
-#include "core/render/minify.h"
+#include "core/render/shorten_names.h"
 #include "core/validate/preprocess.h"
 #include "core/path.h"
 #include "core/temporary.h"
@@ -138,7 +138,7 @@ struct Pipeline {
     PruningModel m; m.text = text; m.lineMap = lines; m.keepOffsets = keep; return m;
   }
   PruningModel strip(const PruningModel& m) {
-    if (!options.stripComments && !options.minify) return m;
+    if (!options.stripComments && !options.shortenNames) return m;
     auto rendered = take(renderSource(m,nullptr,true));
     take(renderingInvariant(m,nullptr,rendered.provenance.text));
     return std::move(rendered.provenance);
@@ -151,7 +151,7 @@ struct Pipeline {
     step("pruning analysis");
     try {
       auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
-      m.minify = options.minify;
+      m.shortenNames = options.shortenNames;
       m.assumeLibrarySpelledNames = options.assumeLibrarySpelledNames;
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
       m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
@@ -179,7 +179,7 @@ struct Pipeline {
       if (!result.retention->disabledReasons.empty()) return;
       if (options.noPrune) { result.diagnostic += "pruning disabled: --no-prune\n"; return; }
       step("render pruned");
-      auto rendered = take(renderSource(*result.pruningModel,&*result.retention,options.stripComments || options.minify));
+      auto rendered = take(renderSource(*result.pruningModel,&*result.retention,options.stripComments || options.shortenNames));
       result.retention->trimming = rendered.trimming;
       const auto& bytes = rendered.provenance.text;
       take(renderingInvariant(*result.pruningModel,&*result.retention,bytes));
@@ -193,7 +193,7 @@ struct Pipeline {
       result.checks.push_back({"pruned","passed",flatConfiguration,{}});
       result.artifact = "pruned"; result.bytes = bytes;
       result.assumptions.insert(result.retention->assumptions.begin(),result.retention->assumptions.end());
-      if (options.noLineMarkers || options.compactWhitespace || options.minify) unmark(rendered,path);
+      if (options.noLineMarkers || options.compactWhitespace || options.shortenNames) unmark(rendered,path);
     } catch (const Error& e) {
       if (e.message.starts_with("--keep ")) throw;
       result.runtime = flatRuntime;
@@ -230,7 +230,7 @@ struct Pipeline {
       result.checks.push_back({"pruned without line markers","passed",flatConfiguration,{}});
       result.bytes = bytes; result.lineMarkers = "omitted";
       result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
-      if (options.compactWhitespace || options.minify) compact(path,bytes);
+      if (options.compactWhitespace || options.shortenNames) compact(path,bytes);
     } catch (const Error& e) { failedUnmarked(e.message); }
     catch (const std::exception& e) { failedUnmarked(e.what()); }
   }
@@ -258,21 +258,21 @@ struct Pipeline {
       result.checks.push_back({"pruned with compact whitespace","passed",flatConfiguration,{}});
       result.bytes = bytes; result.compactWhitespace = "compacted";
       result.diagnostic += "whitespace compacted: no user code observes source positions (including columns)\n";
-      if (options.minify) minify(bytes);
+      if (options.shortenNames) shortenNames(bytes);
     } catch (const Error& e) { failedCompact(e.message,previousRuntime); }
     catch (const std::exception& e) { failedCompact(e.what(),previousRuntime); }
   }
-  void keepMinify(const std::string& why) {
-    result.minify = "kept: " + why;
-    result.diagnostic += "minify: " + result.minify + '\n';
+  void keepShortenNames(const std::string& why) {
+    result.shortenNames = "kept: " + why;
+    result.diagnostic += "shorten-names: " + result.shortenNames + '\n';
   }
-  void minify(const std::string& original) {
+  void shortenNames(const std::string& original) {
     const auto previousRuntime = result.runtime;
     try {
-      step("minify checks");
+      step("shorten-names checks");
       ResolveResult compactSource; compactSource.text = original;
       auto input = take(preparePruning(*flatConfiguration,{},compactSource,options.profile,{}));
-      input.minify = true;
+      input.shortenNames = true;
       input.assumeLibrarySpelledNames = options.assumeLibrarySpelledNames;
       input.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
       input.assumeInstantiationEffects = options.assumeInstantiationEffects;
@@ -283,28 +283,26 @@ struct Pipeline {
         result.processes.push_back({currentStep,spec}); return runner(spec);
       };
       const auto model = take(extractPruning(input,worker));
-      if (!model.disabledReasons.empty()) throw Error{"minify analysis: " + model.disabledReasons.front()};
-      const auto candidate = take(minifySource(original,model));
-      take(minifyInvariant(original,candidate.text,candidate.renames));
-      const auto path = work.path / "minified.cpp"; write(path,candidate.text);
-      auto program = build(*flatConfiguration,path,true,"minified");
+      if (!model.disabledReasons.empty()) throw Error{"shorten-names analysis: " + model.disabledReasons.front()};
+      const auto candidate = take(shortenNamesSource(original,model));
+      take(shortenNamesInvariant(original,candidate.text,candidate.renames));
+      if (!candidate.namesKept.empty()) { keepShortenNames(candidate.namesKept); return; }
+      const auto path = work.path / "shortened.cpp"; write(path,candidate.text);
+      auto program = build(*flatConfiguration,path,true,"shortened");
       compareRuns(runs["flat"],execute(*flatConfiguration,program));
       checkedBytes(path,candidate.text);
-      if (Clock::now() >= deadline) throw Error{"minify checks deadline exceeded"};
+      if (Clock::now() >= deadline) throw Error{"shorten-names checks deadline exceeded"};
       if (candidate.text.size() > original.size()) throw Error{"candidate grew"};
-      result.checks.push_back({"pruned with minify","passed",flatConfiguration,{}});
+      result.checks.push_back({"pruned with shortened names","passed",flatConfiguration,{}});
       result.bytes = candidate.text;
-      if (!candidate.namesKept.empty()) keepMinify("T2: " + candidate.namesKept + "; T1 applied");
-      else {
-        result.minify = "renamed=" + std::to_string(candidate.renames.size()) + " spellings saved=" + std::to_string(original.size()-candidate.text.size()) + " bytes";
-        result.diagnostic += "minify: " + result.minify + '\n';
-        if (!candidate.renames.empty()) result.assumptions.insert("A15");
-      }
+      result.shortenNames = "renamed=" + std::to_string(candidate.renames.size()) + " spellings saved=" + std::to_string(original.size()-candidate.text.size()) + " bytes";
+      result.diagnostic += "shorten-names: " + result.shortenNames + '\n';
+      if (!candidate.renames.empty()) result.assumptions.insert("A15");
     } catch (const Error& e) {
       result.runtime = previousRuntime;
-      result.checks.push_back({"pruned with minify",e.message,flatConfiguration,{}});
-      keepMinify(e.message);
-    } catch (const std::exception& e) { result.runtime = previousRuntime; keepMinify(e.what()); }
+      result.checks.push_back({"pruned with shortened names",e.message,flatConfiguration,{}});
+      keepShortenNames(e.message);
+    } catch (const std::exception& e) { result.runtime = previousRuntime; keepShortenNames(e.what()); }
   }
   void failedCompact(const std::string& message, const std::string& previousRuntime) {
     result.runtime = previousRuntime;
@@ -495,11 +493,11 @@ struct Pipeline {
       if (result.artifact == "raw") result.runtime = rawRuntime;
       if (result.artifact == "flat") prune(raw);
       else if (!options.keep.empty()) throw Error{"--keep " + options.keep.front() + ": requires a checked flat configuration"};
-      if ((options.noLineMarkers || options.compactWhitespace || options.minify) && result.lineMarkers.empty())
+      if ((options.noLineMarkers || options.compactWhitespace || options.shortenNames) && result.lineMarkers.empty())
         keepMarkers(result.pruningModel ? "no checked pruned artifact" : "no parse");
-      if ((options.compactWhitespace || options.minify) && result.compactWhitespace.empty())
+      if ((options.compactWhitespace || options.shortenNames) && result.compactWhitespace.empty())
         keepWhitespace(result.lineMarkers.starts_with("kept: ") ? result.lineMarkers.substr(6) : "no checked pruned artifact");
-      if (options.minify && result.minify.empty()) keepMinify(result.compactWhitespace.starts_with("kept: ") ? result.compactWhitespace.substr(6) : "no checked compact artifact");
+      if (options.shortenNames && result.shortenNames.empty()) keepShortenNames(result.compactWhitespace.starts_with("kept: ") ? result.compactWhitespace.substr(6) : "no checked compact artifact");
       if (result.verification == "target") result.assumptions.insert("A4");
       result.exitCode = options.strict && (result.artifact != "pruned" || result.verification != "target") ? 3 : 0;
       result.resultLine = "distill: wrote " + result.artifact + " (" + result.verification + "), runtime " + result.runtime;
@@ -519,7 +517,7 @@ struct Pipeline {
     if (!options.assumeUnobservedGuardMacros && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A14 unobserved-guard-macros (--no-assume=unobserved-guard-macros)\n";
     if (!options.assumeLibrarySpelledNames)
-      result.diagnostic += "minify assumption disabled: A15 library-spelled-names (--no-assume=library-spelled-names); T1 only\n";
+      result.diagnostic += "shorten-names assumption disabled: A15 library-spelled-names (--no-assume=library-spelled-names)\n";
     if (!options.assumeLibraryMacroValues)
       result.diagnostic += "resolution assumption disabled: A9 library-macro-values (--no-assume=library-macro-values); __cpp_lib_* facts retained\n";
     result.report = renderReport(result, command, options.profile);

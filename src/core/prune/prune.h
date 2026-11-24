@@ -62,8 +62,6 @@ struct PruneMacroExpansion {
   // within the same physical user invocation span: the replacement's spelling
   // may reach a stringize/paste operand. Conservative; see the D3d-4 review.
   bool hashOperator = false;
-  // Physical source extent supplied by PPCallbacks, not inferred from tokens.
-  std::optional<std::size_t> invocationEnd;
 };
 // Integer literal widths of the Clang parse target, reported by the worker.
 struct LiteralWidths {
@@ -88,10 +86,10 @@ struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
 struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
   bool assumeLibrarySpelledNames = true;
-  bool minify = false;
+  bool shortenNames = false;
   // Worker-collected spelling exclusions, including system macro parameters.
-  std::set<std::string, std::less<>> minifyExcludedNames;
-  std::string minifyNamesRefused;
+  std::set<std::string, std::less<>> shorteningExcludedNames;
+  std::string shorteningRefused;
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
   bool assumeUnspelledFunctions = true;

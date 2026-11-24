@@ -10,7 +10,7 @@ struct DistillOptions {
   bool noPrune = false, stripComments = false;
   bool assumeLibrarySpelledNames = true;
   // Implies comment stripping, marker omission and checked compaction.
-  bool minify = false;
+  bool shortenNames = false;
   bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   // Opt-in: omit generated #line markers from a pruned result when the parse
@@ -48,7 +48,7 @@ struct PipelineResult {
   // With compactWhitespace: "compacted" or "kept: <first reason>".
   std::string compactWhitespace;
   // "renamed=N spellings saved=B bytes" or "kept: <why>".
-  std::string minify;
+  std::string shortenNames;
   std::optional<std::filesystem::path> keptWork;
   std::vector<ArtifactCheck> checks;
   ResolveResult resolution;

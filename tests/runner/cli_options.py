@@ -99,7 +99,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                 check('pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
-    with case('minify and A15 remain independent of member pruning'):
+    with case('shortenNames and A15 remain independent of member pruning'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('int main(){int longLocal=0;return longLocal;}\n')
         (root / 'sample.in').write_text('')
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                       ['--no-assume=library-spelled-members'],
                       ['--no-assume=library-spelled-members,library-spelled-names'], []]
         for flags in selections:
-            result = subprocess.run([binary, '--minify', *flags, '--verify-run', 'sample.in',
+            result = subprocess.run([binary, '--shorten-names', *flags, '--verify-run', 'sample.in',
                                      '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
                                     cwd=root, capture_output=True, text=True, timeout=120)
             check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
@@ -116,7 +116,9 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(('longLocal' in result.stdout) == disabled, result.stdout)
             assumptions = next(line for line in report.splitlines() if line.startswith('assumptions:'))
             check(('A15 library-spelled-names' in assumptions) == (not disabled), report)
-            check('pruned with minify: passed' in report, report)
+            check(('pruned with shortened names: passed' in report) == (not disabled), report)
+            if disabled:
+                check('shorten-names: kept: A15 library-spelled-names disabled' in report, report)
             check('runtime compared 1 samples' in report, report)
             check('#line' not in result.stdout, result.stdout)
         (root / 'main.cpp').write_bytes(saved)

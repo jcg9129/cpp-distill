@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+shorten-names=yes
+artifact=pruned
+verification=fixture
+exit=0
+configuration=local
+compare-compact=yes
+report=pruned with shortened names: passed
+absent=longUserVariable
+profile=fixture

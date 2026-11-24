@@ -4,7 +4,7 @@ set -euo pipefail
 
 usage() {
   echo 'Usage: ci/atl-sweep/sweep.sh <atl-dir> <distill> <out-dir> <judge>'
-  echo 'Measure plain, strip, nlm, compact and minify variants; write summary.tsv, reports and logs.'
+  echo 'Measure plain, strip, nlm, compact and short variants; write summary.tsv, reports and logs.'
 }
 
 die() {
@@ -34,8 +34,8 @@ distill_help=$(timeout 5 "$distill" --help 2>&1 || true)
 if [[ $distill_help == *--compact-whitespace* ]]; then
   variants+=(compact)
 fi
-if [[ $distill_help == *--minify* ]]; then
-  variants+=(minify)
+if [[ $distill_help == *--shorten-names* ]]; then
+  variants+=(short)
 fi
 failed=0
 for src in "${examples[@]}"; do
@@ -47,7 +47,7 @@ for src in "${examples[@]}"; do
     case "$variant" in
       strip) flags=(--strip-comments) ;;
       nlm) flags=(--strip-comments --no-line-markers) ;;
-      minify) flags=(--minify) ;;
+      short) flags=(--shorten-names) ;;
       compact) flags=(--strip-comments --no-line-markers --compact-whitespace) ;;
     esac
     mkdir -p -- "$out/$variant"
@@ -137,8 +137,8 @@ for variant in sys.argv[3:]:
         f'{sum(row["run_check"] == "FAIL" for row in group)} |'
     )
 
-if 'minify' not in sys.argv[3:]:
-    lines.extend(['', 'minify: skipped (binary lacks --minify)'])
+if 'short' not in sys.argv[3:]:
+    lines.extend(['', 'short: skipped (binary lacks --shorten-names)'])
 
 if 'compact' not in sys.argv[3:]:
     lines.extend(['', 'compact: skipped (binary lacks --compact-whitespace)'])

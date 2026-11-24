@@ -6,7 +6,7 @@
 #include "profile.h"
 #include "library_features.h"
 #include "core/render/render.h"
-#include "core/render/minify.h"
+#include "core/render/shorten_names.h"
 #include "core/prune/extract.h"
 #include <algorithm>
 #include <cstdlib>
@@ -99,13 +99,24 @@ void inject(const ProcessSpec& spec, const std::string& fault) {
     }
   }
 }
-// Compile the exact compact and minified/fallback bytes independently of the
+// Compile the exact compact and shortened/fallback bytes independently of the
 // pipeline's sample gate. This catches candidates accepted only as extensions.
-void compareMinified(const std::filesystem::path& cwd, const CompileCommand& command,
-                     std::string_view compact, std::string_view minified) {
+void compareShortened(const std::filesystem::path& cwd, const CompileCommand& command,
+                     std::string_view compact, std::string_view shortened) {
+  auto layout = [](std::string_view source) {
+    const auto scan = take(scanDirectives(source));
+    std::string gaps; std::size_t end = 0;
+    for (const auto& line : scan.lines) for (const auto& token : line.tokens) {
+      gaps += source.substr(end,token.begin-end);
+      gaps += token.kind == TokenKind::identifier ? "<identifier>" : std::string(source.substr(token.begin,token.end-token.begin));
+      end = token.end;
+    }
+    gaps += source.substr(end); return gaps;
+  };
+  check(layout(compact) == layout(shortened),"shortening changed compact layout or non-identifier bytes");
   std::vector<ProcessResult> outputs;
   for (const auto& [name,bytes] : std::vector<std::pair<std::string,std::string_view>>{
-      {"regression-compact",compact},{"regression-minified",minified}}) {
+      {"regression-compact",compact},{"regression-shortened",shortened}}) {
     const auto source = cwd / (name+".cpp"), program = cwd / (name+".exe");
     write(source,std::string(bytes));
     ProcessSpec build; build.cwd = cwd; build.timeout = std::chrono::seconds(20);
@@ -121,7 +132,7 @@ void compareMinified(const std::filesystem::path& cwd, const CompileCommand& com
   }
   check(outputs[0].exitCode == 0 && outputs[0].exitCode == outputs[1].exitCode &&
         outputs[0].stdoutText == outputs[1].stdoutText && outputs[0].stderrText == outputs[1].stderrText,
-        "minified program differs from compact program");
+        "shortened program differs from compact program");
 }
 #include "checker_cases.h"
 #include "caide_cases.h"
@@ -245,7 +256,7 @@ int run(int argc, char** argv) {
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (value("lines") == "no") s.argv.push_back("--no-line-markers");
         if (value("compact") == "yes") s.argv.push_back("--compact-whitespace");
-        if (value("minify") == "yes") s.argv.push_back("--minify");
+        if (value("shorten-names") == "yes") s.argv.push_back("--shorten-names");
         if (!value("no-assume").empty()) s.argv.push_back("--no-assume=" + value("no-assume"));
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
@@ -324,8 +335,8 @@ int run(int argc, char** argv) {
         // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
         DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
-        o.minify = value("minify") == "yes";
-        o.stripComments = value("strip") == "yes" || o.minify; o.noLineMarkers = value("lines") == "no" || o.minify; o.compactWhitespace = value("compact") == "yes" || o.minify;
+        o.shortenNames = value("shorten-names") == "yes";
+        o.stripComments = value("strip") == "yes" || o.shortenNames; o.noLineMarkers = value("lines") == "no" || o.shortenNames; o.compactWhitespace = value("compact") == "yes" || o.shortenNames;
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (!value("no-assume").empty()) {
           const auto flags = take(parseDistillOptions({"--no-assume=" + value("no-assume"),"main.cpp"}));
@@ -372,7 +383,7 @@ int run(int argc, char** argv) {
         auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
-            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp" && p.filename() != "minified.cpp") continue;
+            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp" && p.filename() != "shortened.cpp") continue;
             workPath = p.parent_path();
             check(std::filesystem::equivalent(workPath.parent_path(), workRoot), "work is outside requested temp root");
             check(spec.cwd == workPath, "generated check uses user cwd");
@@ -388,7 +399,7 @@ int run(int argc, char** argv) {
               if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
               if (p.filename() == "unmarked.cpp") builtInputs["unmarked"] = read(p);
               if (p.filename() == "compact.cpp") builtInputs["compact"] = read(p);
-              if (p.filename() == "minified.cpp") builtInputs["minified"] = read(p);
+              if (p.filename() == "shortened.cpp") builtInputs["shortened"] = read(p);
             }
           auto process = caseRunner(spec);
           // Test-only bad analysis: remove a user-pasted callee's positive AST
@@ -423,39 +434,39 @@ int run(int argc, char** argv) {
           check(skipped, "incompatible check compiler was not recorded as skipped");
         }
         if (!value("excluded").empty()) {
-          check(result.pruningModel.has_value(), "missing minify exclusion model");
+          check(result.pruningModel.has_value(), "missing shortenNames exclusion model");
           for (const auto& name : words(value("excluded")))
-            check(result.pruningModel->minifyExcludedNames.contains(name), "missing worker minify exclusion: " + name);
+            check(result.pruningModel->shorteningExcludedNames.contains(name), "missing worker shortenNames exclusion: " + name);
         }
         if (value("compare-compact") == "yes") {
           check(builtInputs.contains("compact"),"missing compiled compact regression baseline");
-          compareMinified(cwd,cmd,builtInputs.at("compact"),result.bytes);
+          compareShortened(cwd,cmd,builtInputs.at("compact"),result.bytes);
         }
-        if (!value("direct-minify").empty()) {
+        if (!value("direct-shorten-names").empty()) {
           // Some library/coroutine cases hit earlier pruning/position gates.
           // Test final spelling on the whole program without removing families.
-          check(result.pruningModel.has_value(),"missing direct minify configuration");
+          check(result.pruningModel.has_value(),"missing direct shortenNames configuration");
           PruningModel input; input.text = take(compactWhitespace(read(cwd / "main.cpp")));
           input.parseArgv = result.pruningModel->parseArgv; input.dialect = result.pruningModel->dialect;
-          input.minify = true;
+          input.shortenNames = true;
           PruneWorkerOptions options; options.executable = workerPath; options.temporaryRoot = cwd;
           auto model = take(extractPruning(input,options));
           // Protocols must survive without incidental header coverage.
           for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"}) {
-            model.libraryMemberNames.erase(name); model.minifyExcludedNames.erase(name);
+            model.libraryMemberNames.erase(name); model.shorteningExcludedNames.erase(name);
           }
-          check(model.libraryMemberNamesComputed,"missing direct minify library inventory");
-          const auto minified = take(minifySource(input.text,model));
-          if (value("direct-minify") == "observation") {
-            check(minified.namesKept.starts_with("semantic name observation:"),"missed direct semantic observation: " + minified.namesKept);
-            check(minified.renames.empty(),"renamed observable names");
+          check(model.libraryMemberNamesComputed,"missing direct shortenNames library inventory");
+          const auto shortened = take(shortenNamesSource(input.text,model));
+          if (value("direct-shorten-names") == "observation") {
+            check(shortened.namesKept.starts_with("semantic name observation:"),"missed direct semantic observation: " + shortened.namesKept);
+            check(shortened.renames.empty(),"renamed observable names");
           } else {
-            check(minified.namesKept.empty(),"direct minify unexpectedly refused T2");
+            check(shortened.namesKept.empty(),"direct shortenNames unexpectedly refused shortening");
             for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"})
-              check(!minified.renames.contains(name),"renamed compiler protocol name: " + std::string(name));
-            check(!minified.renames.empty(),"direct minify did not exercise T2");
+              check(!shortened.renames.contains(name),"renamed compiler protocol name: " + std::string(name));
+            check(!shortened.renames.empty(),"direct shortenNames did not exercise shortening");
           }
-          compareMinified(cwd,cmd,input.text,minified.text);
+          compareShortened(cwd,cmd,input.text,shortened.text);
         }
         diagnostic = result.diagnostic; bytes = result.bytes;
         if (code != 1)
@@ -470,9 +481,9 @@ int run(int argc, char** argv) {
           if (artifact == "raw") kind = "local";
           check(kind == value("configuration"), "wrong configuration kind: " + kind);
           // The returned bytes are exactly the checked output; no renderer runs afterwards.
-          const auto written = result.minify.starts_with("renamed=") || result.minify.find("T1 applied") != result.minify.npos ? std::string("minified") : result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
+          const auto written = result.shortenNames.starts_with("renamed=") ? std::string("shortened") : result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
           check(builtInputs.contains(written) && bytes == builtInputs.at(written), "returned bytes differ from compiled bytes");
-          check((value("lines") == "no" || value("compact") == "yes" || value("minify") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
+          check((value("lines") == "no" || value("compact") == "yes" || value("shorten-names") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
         } else {
           check(bytes.empty(), "failed pipeline returned output");
           if (value("kept") == "yes") {

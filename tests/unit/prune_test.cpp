@@ -65,10 +65,11 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-11 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-12 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
+  CHECK(!parsePruningModel("DISTILL-PRUNE-11 ").ok());
   const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
   CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
   CHECK_EQ(r.policy,"D3e, without instantiation-effects");
@@ -441,18 +442,18 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
   CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
-  CHECK(!parsePruningModel("DISTILL-PRUNE-11").ok());
+  CHECK(!parsePruningModel("DISTILL-PRUNE-12").ok());
   b.m.families[0].edges = {100}; CHECK(!computeRetention(b.m).ok()); b.m.families[0].edges.clear();
   b.m.families[1].ranges = b.m.families[0].ranges; CHECK(!computeRetention(b.m).ok());
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-11 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-12 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-11 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-12 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-11 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-12 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());
@@ -803,14 +804,14 @@ TEST(prune_pp_trimming_worker_identity) {
   }
 }
 
-TEST(prune_minify_and_a15_worker_identity) {
+TEST(prune_shortenNames_and_a15_worker_identity) {
   Model b; b.add("main","int main(){}");
-  b.m.minify = true; b.m.minifyExcludedNames = {"macroParameter"};
-  b.m.minifyNamesRefused = "observable names: typeid";
+  b.m.shortenNames = true; b.m.shorteningExcludedNames = {"macroParameter"};
+  b.m.shorteningRefused = "observable names: typeid";
   const auto assumed = serializePruningModel(b.m).value();
-  CHECK(parsePruningModel(assumed).value().minify);
-  CHECK_EQ(parsePruningModel(assumed).value().minifyExcludedNames,b.m.minifyExcludedNames);
-  CHECK_EQ(parsePruningModel(assumed).value().minifyNamesRefused,b.m.minifyNamesRefused);
+  CHECK(parsePruningModel(assumed).value().shortenNames);
+  CHECK_EQ(parsePruningModel(assumed).value().shorteningExcludedNames,b.m.shorteningExcludedNames);
+  CHECK_EQ(parsePruningModel(assumed).value().shorteningRefused,b.m.shorteningRefused);
   test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
   o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
     ProcessResult response; response.exitCode = 0; response.stdoutText = assumed; return response;
@@ -818,6 +819,6 @@ TEST(prune_minify_and_a15_worker_identity) {
   b.m.assumeLibrarySpelledNames = false;
   CHECK(!parsePruningModel(serializePruningModel(b.m).value()).value().assumeLibrarySpelledNames);
   CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
-  b.m.assumeLibrarySpelledNames = true; b.m.minify = false;
+  b.m.assumeLibrarySpelledNames = true; b.m.shortenNames = false;
   CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
 }

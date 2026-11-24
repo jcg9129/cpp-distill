@@ -108,7 +108,7 @@ must include the target's C/C++ standard headers and libraries.
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
 | `--no-line-markers` | Omit generated `#line` markers from a `pruned` result when the analysis proves no user code observes source positions (`__LINE__`, `__FILE__`, `__builtin_LINE`, `assert` without `NDEBUG`, call-site default arguments, …); otherwise they stay and the report says `line markers kept: <why>`. |
-| `--minify` | Opt-in spelling and whitespace shrinking of a checked pruned artifact; implies `--strip-comments --no-line-markers --compact-whitespace`. Uses A15 `library-spelled-names` for consistent identifier shortening; `--no-assume=library-spelled-names` runs whitespace shrinking only. Observable names disable shortening; position observations or failed checks keep the checked artifact, with the reason in the report. |
+| `--shorten-names` | Opt-in readable identifier shortening of a checked pruned artifact; implies `--strip-comments --no-line-markers --compact-whitespace`. Keeps the compact line layout and uses A15 `library-spelled-names`; `--no-assume=library-spelled-names` keeps names unchanged. Observable names, position observations or failed checks keep the checked artifact, with the reason in the report. |
 | `--compact-whitespace` | Opt-in trimming of leading horizontal whitespace, trailing whitespace and empty lines; implies `--no-line-markers` and requires its proof that source positions (including columns) are unobserved. Preserves literal/comment contents and spliced logical lines. If refused, output stays unchanged and the report says `whitespace kept: <why>`. |
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
@@ -313,7 +313,7 @@ when this part of A9 is off.
 
 `--no-assume=<name>` accepts repeated flags and comma lists. The switchable
 names are `instantiation-effects` (A11), `library-spelled-members` (A12),
-`library-macro-values` (A9 standard macros), `unspelled-functions` (D3f),
+`library-spelled-names` (A15), `library-macro-values` (A9 standard macros), `unspelled-functions` (D3f),
 `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14).
 Unknown names are usage errors.
 
@@ -327,6 +327,18 @@ later identical spellings, excluding `cassert`/`assert.h` and scope-uncertain
 includes. It also removes unobserved generated once-guard defines under A14.
 The two trimming switches disable these rules independently; raw/flat bytes
 are unchanged. Markers preserve observed source positions.
+
+`--shorten-names` abbreviates words while preserving case and underscores:
+`read_stream_magnitude` → `rd_strm_mgnt`, `isUnsignedIntegral` → `isUnsgIntg`.
+Identifiers up to four characters and words containing digits (`uint32`,
+`float64`, `uint128`) stay unchanged. Each abbreviated word saves at least two
+characters; `Graph` stays readable as `Graph`. The dictionary lives in
+[`data/names/abbreviations.txt`](data/names/abbreviations.txt). Collisions lengthen
+word prefixes, then try a digit suffix. The compact line layout is preserved.
+A15 assumes the library spelling inventory covers names the judge may use;
+`--no-assume=library-spelled-names` keeps names unchanged. Reports say
+`shorten-names: renamed=N spellings saved=B bytes` or
+`shorten-names: kept: <why>`.
 
 ## Build, license and credits
 

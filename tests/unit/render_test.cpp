@@ -137,7 +137,6 @@ TEST(render_maps_all_offset_provenance) {
   auto m = source("// distill: keep\nint keep;\nint gone;\nint last;\n");
   m.keepOffsets = take(captureKeepOffsets(m.text)); m.annotations = {{m.keepOffsets.front(),0}};
   PruneMacroExpansion expansion; expansion.offset = m.text.find("last"); expansion.name = "last";
-  expansion.invocationEnd = expansion.offset+4;
   m.expansions.push_back(expansion);
   PruneFamily kept, gone; kept.ranges = {{m.text.find("int keep"),m.text.find("int gone")}};
   gone.ranges = {{m.text.find("int gone"),m.text.find("int last")}}; m.families = {kept,gone};
@@ -148,7 +147,6 @@ TEST(render_maps_all_offset_provenance) {
   CHECK_EQ(p.keepOffsets.front(),p.text.find("int keep"));
   CHECK_EQ(p.annotations.front().offset,p.keepOffsets.front());
   CHECK_EQ(p.expansions.front().offset,p.text.find("last"));
-  CHECK_EQ(p.expansions.front().invocationEnd.value(),p.text.find("last")+4);
   CHECK_EQ(p.families[0].ranges.front().begin,p.text.find("int keep"));
   CHECK(p.families[1].ranges.empty()); CHECK(!out.mapOffset(m.text.find("int gone")));
   CHECK_EQ(p.lineMap.back()->line,4u);

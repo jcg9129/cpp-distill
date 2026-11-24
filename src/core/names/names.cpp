@@ -18,7 +18,7 @@ extern const std::size_t identityCount;
 const std::string_view* extensionData(std::size_t index);
 std::size_t extensionCount(std::size_t index);
 }
-const std::set<std::string, std::less<>>& minifyCompilerNames() {
+const std::set<std::string, std::less<>>& shortenNamesCompilerNames() {
   static const std::set<std::string, std::less<>> names = [] {
     std::set<std::string, std::less<>> out;
     for (std::size_t i = 0; i < embedded::protocolsCount; ++i) out.emplace(embedded::protocols[i]);

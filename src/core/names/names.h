@@ -9,7 +9,7 @@
 
 namespace distill {
 std::vector<std::string> standardHeaders();
-const std::set<std::string, std::less<>>& minifyCompilerNames();
+const std::set<std::string, std::less<>>& shortenNamesCompilerNames();
 bool isStandardHeader(std::string_view headerName);
 bool isStandardMacroName(std::string_view name);
 bool isReserved(std::string_view name);
