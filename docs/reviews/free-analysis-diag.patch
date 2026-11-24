@@ -1,0 +1,1142 @@
+diff --git a/src/clang/prune_extract.cpp b/src/clang/prune_extract.cpp
+index 32bd0a6..506296a 100644
+--- a/src/clang/prune_extract.cpp
++++ b/src/clang/prune_extract.cpp
+@@ -26,6 +26,7 @@
+ #include "llvm/Support/raw_ostream.h"
+ #include "llvm/Support/VirtualFileSystem.h"
+ #include <algorithm>
++#include "core/prune/trim_diag.h"
+ #include <map>
+ #include <memory>
+ #include <set>
+@@ -60,6 +61,15 @@ bool scalarBuiltin(const Decl* d) {
+ }
+ struct Extraction {
+   PruningModel model;
++  std::ofstream diag;
++  std::set<std::string,std::less<>> diagHeaders,diagMacros,diagScanned;
++  void event(std::string_view kind, const Decl* d, clang::SourceLocation loc, FamilyId from, std::size_t sys, bool unevaluated=false) {
++    if(!diag.is_open() || !d)return;
++    auto at=user(loc)?offset(loc):noFamily;
++    auto key=user(d->getLocation())?offset(d->getLocation()):noFamily;
++    diag<<"{\"event\":"<<trim::q(kind)<<",\"from\":"<<from<<",\"sys\":"<<sys<<",\"target\":"<<owner(d)<<",\"key\":"<<key<<",\"at\":"<<at<<",\"uneval\":"<<unevaluated<<",\"declkind\":"<<trim::q(d->getDeclKindName())<<"}\n";
++  }
++
+   CompilerInstance& compiler;
+   SourceManager& sm;
+   std::map<const Decl*,FamilyId> owners;
+@@ -78,6 +88,7 @@ struct Extraction {
+   std::map<unsigned,clang::SourceLocation> noUniqueAddressSpellings;
+   std::set<unsigned> verifiedNoUniqueAddress;
+   explicit Extraction(PruningModel m, CompilerInstance& c) : model(std::move(m)), compiler(c), sm(c.getSourceManager()) {
++    if(!trim::prefix().empty())diag.open(trim::prefix()+".ast.jsonl");
+     auto scan = scanDirectives(model.text);
+     if (!scan.ok()) { disable("directive scan failure in flat.cpp: " + scan.error().message); return; }
+     for (const auto& l : scan.value().lines) if (!l.directive) tokens.insert(tokens.end(),l.tokens.begin(),l.tokens.end());
+@@ -567,6 +578,7 @@ public:
+   void finalToken(const clang::Token& token) {
+     libraryToken(token); // Full unpruned TU, before filtering to user expansions.
+     if (!e.user(token.getLocation())) return;
++    if(e.diag.is_open() && token.is(tok::identifier)) e.diag << "{\"event\":\"token\",\"at\":" << e.offset(token.getLocation()) << ",\"name\":" << trim::q(token.getIdentifierInfo()->getName().str()) << "}\n";
+     attributeToken(token);
+     // Keywords carry identifier info too; annotation and literal tokens don't.
+     if (!token.isAnnotation() && !token.isLiteral()) {
+@@ -602,6 +614,8 @@ public:
+   // inventory together with the union of all scanned library builds.
+   void collectLibraryMemberNames() {
+     if (!e.model.assumeLibrarySpelledMembers) return;
++    e.diagMacros=expandedLibraryMemberNames;
++    for(auto name:embeddedLibraryData().memberNames)e.diagScanned.emplace(name);
+     e.model.libraryMemberNames = expandedLibraryMemberNames;
+     for (auto name : embeddedLibraryData().memberNames) e.model.libraryMemberNames.emplace(name);
+     for (const auto& [key,file] : headerFiles) {
+@@ -620,7 +634,7 @@ public:
+         if (token.is(tok::raw_identifier)) {
+           // Decode escaped identifiers and line splices just as the parser does.
+           const auto* info = e.compiler.getPreprocessor().LookUpIdentifierInfo(token);
+-          if (info) e.model.libraryMemberNames.insert(info->getName().str());
++          if (info) { e.model.libraryMemberNames.insert(info->getName().str()); e.diagHeaders.insert(info->getName().str()); }
+           else e.model.memberDisabledReasons.push_back("unreadable identifier in system header: " + e.sm.getFilename(loc).str());
+         }
+         if (token.is(tok::unknown)) e.model.memberDisabledReasons.push_back("unrecognized token in system header: " + e.sm.getFilename(loc).str());
+@@ -787,8 +801,12 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
+       symbolRoot(symbol,"asm");
+     }
+   }
++  bool diagCandidate=false;
++  bool diagUneval=false;
++  void resolved(const Decl* d, clang::SourceLocation loc) { e.event("ref",d,loc,current,systemCurrent,diagUneval); }
+   void edge(const Decl* d) {
+     if (!d) return;
++    if(!diagCandidate)e.event("edge",d,{},current,systemCurrent,diagUneval);
+     // Builtin templates have no source declaration to retain. Their template
+     // arguments/result types are still traversed by type()/argument().
+     if (isa<BuiltinTemplateDecl>(d)) return;
+@@ -1117,19 +1135,43 @@ public:
+     if (isa<CoroutineBodyStmt>(s) || isa<CoawaitExpr>(s) || isa<CoyieldExpr>(s)) e.disable("unsupported coroutine machinery at " + s->getBeginLoc().printToString(e.sm));
+     return true;
+   }
++  void depEvent(std::string name,clang::SourceLocation loc) { if(e.diag.is_open()&&e.user(loc)) e.diag<<"{\"event\":\"dep\",\"from\":"<<current<<",\"at\":"<<e.offset(loc)<<",\"name\":"<<trim::q(name)<<"}\n"; }
++  bool TraverseStmt(Stmt* x) {
++    if(!x)return true;
++    bool saved=diagUneval;
++    if(isa<UnaryExprOrTypeTraitExpr,CXXNoexceptExpr,RequiresExpr,TypeTraitExpr>(x))diagUneval=true;
++    bool result=RecursiveASTVisitor::TraverseStmt(x);diagUneval=saved;return result;
++  }
++  bool VisitTypeTraitExpr(TypeTraitExpr* x) {
++    if(e.diag.is_open())for(unsigned i=0;i<x->getNumArgs();++i) {
++      auto t=x->getArg(i)->getType().getNonReferenceType();
++      if(auto*r=t->getAsCXXRecordDecl()) e.event("trait",r,x->getBeginLoc(),current,systemCurrent,true);
++    }
++    return true;
++  }
++  bool TraverseTypeLoc(TypeLoc t, bool qualifier=true) {
++    bool saved=diagUneval;
++    if(!t.isNull()&&isa<DecltypeType>(t.getType().getTypePtr()))diagUneval=true;
++    bool result=RecursiveASTVisitor::TraverseTypeLoc(t,qualifier);diagUneval=saved;return result;
++  }
+   bool VisitExpr(Expr* x) { type(x->getType()); return true; }
+-  bool VisitTypeLoc(TypeLoc t) { type(t.getType()); return true; }
+-  bool VisitDeclRefExpr(DeclRefExpr* x) { edge(x->getDecl()); return true; }
+-  bool VisitUsingShadowDecl(UsingShadowDecl* d) { edge(d->getTargetDecl()); return true; }
+-  bool VisitMemberExpr(MemberExpr* x) { edge(x->getMemberDecl()); return true; }
+-  bool VisitCXXConstructExpr(CXXConstructExpr* x) { edge(x->getConstructor()); return true; }
+-  bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr* x) { edge(x->getTemporary()->getDestructor()); return true; }
+-  bool VisitCXXDeleteExpr(CXXDeleteExpr* x) { edge(x->getOperatorDelete()); type(x->getDestroyedType()); return true; }
++  bool VisitTypeLoc(TypeLoc t) {
++    if(auto a=t.getAs<TypedefTypeLoc>())resolved(a.getTypePtr()->getDecl(),a.getNameLoc());
++    if(auto a=t.getAs<TagTypeLoc>())resolved(a.getDecl(),a.getNameLoc());
++    if(auto a=t.getAs<TemplateSpecializationTypeLoc>())resolved(a.getTypePtr()->getTemplateName().getAsTemplateDecl(),a.getTemplateNameLoc());
++    type(t.getType()); return true;
++  }
++  bool VisitDeclRefExpr(DeclRefExpr* x) { resolved(x->getDecl(),x->getLocation()); edge(x->getDecl()); return true; }
++  bool VisitUsingShadowDecl(UsingShadowDecl* d) { resolved(d->getTargetDecl(),d->getLocation()); edge(d->getTargetDecl()); return true; }
++  bool VisitMemberExpr(MemberExpr* x) { resolved(x->getMemberDecl(),x->getMemberLoc()); edge(x->getMemberDecl()); return true; }
++  bool VisitCXXConstructExpr(CXXConstructExpr* x) { resolved(x->getConstructor(),x->getLocation()); edge(x->getConstructor()); return true; }
++  bool VisitCXXBindTemporaryExpr(CXXBindTemporaryExpr* x) { resolved(x->getTemporary()->getDestructor(),x->getBeginLoc()); edge(x->getTemporary()->getDestructor()); return true; }
++  bool VisitCXXDeleteExpr(CXXDeleteExpr* x) { if(!x->getDestroyedType().isNull())if(auto*r=x->getDestroyedType()->getAsCXXRecordDecl())resolved(r->getDestructor(),x->getBeginLoc()); edge(x->getOperatorDelete()); type(x->getDestroyedType()); return true; }
+   bool VisitCXXNewExpr(CXXNewExpr* x) { edge(x->getOperatorNew()); edge(x->getOperatorDelete()); return true; }
+   bool VisitConceptSpecializationExpr(ConceptSpecializationExpr* x) { edge(x->getNamedConcept()); return true; }
+   bool VisitUnresolvedLookupExpr(UnresolvedLookupExpr* x) {
+     if (current != noFamily && !x->getQualifier()) e.model.families[current].dependentNames.insert(x->getName().getAsString());
+-    for (auto* d : x->decls()) edge(d);
++    diagCandidate=true; for (auto* d : x->decls()) edge(d); diagCandidate=false;
+     return true;
+   }
+   bool memberName(DeclarationName name) {
+@@ -1137,12 +1179,12 @@ public:
+       e.model.families[current].dependentNames.insert(name.getAsString());
+     return true;
+   }
+-  bool VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr* x) { return memberName(x->getMember()); }
++  bool VisitCXXDependentScopeMemberExpr(CXXDependentScopeMemberExpr* x) { depEvent(x->getMember().getAsString(),x->getMemberLoc()); return memberName(x->getMember()); }
+   bool VisitUnresolvedMemberExpr(UnresolvedMemberExpr* x) {
+-    for (auto* d : x->decls()) edge(d);
+-    return memberName(x->getMemberName());
++    diagCandidate=true; for (auto* d : x->decls()) edge(d); diagCandidate=false;
++    depEvent(x->getMemberName().getAsString(),x->getMemberLoc()); return memberName(x->getMemberName());
+   }
+-  bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { return memberName(x->getDeclName()); }
++  bool VisitDependentScopeDeclRefExpr(DependentScopeDeclRefExpr* x) { depEvent(x->getDeclName().getAsString(),x->getLocation()); return memberName(x->getDeclName()); }
+   // These names live on declarations, not expressions. In uninstantiated
+   // patterns a pasted identifier has neither a raw spelling nor a target edge.
+   bool VisitUnresolvedUsingValueDecl(UnresolvedUsingValueDecl* d) { return memberName(d->getDeclName()); }
+@@ -1241,6 +1283,13 @@ public:
+     for (std::size_t i = 0; i < systemPending.size(); ++i) {
+       systemCurrent = systems.at(systemPending[i]); TraverseDecl(const_cast<Decl*>(systemPending[i]));
+     }
++    if(e.diag.is_open())for(auto*d:systemPending) {
++      bool invalid=false;auto text=Lexer::getSourceText(CharSourceRange::getTokenRange(d->getSourceRange()),e.sm,e.compiler.getLangOpts(),&invalid);
++      std::set<std::string,std::less<>> names;
++      if(!invalid){auto ts=pruningIdentifiers(text.str());if(ts.ok())for(auto&t:ts.value())names.insert(t.text);}
++      auto*n=dyn_cast<NamedDecl>(d);
++      e.diag<<"{\"event\":\"system\",\"id\":"<<systems.at(d)<<",\"name\":"<<trim::q(n?n->getQualifiedNameAsString():d->getDeclKindName())<<",\"names\":";trim::strs(e.diag,names);e.diag<<"}\n";
++    }
+     systemCurrent = noFamily;
+   }
+ };
+@@ -1420,6 +1469,61 @@ public:
+     return true;
+   }
+ };
++
++class TrimDeclarations final : public RecursiveASTVisitor<TrimDeclarations> {
++ Extraction& e;
++public:
++ explicit TrimDeclarations(Extraction& x):e(x){}
++ bool shouldVisitTemplateInstantiations()const{return true;}
++ bool shouldVisitImplicitCode()const{return true;}
++ void clause(const Expr*x){if(!x||!e.diag.is_open())return;auto r=e.range(x->getSourceRange());if(r)e.diag<<"{\"event\":\"requires\",\"begin\":"<<r->begin<<",\"end\":"<<r->end<<"}\n";}
++ bool VisitRequiresExpr(RequiresExpr*x){clause(x);return true;}
++ bool VisitFunctionDecl(FunctionDecl*f){clause(f->getTrailingRequiresClause().ConstraintExpr);return true;}
++ bool VisitTemplateDecl(TemplateDecl*t){clause(t->getTemplateParameters()->getRequiresClause());return true;}
++ bool VisitDecl(Decl*d){
++  if(!e.diag.is_open()||!e.user(d->getBeginLoc()))return true;
++  const auto*n=dyn_cast<NamedDecl>(d);auto r=e.range(d->getSourceRange());if(!r)return true;
++  std::string category;
++  if(isa<FieldDecl>(d)||(isa<VarDecl>(d)&&d->getDeclContext()->isRecord()))category="data";
++  else if(isa<TypedefNameDecl,UsingDecl,UsingDirectiveDecl,NamespaceAliasDecl,UsingEnumDecl>(d))category="alias";
++  else if(isa<EnumDecl>(d))category="enum";
++  else if(isa<StaticAssertDecl>(d))category="assert";
++  else if(isa<ConceptDecl>(d))category="concept";
++  else if(isa<VarDecl>(d))category="variable";
++  else if(isa<RecordDecl,AccessSpecDecl,NamespaceDecl>(d))category="scaffold";
++  else if(isa<FunctionDecl>(d))category="free";
++  if(category.empty()&&n)category="binding";
++  if(category.empty())return true;
++  std::string kind;bool used=false,referenced=false,virtualness=false;
++  if(auto*f=dyn_cast<FunctionDecl>(d)){
++   used=f->isUsed();referenced=f->isReferenced();
++   if(auto*c=dyn_cast<CXXConstructorDecl>(f)){
++    if(c->isCopyOrMoveConstructor())kind="copy/move ctor";
++    else if(c->isDefaultConstructor())kind="default ctor";
++    else if(c->getMinRequiredArguments()<=1&&c->getNumParams()>=1)kind=c->isExplicit()?"ctor-explicit":"ctor-implicit-converting";
++    else kind="multi-arg ctor";
++   }else if(isa<CXXDestructorDecl>(f))kind="destructor";
++   else if(auto*c=dyn_cast<CXXConversionDecl>(f))kind=c->isExplicit()?"conversion-explicit":"conversion-implicit";
++   else if(isa<CXXDeductionGuideDecl>(f))kind="deduction guide";
++   else if(auto*m=dyn_cast<CXXMethodDecl>(f);m&&(m->isCopyAssignmentOperator()||m->isMoveAssignmentOperator()))kind="copy/move assignment";
++   else if(f->isOverloadedOperator()){
++    auto op=f->getOverloadedOperator();
++    if(op==OO_Call)kind="operator()";
++    else if(op==OO_EqualEqual||op==OO_ExclaimEqual||op==OO_Less||op==OO_Greater||op==OO_LessEqual||op==OO_GreaterEqual||op==OO_Spaceship)kind="operator-comparison";
++    else if(op==OO_Plus||op==OO_Minus||op==OO_Star||op==OO_Slash||op==OO_Percent||op==OO_Caret||op==OO_Amp||op==OO_Pipe||op==OO_Tilde||op==OO_PlusPlus||op==OO_MinusMinus||op==OO_LessLess||op==OO_GreaterGreater||op==OO_PlusEqual||op==OO_MinusEqual||op==OO_StarEqual||op==OO_SlashEqual||op==OO_PercentEqual||op==OO_CaretEqual||op==OO_AmpEqual||op==OO_PipeEqual||op==OO_LessLessEqual||op==OO_GreaterGreaterEqual)kind="operator-arithmetic";
++    else kind="operator-other";
++    if(op==OO_LessLess||op==OO_GreaterGreater)for(auto*p:f->parameters())if(p->getType().getAsString().find("stream")!=std::string::npos)kind="operator-stream";
++   }
++   if(auto*m=dyn_cast<CXXMethodDecl>(f)){virtualness=m->isVirtual();if(kind.empty()&&virtualness)kind="virtual";}
++  }
++  bool hidden=false, externC=false, literal=false;
++  if(auto*f=dyn_cast<FunctionDecl>(d)){hidden=f->getFriendObjectKind()!=Decl::FOK_None;externC=f->isExternC();literal=f->getDeclName().getNameKind()==DeclarationName::CXXLiteralOperatorName;}
++  e.diag<<"{\"event\":\"functionmeta\",\"key\":"<<(e.user(d->getLocation())?e.offset(d->getLocation()):noFamily)<<",\"hidden\":"<<hidden<<",\"externC\":"<<externC<<",\"literal\":"<<literal<<"}\n";
++  bool local=false;for(auto*c=d->getLexicalDeclContext();c;c=c->getParent())if(c->isFunctionOrMethod())local=true;
++  e.diag<<"{\"event\":\"decl\",\"key\":"<<(e.user(d->getLocation())?e.offset(d->getLocation()):noFamily)<<",\"owner\":"<<e.owner(d)<<",\"begin\":"<<r->begin<<",\"end\":"<<r->end<<",\"category\":"<<trim::q(category)<<",\"kind\":"<<trim::q(kind)<<",\"name\":"<<trim::q(n?n->getQualifiedNameAsString():d->getDeclKindName())<<",\"implicit\":"<<d->isImplicit()<<",\"used\":"<<used<<",\"referenced\":"<<referenced<<",\"virtual\":"<<virtualness<<",\"local\":"<<local<<"}\n";
++  return true;
++ }
++};
+ class Consumer final : public ASTConsumer {
+   Extraction& e;
+ public:
+@@ -1448,6 +1552,10 @@ public:
+     Dependencies dependencies(e); dependencies.run();
+     Positions positions(e); // Whole user TU, independent of family discovery.
+     for (auto* d : context.getTranslationUnitDecl()->decls()) if (e.user(d->getLocation())) positions.TraverseDecl(d);
++    if(e.diag.is_open()) {
++      TrimDeclarations(e).TraverseDecl(context.getTranslationUnitDecl());
++      e.diag<<"{\"event\":\"inventory\",\"headers\":";trim::strs(e.diag,e.diagHeaders);e.diag<<",\"macros\":";trim::strs(e.diag,e.diagMacros);e.diag<<",\"scanned\":";trim::strs(e.diag,e.diagScanned);e.diag<<"}\n";
++    }
+     NameExpressions(e).TraverseDecl(context.getTranslationUnitDecl()); // Whole TU, no filtering.
+     for (auto [d,id] : e.declarations) {
+       for (auto r : e.model.families[id].ranges) for (auto m : e.macroInvocations)
+diff --git a/src/core/pipeline/pipeline.cpp b/src/core/pipeline/pipeline.cpp
+index 05611c5..6703348 100644
+--- a/src/core/pipeline/pipeline.cpp
++++ b/src/core/pipeline/pipeline.cpp
+@@ -6,6 +6,7 @@
+ #include "core/path.h"
+ #include "core/temporary.h"
+ #include <algorithm>
++#include "core/prune/trim_diag.h"
+ #include <fstream>
+ 
+ namespace distill {
+@@ -174,6 +175,11 @@ struct Pipeline {
+       if (options.noPrune) { result.diagnostic += "pruning disabled: --no-prune\n"; return; }
+       step("render pruned");
+       auto rendered = take(renderSource(*result.pruningModel,&*result.retention,options.stripComments));
++      if (!trim::prefix().empty()) {
++        std::ofstream o(trim::prefix()+".render.json");
++        o<<"{\"text\":"<<trim::q(rendered.provenance.text)<<",\"copied\":[";
++        bool first=true;for(auto c:rendered.copied){if(!first)o<<',';first=false;o<<'['<<c.input.begin<<','<<c.input.end<<','<<c.output<<']';}o<<"]}";
++      }
+       const auto& bytes = rendered.provenance.text;
+       take(renderingInvariant(*result.pruningModel,&*result.retention,bytes));
+       take(staticNameInvariant(*result.pruningModel,*result.retention,bytes));
+diff --git a/src/core/prune/prune.cpp b/src/core/prune/prune.cpp
+index edbc6bb..7fd39f1 100644
+--- a/src/core/prune/prune.cpp
++++ b/src/core/prune/prune.cpp
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ #include "core/prune/prune.h"
++#include "core/prune/trim_diag.h"
+ #include "core/names/adl.h"
+ #include "core/names/names.h"
+ #include "core/library/library.h"
+@@ -418,6 +419,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
+     if (u.family == noFamily) system(u.entity,noFamily);
+     else systemUses[u.family].push_back(u.entity);
+   }
++  std::ofstream effectDiag; if(!trim::prefix().empty()) effectDiag.open(trim::prefix()+".effects.jsonl");
+   // D3d-7: retaining a template does not retain its instantiation triggers.
+   // Reverse the *potential* dependency graph over all text, including dead
+   // declarations and patterns, rather than just Clang's seen instantiations.
+@@ -464,6 +466,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
+     while (!effects.empty()) {
+       const auto id = effects.front(); effects.pop();
+       const auto cause = effectCause[id];
++      if(effectDiag.is_open()) effectDiag<<"{\"id\":"<<id<<",\"cause\":"<<cause<<"}\n";
+       if (id < n) {
+         const auto& f = m.families[id];
+         // A6 bounds names, not which library instantiations dispatch to them.
+diff --git a/src/core/report/prune.cpp b/src/core/report/prune.cpp
+index c632df1..f1a9534 100644
+--- a/src/core/report/prune.cpp
++++ b/src/core/report/prune.cpp
+@@ -3,11 +3,13 @@
+ #include "core/names/adl.h"
+ #include "core/library/library.h"
+ #include <iomanip>
++#include "core/prune/trim_diag.h"
+ #include <numeric>
+ #include <sstream>
+ namespace distill {
+ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResult& r) {
+   if (m.families.size() != r.families.size()) return Error{"pruning report model/result mismatch"};
++  trim::dump(m,r);
+   std::ostringstream out;
+   out << "pruning analysis (does not certify an artifact)\npolicy: " << r.policy
+       << "\nADL registry: " << r.registryVersion << ' ' << r.registryDigest << "\ndialect coverage: " << r.dialect << "\nparse configuration:";
+diff --git a/src/core/prune/trim_diag.h b/src/core/prune/trim_diag.h
+new file mode 100644
+index 0000000..bb62bad
+--- /dev/null
++++ b/src/core/prune/trim_diag.h
+@@ -0,0 +1,34 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++// Temporary analysis-only diagnostics; enabled only by DISTILL_TRIM_PREFIX.
++#pragma once
++#include "core/prune/prune.h"
++#include <cstdlib>
++#include <fstream>
++#include <sstream>
++namespace distill::trim {
++inline std::string q(std::string_view s) {
++ std::string o="\""; const char* hex="0123456789abcdef";
++ for(unsigned char c:s) { if(c=='"'||c=='\\') {o+='\\';o+=c;} else if(c<32) {o+="\\u00";o+=hex[c>>4];o+=hex[c&15];} else o+=c; } return o+'"';
++}
++inline std::string prefix(){ const char* p=std::getenv("DISTILL_TRIM_PREFIX");return p?p:""; }
++inline void ranges(std::ostream& o,const std::vector<EditRange>& rs){o<<'[';bool first=true;for(auto r:rs){if(!first)o<<',';first=false;o<<'['<<r.begin<<','<<r.end<<']';}o<<']';}
++template<class T> inline void nums(std::ostream&o,const T&v){o<<'[';bool first=true;for(auto x:v){if(!first)o<<',';first=false;o<<x;}o<<']';}
++template<class T> inline void strs(std::ostream&o,const T&v){o<<'[';bool first=true;for(auto x:v){if(!first)o<<',';first=false;o<<q(x);}o<<']';}
++inline void dump(const PruningModel&m,const PruningResult&r){
++ auto p=prefix();if(p.empty())return;
++ std::ofstream proto(p+".model");auto encoded=serializePruningModel(m);if(encoded.ok())proto<<encoded.value();
++ std::ofstream o(p+".json");o<<"{\"text\":"<<q(m.text)<<",\"disabled\":";strs(o,r.disabledReasons);
++ o<<",\"memberDisabled\":";strs(o,r.memberDisabledReasons);o<<",\"families\":[";
++ for(std::size_t i=0;i<m.families.size();++i){if(i)o<<',';auto&f=m.families[i];auto&k=r.families[i];
++ o<<"{\"id\":"<<i<<",\"kind\":"<<int(f.kind)<<",\"label\":"<<q(f.label)<<",\"memberOf\":"<<f.memberOf<<",\"memberName\":"<<q(f.memberName)<<",\"blocker\":"<<q(f.memberBlocker)<<",\"ranges\":";ranges(o,f.ranges);
++ o<<",\"associated\":";nums(o,f.associatedTypes);o<<",\"callables\":";strs(o,f.callableNames);o<<",\"initialCause\":"<<k.initialCause;
++ o<<",\"edges\":";nums(o,f.edges);o<<",\"deps\":";strs(o,f.dependentNames);o<<",\"names\":";strs(o,f.names);
++ o<<",\"root\":"<<q(f.root)<<",\"pin\":"<<q(f.pinned)<<",\"never\":"<<q(f.neverRemoved)<<",\"effect\":"<<q(f.instantiationEffect)<<",\"kept\":"<<k.kept<<",\"reason\":"<<q(k.reason)<<",\"cause\":"<<k.cause<<'}';}
++ o<<"],\"unions\":[";bool first=true;for(auto[a,b]:m.unions){if(!first)o<<',';first=false;o<<'['<<a<<','<<b<<']';}
++ o<<"],\"systems\":[";first=true;for(auto&s:m.systemEntities){if(!first)o<<',';first=false;o<<"{\"label\":"<<q(s.label)<<",\"users\":";nums(o,s.userEdges);o<<",\"systems\":";nums(o,s.systemEdges);o<<'}';}
++ o<<"],\"uses\":[";first=true;for(auto s:m.systemUses){if(!first)o<<',';first=false;o<<'['<<s.family<<','<<s.entity<<']';}
++ o<<"],\"lines\":[";first=true;for(auto s:m.lineMap){if(!first)o<<',';first=false;if(s)o<<'['<<q(s->file)<<','<<s->line<<']';else o<<"null";}
++ o<<"],\"directives\":";ranges(o,m.sourceDirectives);o<<",\"markers\":";ranges(o,m.generatedMarkers);o<<",\"library\":";strs(o,m.libraryMemberNames);
++ o<<",\"tokens\":[";auto ts=pruningIdentifiers(m.text);first=true;if(ts.ok())for(auto&t:ts.value()){if(!first)o<<',';first=false;o<<'['<<t.begin<<','<<t.end<<','<<q(t.text)<<']';}o<<"]}";
++}
++} // namespace distill::trim
+diff --git a/.checks/free/README.txt b/.checks/free/README.txt
+new file mode 100644
+index 0000000..c517303
+--- /dev/null
++++ b/.checks/free/README.txt
+@@ -0,0 +1,65 @@
++Analysis only, production a653b6c (3fac677 changes documentation only), ATL 5b14f2d.
++All generated artifacts, tool temporary files, packages and SDK files stay inside
++this worktree; the explicitly supplied ATL clone is read-only. No credentials.
++Apply docs/reviews/free-analysis-diag.patch only temporarily. It reuses the
++2026-11-22 diagnostics and adds PP token names, hidden-friend/C-linkage/literal
++metadata, association provenance and actual reverse potential-effect visits.
++No retention rule is changed.
++
++Use TMPDIR=$PWD/.checks/free/tmp throughout; mkdir -p that path and
++.checks/trim/tmp measurements/trim. Download the public release archive
++https://github.com/jcg9129/cpp-distill/releases/download/llvm-23.1.5-1/llvm-sdk-23.1.5-1-linux-arm64.tar.xz
++and sibling SHA256SUMS to .checks/free/. Verify SHA-256 before extracting to
++.checks/free/sdk (archive has a sdk/ top directory). Expected:
++5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de
++
++Under ulimit -v 5700000, timeout 120 cmake -S . -B build -G Ninja
++ -DCMAKE_BUILD_TYPE=Release '-DCMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG'
++ -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
++ -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld
++ -DDISTILL_LLVM_DIR=$PWD/.checks/free/sdk/sdk/lib/cmake/llvm
++Then timeout 900 cmake --build build --parallel 2.
++Run the six focused CTest suites listed in the review with timeout 240,
++ctest --timeout 120 -j2. Build-baseline.py (timeout 400) builds an unmodified
++HEAD extractor separately, with the same compile/link flags; it uses only one
++compiler job, keeps production sources in place and makes no policy change.
++Build helpers artifacts.cpp and .checks/trim/replay.cpp using timeout 120,
++clang++ -std=c++20 -O1 -Isrc <source> build/libdistill_core.a -pthread -o <output>.
++Name executables .checks/free/artifacts and .checks/trim/replay respectively.
++Delete the SDK extraction and archive after these builds/tests.
++
++Cross packages: timeout 600 python3 .checks/trim/acquire-cross.py installs
++checksum-verified compiler/runtime/binutils/QEMU packages into .checks/trim/cross.
++Then timeout 300 python3 .checks/free/acquire13.py adds the five GCC 13 compiler
++and development-header packages (each verified against public Ubuntu indexes).
++Use .checks/free/g++13, chmod +x. GCC 13 is necessary here: the original GCC 15
++-O2 setup cannot satisfy the new captured FLT_EVAL_METHOD facts and demotes the
++geometry conditions. Do not waive refusals. No GCC 15 trial output enters results.
++
++Measurement stages, sequential, at most two ATL examples per stage:
++  timeout 1800 python3 .checks/trim/sweep.py
++While that runs, continue-analysis.py may inspect finished sidecars and update
++the review; it does not compile/run examples. Or after sweep completion run
++analyze.py then report.py. Progress records are partial, never extrapolated.
++  timeout 300 python3 .checks/trim/replay-run.py
++  timeout 600 python3 .checks/free/check.py
++
++The extractor excludes actual resolved references, compiler used/referenced
++flags, standalone root/pins and main, as the earlier method. Raw and PP identifier
++witnesses feed strict/relaxed simultaneous fixpoints. Production effect visits
++are read from diag.effects.jsonl, not inferred solely from first-reason reports.
++Byte ownership is mapped through diag.render.json into actual out.cpp; compact
++owned-byte weights use production compactWhitespace and checked copy spans.
++After all examples finish, run refine-local.py, enrich.py and legacy-close.py
++before candidate checks. This includes local comparator units inside an unused
++free function, traces retention provenance, and records lexical-only totals before
++the separate potential-effect barrier. Then run check.py --top15, replay-run.py,
++audit.py and report.py.
++
++Raw/recomputed results live in measurements/trim/*/free-analysis.json;
++measurements/trim/free-summary.json contains totals. Report.py regenerates the partial/final tables and appends hazards.md plus
++observed validation results once all 126 examples have been analyzed.
++
++Save this diagnostic patch before restoring all changed production .cpp files
++and deleting src/core/prune/trim_diag.h. Only the review and patch remain tracked
++changes. No commit or push.
+diff --git a/.checks/free/acquire13.py b/.checks/free/acquire13.py
+new file mode 100644
+index 0000000..b3eead3
+--- /dev/null
++++ b/.checks/free/acquire13.py
+@@ -0,0 +1,32 @@
++import urllib.request,lzma,pathlib,json,hashlib,subprocess
++root=pathlib.Path('.checks/free/cross13');root.mkdir(exist_ok=True)
++pkgs={}
++for comp in ['main','universe']:
++ p=root/(comp+'.xz')
++ if not p.exists(): p.write_bytes(urllib.request.urlopen('https://ports.ubuntu.com/ubuntu-ports/dists/questing/'+comp+'/binary-arm64/Packages.xz',timeout=60).read())
++ for block in lzma.decompress(p.read_bytes()).decode().split('\n\n'):
++  d={}
++  for line in block.splitlines():
++   if line and line[0]!=' ' and ': ' in line:
++    k,v=line.split(': ',1);d[k]=v
++  if 'Package'in d:pkgs[d['Package']]=d
++names=['g++-13-x86-64-linux-gnu','gcc-13-x86-64-linux-gnu','cpp-13-x86-64-linux-gnu','libgcc-13-dev-amd64-cross','libstdc++-13-dev-amd64-cross']
++records=[]
++for name in names:
++ d=pkgs[name]; print(name,d['Version'],d.get('Depends',''),flush=True)
++ p=root/(name+'.deb')
++ if not p.exists():subprocess.run(['curl','-fL','--retry','2','--max-time','120','-o',str(p),'https://ports.ubuntu.com/ubuntu-ports/'+d['Filename'].replace('+','%2B')],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
++ assert hashlib.sha256(p.read_bytes()).hexdigest()==d['SHA256']
++ import tarfile,io,os
++ dest=pathlib.Path('.checks/trim/cross/sysroot2').resolve()
++ data=subprocess.check_output(['dpkg-deb','--fsys-tarfile',str(p)],timeout=60)
++ with tarfile.open(fileobj=io.BytesIO(data)) as tf:
++  for m in tf:
++   target=dest/m.name
++   if m.issym() and m.linkname.startswith('/'):continue
++   if target.is_symlink() or (target.exists() and not target.is_dir()):target.unlink()
++   if m.issym() and m.linkname.startswith('/'):
++    m.linkname=os.path.relpath(dest/m.linkname.lstrip('/'),target.parent)
++   tf.extract(m,dest,filter='fully_trusted')
++ records.append({k:d[k]for k in ['Package','Version','Filename','SHA256']})
++(root/'packages.json').write_text(json.dumps(records,indent=2))
+diff --git a/.checks/free/g++13 b/.checks/free/g++13
+new file mode 100755
+index 0000000..4a1402c
+--- /dev/null
++++ b/.checks/free/g++13
+@@ -0,0 +1,4 @@
++#!/bin/sh
++root=$(CDPATH= cd -- "$(dirname -- "$0")/../trim/cross/sysroot2" && pwd)
++export LD_LIBRARY_PATH="$root/usr/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
++exec "$root/usr/bin/x86_64-linux-gnu-g++-13" --sysroot="$root" "$@"
+diff --git a/.checks/free/analyze.py b/.checks/free/analyze.py
+new file mode 100644
+index 0000000..0011195
+--- /dev/null
++++ b/.checks/free/analyze.py
+@@ -0,0 +1,173 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++"""Declaration pool and simultaneous lexical fixpoints; diagnostics only."""
++import pathlib,json,collections,bisect,re,array,subprocess,os,sys
++R=pathlib.Path.cwd();O=R/'measurements/trim';NO=2**64-1
++ADL={l.split()[1] for l in (R/'data/names/adl.txt').read_text().splitlines() if l and not l.startswith('#')}
++def merge(rs):
++ out=[]
++ for a,b in sorted(rs):
++  if out and a<=out[-1][1]:out[-1][1]=max(out[-1][1],b)
++  else:out.append([a,b])
++ return out
++def analyze(p):
++ summary=json.loads((p/'summary.json').read_text());assert summary['rc']==0 and 'wrote pruned' in summary['artifact'],summary
++ m=json.loads((p/'diag.json').read_text());fs=m['families'];text=m['text'].encode();n=len(text);kept={f['id'] for f in fs if f['kept']}
++ phys=array.array('i',[-1])*n
++ for f in fs:
++  for a,b in f['ranges']:phys[a:b]=array.array('i',[f['id']])*(b-a)
++ def alive(at):return at==NO or at<n and (phys[at]<0 or phys[at] in kept)
++ def user(at):return at<n and (phys[at]<0 or phys[at] in kept)
++ reached={s for f,s in m['uses'] if f in kept or f==NO};pending=list(reached)
++ while pending:
++  for s in m['systems'][pending.pop()]['systems']:
++   if s not in reached:reached.add(s);pending.append(s)
++ ds={};wrappers=collections.defaultdict(list);refs=collections.defaultdict(list);meta={};pp=[];decls=[];requires=[]
++ for line in (p/'diag.ast.jsonl').open():
++  e=json.loads(line);ev=e['event']
++  if ev=='token':
++   if user(e['at']):pp.append((e['at'],e['name']))
++  elif ev=='functionmeta':
++   k=e['key'];old=meta.setdefault(k,dict(hidden=False,externC=False,literal=False))
++   for a in old:old[a]|=e[a]
++  elif ev=='requires':requires.append((e['begin'],e['end']))
++  elif ev=='ref':
++   if ((e['from'] in kept and alive(e['at'])) or e['from']==NO and e['sys'] in reached):refs[e['key']].append(e)
++  elif ev=='decl':
++   if not e['implicit'] and user(e['key']):decls.append(e)
++   if e['category']=='binding':wrappers[e['key']].append(e)
++   if e['category']!='free' or e['implicit'] or e['local'] or e['owner'] not in kept or e['kind'] in ['deduction guide','operator()'] or '(lambda)' in e['name']:continue
++   f=fs[e['owner']]
++   if f['memberOf']!=NO:continue
++   k=e['key']
++   if k not in ds:ds[k]=dict(e)
++   else:
++    d=ds[k];d['used']|=e['used'];d['referenced']|=e['referenced'];d['begin']=min(d['begin'],e['begin']);d['end']=max(d['end'],e['end'])
++ # Immutable input -> actual marker-free artifact mapping (renderer-owned bytes -1).
++ rd=json.loads((p/'diag.render.json').read_text());marked=rd['text'].encode();positions=array.array('i',[-1])*len(marked)
++ for a,b,to in rd['copied']:positions[to:to+b-a]=array.array('i',range(a,b))
++ actual=(p/'out.cpp').read_bytes()
++ if actual!=marked:
++  mask=[];off=0
++  for l in marked.splitlines(keepends=True):
++   if not re.match(rb'^#line\b',l):mask.extend(range(off,off+len(l)))
++   off+=len(l)
++  assert bytes(marked[i] for i in mask)==actual
++  positions=array.array('i',(positions[i] for i in mask))
++ assert len(positions)==len(actual)
++ env=dict(os.environ,TMPDIR=str(R/'.checks/free/tmp'));env.pop('DISTILL_TRIM_PREFIX',None)
++ compact=json.loads(subprocess.check_output([str(R/'.checks/free/artifacts'),str(p/'out.cpp')],env=env,timeout=30))
++ nlmWeight=array.array('i',[0])*n;compactWeight=array.array('i',[0])*n
++ for at in positions:
++  if at>=0:nlmWeight[at]+=1
++ for a,b in compact['copied']:
++  for at in positions[a:b]:
++   if at>=0:compactWeight[at]+=1
++ starts=[0]+[x.end() for x in re.finditer(b'\n',text)]
++ def location(at):
++  li=bisect.bisect_right(starts,at)-1;loc=m['lines'][li] if li<len(m['lines']) else None
++  return (loc[0].split('/include/')[-1]+':'+str(loc[1])) if loc else str(at)
++ candidates=[];excluded=collections.Counter()
++ for k,d in ds.items():
++  f=fs[d['owner']]
++  if k in refs or d['used'] or d['referenced']:excluded['references/flags']+=1;continue
++  if d['name']=='main' or f['kind']==1 and (f['root'] or f['pin']):excluded['root/pin/main']+=1;continue
++  a,b=d['begin'],d['end']
++  for w in wrappers[k]:
++   if w['owner']==d['owner'] and w['begin']<=a and w['end']>=b:a=min(a,w['begin'])
++  if text[b:b+1]==b';':b+=1
++  spans=merge([[max(a,x),min(b,y)] for x,y in f['ranges'] if max(a,x)<min(b,y)])
++  if f['kind']==1:
++   spans=f['ranges']
++   # The written free declaration owns its local declarations even when D3e
++   # reports local comparator operators as separate internal units.
++   if len(spans)>1:spans=[[min(x for x,y in spans),max(y for x,y in spans)]]
++  # A structural hidden friend owns its own FriendDecl/template prefix.
++  # Leading attributes are included in standalone family ranges by production.
++  if not spans:continue
++  info=meta.get(k,{});name=d['name'].split('::')[-1]
++  why='hidden friend operator' if info.get('hidden') and d['kind'].startswith('operator') else 'operator' if d['kind'].startswith('operator') else 'hidden friend ADL name' if info.get('hidden') and name in ADL else 'ADL-listed name' if name in ADL else 'other' if info.get('externC') or info.get('literal') or d['kind'].startswith('conversion') else ''
++  companions=[c for c in fs if c['id']!=d['owner'] and any(x<=a and b<=y for x,y in spans for a,b in c['ranges']) and c['ranges']]
++  companionBytes=sum(sum(nlmWeight[a:b]) for c in companions for a,b in c['ranges'])
++  candidates.append(dict(companionBytes=companionBytes,companionRootPin=any(c['root'] or c['pin'] for c in companions),key=k,owner=d['owner'],name=d['name'],simple=name,location=location(k),ranges=spans,bytes=sum(sum(nlmWeight[x:y]) for x,y in spans),compact=sum(sum(compactWeight[x:y]) for x,y in spans),kind=d['kind'] or 'free function',hidden=info.get('hidden',False),exclusionA=why,productionReason=f['reason'],cause=f['cause'],familyLabel=f['label'],effect=f['effect'],root=f['root'],pin=f['pin']))
++ # Disjoint declaration ownership; declarations with several aliases are deduplicated by key.
++ own=array.array('i',[-1])*n
++ for i,d in enumerate(candidates):
++  d['id']=i
++  for a,b in d['ranges']:
++   assert all(v<0 or v==i for v in own[a:b]),(p.name,d,'overlap')
++   own[a:b]=array.array('i',[i])*(b-a)
++ raw=[(a,name,'raw') for a,b,name in m['tokens'] if user(a)]
++ tokens=raw+[(a,name,'preprocessed') for a,name in pp]
++ # (d): use the production reverse-effect reasons plus every family aggregated
++ # with a reverse-effect trigger. Full graph validation is recorded separately.
++ parent=list(range(len(fs)))
++ def find(i):
++  while parent[i]!=i:parent[i]=parent[parent[i]];i=parent[i]
++  return i
++ for a,b in m['unions']:parent[find(b)]=find(a)
++ effects={find(e['id']) for l in (p/'diag.effects.jsonl').read_text().splitlines() if (e:=json.loads(l))['id']<len(fs)}
++ blocked={d['id'] for d in candidates if find(d['owner']) in effects or d['root'] or d['pin'] or d.get('companionRootPin')}
++ def close(initial):
++  remaining=set(initial);rounds=0
++  while True:
++   outside={name for at,name,origin in tokens if own[at] not in remaining}
++   nxt={i for i in remaining if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',candidates[i]['simple']) or candidates[i]['simple'] not in outside}
++   rounds+=1
++   if nxt==remaining:return remaining,rounds
++   remaining=nxt
++ ids=set(range(len(candidates)));legacy,legacyRounds=close(ids);relaxed,relaxedRounds=close(ids-blocked);g1,strictRounds=close({i for i in ids-blocked if not candidates[i]['exclusionA']})
++ g2={i for i in relaxed if candidates[i]['exclusionA']};g4=relaxed-g1-g2;g3=ids-relaxed-blocked
++ assert ids==g1|g2|g3|g4|blocked
++ # Full external-name witnesses in strict kept text, with raw and PP provenance.
++ rawSpelling={a:name for a,b,name in m['tokens']}
++ byname=collections.defaultdict(list)
++ for at,name,origin in tokens:
++  if own[at] not in g1:byname[name].append((at,origin))
++ bykey=collections.defaultdict(list)
++ for d in decls:bykey[d['key']].append(d)
++ def witness(at,origin,name):
++  binding=bykey.get(at,[]);fam=fs[phys[at]] if phys[at]>=0 else None
++  if any(a<=at<b for a,b in m['directives']) or origin=='preprocessed' and rawSpelling.get(at)!=name:kind='macro'
++  elif any(a<=at<b for a,b in requires):kind='requires-clause'
++  elif any(d['category']=='free' and not d['local'] and d['owner']<len(fs) and fs[d['owner']]['memberOf']==NO and d['name'].split('::')[-1] in byname for d in binding):kind='same-name declaration/overload'
++  elif binding and any(d['local'] or d['category'] in ['data','binding'] or d['owner']<len(fs) and fs[d['owner']]['memberOf']!=NO for d in binding):kind='coincidental member/local/parameter'
++  elif fam and (fam['kind']==1 or fam['memberOf']!=NO or own[at]>=0 and candidates[own[at]]['hidden']):kind='kept body/signature (including uninstantiated)'
++  else:kind='kept structural/declaration text'
++  line=bisect.bisect_right(starts,at)-1;sample=text[starts[line]:starts[line+1] if line+1<len(starts) else n].decode().strip()
++  return dict(location=location(at),kind=kind,origin=origin,owner=phys[at],candidateOwner=own[at],text=sample[:240])
++ for d in candidates:
++  i=d['id'];d['group']='G1' if i in g1 else 'G2' if i in g2 else 'G3' if i in g3 else 'G4' if i in g4 else 'blocked c/d'
++  if i in g3 or i in g4:
++   ws=[];seen=set()
++   for at,origin in byname[d['simple']]:
++    if own[at]==i:continue
++    w=witness(at,origin,d['simple']);key=(w['location'],w['kind'],w['owner'])
++    if key not in seen:seen.add(key);ws.append(w)
++   d['witnesses']=ws
++  # Every current direct retention mechanism, independently of first-reason ordering.
++  rules=[]
++  if d['productionReason'].startswith('name:'):rules.append('name rule')
++  if d['productionReason']=='family aggregation':rules.append('family rule')
++  if d['productionReason'].startswith('associated with'):rules.append('association rule')
++  if d['productionReason'].startswith('AST:'):rules.append('AST closure')
++  if d['productionReason'].startswith('dependent name:'):rules.append('dependent-name closure')
++  if d['hidden']:rules.append('structural record ownership (D3e)')
++  if d['effect']:rules.append('potential effects')
++  if d['root'] or d['pin']:rules.append('root/pin')
++  d['productionRules']=rules or [d['productionReason']]
++  chain=[];seen=set();cause=d['owner']
++  while cause!=NO and cause not in seen:
++   seen.add(cause);f=fs[cause];chain.append(dict(id=cause,label=f['label'],reason=f['reason']));cause=f['cause']
++  d['retentionChain']=chain
++ # Materialize the exact G1 removal in nlm output, keeping line breaks to avoid token joins.
++ remove=array.array('b',[0])*n
++ for i in g1:
++  for a,b in candidates[i]['ranges']:remove[a:b]=array.array('b',[1])*(b-a)
++ candidate=bytes(c for c,at in zip(actual,positions) if at<0 or not remove[at] or c in b'\n\r')
++ (p/'g1.cpp').write_bytes(candidate)
++ result=dict(name=p.name,bytes=len(actual),compactBytes=compact['bytes'],pool=candidates,excluded=dict(excluded),strictRounds=strictRounds,relaxedRounds=relaxedRounds,effectFamilies=len(effects),legacyClosed=dict(declarations=len(legacy),nlm=sum(candidates[i]['bytes'] for i in legacy),compact=sum(candidates[i]['compact'] for i in legacy)),effectClosed=dict(declarations=len(legacy&blocked),nlm=sum(candidates[i]['bytes'] for i in legacy&blocked),compact=sum(candidates[i]['compact'] for i in legacy&blocked)),g1ArtifactGain=len(actual)-len(candidate))
++ (p/'free-analysis.json').write_text(json.dumps(result));return result
++if __name__=='__main__':
++ for p in sorted(O.iterdir()):
++  if (p/'summary.json').exists() and (not (p/'free-analysis.json').exists() or '--fresh' in sys.argv):
++   r=analyze(p);print(p.name,collections.Counter(d['group'] for d in r['pool']),flush=True)
+diff --git a/.checks/free/artifacts.cpp b/.checks/free/artifacts.cpp
+new file mode 100644
+index 0000000..92a2ad7
+--- /dev/null
++++ b/.checks/free/artifacts.cpp
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "core/render/render.h"
++#include "core/prune/trim_diag.h"
++#include <iostream>
++using namespace distill;
++int main(int argc,char**argv){if(argc!=2)return 2;std::ifstream f(argv[1]);std::string text{std::istreambuf_iterator<char>(f),{}};auto s=scanDirectives(text);if(!s.ok())return 3;std::vector<bool> p(text.size());auto protect=[&](size_t a,size_t b){std::fill(p.begin()+a,p.begin()+b,true);};for(auto c:s.value().comments)protect(c.begin,c.end);for(auto l:s.value().lines){for(auto t:l.tokens)if(t.kind==TokenKind::literal)protect(t.begin,t.end);for(size_t i=l.begin;i<l.end;++i)if(text[i]=='\\'){auto e=i+1;while(e<l.end&&(text[e]==' '||text[e]=='\t'||text[e]=='\r'||text[e]=='\v'||text[e]=='\f'))++e;if(e<l.end&&text[e]=='\n'){protect(l.begin,l.end);break;}}}
++std::string out;std::vector<EditRange> spans;auto h=[](char c){return c==' '||c=='\t'||c=='\v'||c=='\f'||c=='\r';};for(size_t b=0;b<text.size();){auto nl=text.find('\n',b);auto e=nl==text.npos?text.size():nl;auto a=b,z=e;while(a<z&&h(text[a])&&!p[a])++a;while(z>a&&h(text[z-1])&&!p[z-1])--z;if(a!=z||(e<text.size()&&p[e])){out.append(text.substr(a,z-a));spans.push_back({a,z});if(e<text.size()){out+='\n';spans.push_back({e,e+1});}}b=e+(e<text.size());}
++auto compact=compactWhitespace(text);if(!compact.ok()||compact.value()!=out)return 4;auto invariant=unmarkedInvariant(text,out);if(!invariant.ok())return 5;std::ofstream c(std::string(argv[1])+".compact");c<<out;std::cout<<"{\"bytes\":"<<out.size()<<",\"copied\":";trim::ranges(std::cout,spans);std::cout<<"}\n";}
+diff --git a/.checks/free/report.py b/.checks/free/report.py
+new file mode 100644
+index 0000000..27f8e4e
+--- /dev/null
++++ b/.checks/free/report.py
+@@ -0,0 +1,102 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import pathlib,json,collections,datetime
++R=pathlib.Path.cwd();O=R/'measurements/trim';P=R/'docs/reviews/2026-11-24-free-function-analysis.md'
++rs=[json.loads(p.read_text()) for p in sorted(O.glob('*/free-analysis.json'))];done=[json.loads(p.read_text()) for p in O.glob('*/summary.json')]
++ds=[dict(d,example=r['name']) for r in rs for d in r['pool']];total=sum(r['bytes'] for r in rs);compact=sum(r['compactBytes'] for r in rs)
++def stats(rows):return f"{len(rows):,} | {sum(d['bytes'] for d in rows):,} | {sum(d['compact'] for d in rows):,}"
++def table(rows):return '\n'.join(rows)+'\n'
++def grouped(rows):
++ out={}
++ for d in rows:
++  key=(d['location'],d['name']);v=out.setdefault(key,dict(location=key[0],name=key[1],bytes=0,compact=0,count=0,examples=set(),rules=collections.Counter(),reason=collections.Counter(),witnesses=[]))
++  v['bytes']+=d['bytes'];v['compact']+=d['compact'];v['count']+=1;v['examples'].add(d['example']);reason=d['productionReason'];chain=d.get('retentionChain',[])
++  if len(chain)>1:reason+=' ← '+chain[1]['label']
++  v['reason'][reason]+=1
++  for rule in d['productionRules']:v['rules'][rule]+=1
++  v['witnesses']+=d.get('witnesses',[])
++ return sorted(out.values(),key=lambda d:(-d['bytes'],d['location'],d['name']))
++def esc(s):return s.replace('|','\\|').replace('\n',' ')
++groups={g:[d for d in ds if d['group']==g] for g in ['G1','G2','G3','G4','blocked c/d']}
++text=f'''<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
++# Free functions and hidden friends: candidate-rule analysis
++
++2026-11-24. Analysis only. Production base `a653b6c`; checked-out `3fac677` differs only in documentation. Read-only ATL `5b14f2d` (126 examples). No production policy change, commit or push.
++
++**Progress: {len(done)}/126 generated, {len(rs)}/126 analyzed; {sum(bool(r.get('sample')) for r in done)}/{len(done)} standalone sample checks pass.** Updated {datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M:%S UTC')}. {'Final corpus totals.' if len(rs)==126 else 'Partial totals only; remaining examples are not extrapolated.'}
++
++## Measurement and method
++
++Reuses [the earlier free-function analysis](2026-11-22-trim-analysis.md#free-functions-and-hidden-friend-candidates) and its diagnostic patch. CSES `cses-gcc13-cpp23`, C++23, `-O2 --strip-comments --no-line-markers`, default A11/A12, following `ci/atl-sweep/sweep.sh`. Compiler: relocated x86_64 GCC 13.4, ARM64-hosted; standard-library headers are this compiler's headers, not a CSES GCC 13 capture. All inputs are read-only. Two examples maximum run concurrently; generation/compile/run caps 240/120/30 seconds, generation and compilation address-space cap 2,500,000 KiB. SDK LLVM 23.1.5 ARM64, release-SHA256SUMS verified: `5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de`; worktree-local download/extraction. Build `-O1 -DNDEBUG`, Clang 22.1.8, LLD, `-j2`, 5,700,000 KiB virtual-memory cap, hard configure/build caps 120/900 seconds. All six focused CTest suites pass (`unit`, `embedded_members`, `prune_extract_cases`, `prune_extract_models`, `member_pruning`, `member_review`). The SDK archive and extraction were deleted after the diagnostic/baseline builds and tests.
++
++The reused GCC 15.2 setup initially reproduced geometry flat fallbacks: its C++23 `-O2` checking configuration has no matching scanned standard-macro facts, so satisfaction demotes `FLT_EVAL_METHOD`. Those trial outputs are isolated in ignored `measurements/trim-gcc15/` and excluded here. GCC 13.4 matches the captured GCC-13 standard-macro input scope (`gcc-13@8255e82cc53970e5`); the complete measurement sweep was restarted with it. This is a compiler-configuration correction, with no gate waiver or policy modification.
++
++Counts are written declaration **occurrences across examples**, not unique header definitions. The initial pool excludes `main`, standalone root/pinned functions, any actual kept resolved reference (including unevaluated references and references from reached system entities), and any compiler used/referenced flag, conservatively including residual flags from discarded code. Template instances merge flags into their written declaration. Function-template headers, attributes and terminators belong to declarations; lambdas/function-local declarations do not become free-function candidates. Hidden friends are carved out of kept structural records. Function-local declarations belong to their enclosing written free declaration. Current main separately extracts three local comparator operators inside `locations_of` (`geometry/point_location.hpp:570`); the adapted group includes them, adding 309 nlm / 282 compact bytes, and removes the complete function. They are local member bodies, not non-member operator candidates under (a).
++
++The renderer copy map maps immutable input bytes to the actual nlm artifact; bytes absent from the artifact count zero. Compact counts map those same owned bytes through **production** `compactWhitespace`; the diagnostic checks exact output equality and the complete token/directive invariant. This is owned-byte attribution, excluding surrounding indentation, line breaks or renderer separators outside the declaration. Total nlm output: **{total:,} B**; compact: **{compact:,} B**. Whole-artifact deletion gains can differ slightly because separators/trivia survive or disappear.
++
++Starting with the whole pool, a simultaneous greatest-deletion fixpoint restores a declaration whenever its identifier name occurs outside the deletion set in retained raw tokens **or** the user preprocessed token stream. Both include uninstantiated bodies, signatures/defaults, constraints, macro definitions and arguments; strings/comments are excluded. A strict run additionally keeps operators, conversions, literal operators, guides, `main`, C-linkage and ADL-listed names. A relaxed run omits only these (a) exclusions. Production's actual reverse potential-effect traversal is recorded separately; any candidate in an effect-reachable aggregate or root/pin is excluded. Thus G1 satisfies the sketch within the existing A6/A7/A11 and preprocessing contracts; this is analysis, not a cross-library formal proof.
++
++## Recomputed pool
++
++| Partition | Declarations | Owned nlm B | Owned compact B |
++| --- | ---: | ---: | ---: |
++'''
++for g in groups:text+=f"| {g} | {stats(groups[g])} |\n"
++text+=f"| **Initial pool** | **{len(ds):,}** | **{sum(d['bytes'] for d in ds):,}** | **{sum(d['compact'] for d in ds):,}** |\n"
++if rs and all('legacyClosed' in r for r in rs):
++ legacy={k:sum(r['legacyClosed'][k] for r in rs) for k in ['declarations','nlm','compact']}
++ ec={k:sum(r['effectClosed'][k] for r in rs) for k in ['declarations','nlm','compact']}
++ text+=f"\nComparable lexical-only closure (before c/d): **{legacy['declarations']:,} declarations / {legacy['nlm']:,} nlm B / {legacy['compact']:,} compact B**. Of these, **{ec['declarations']:,} / {ec['nlm']:,} nlm B / {ec['compact']:,} compact B** are rejected by c/d. G1 is **{100*sum(d['bytes'] for d in groups['G1'])/legacy['nlm']:.2f}%** of this recomputed lexical-only nlm pool. The other c/d-rejected declarations also have external name witnesses.\n"
++text+='''
++G1 is the strict candidate gain. G2 consists of (a)-protected declarations in the relaxed lexical closure. G4 consists of ordinary helpers removed in the relaxed closure but kept by the strict one; their only remaining name users are within G2/G4. G3 is rejected even by the relaxed closure because identifiers remain elsewhere. These rows are disjoint; G1+G2+G4 is the lexical pool after the additional (c)/(d) barriers. The `blocked c/d` row is necessary: the four requested labels do not cover a declaration rejected by potential effects but not by (a) or (b). These bytes are not silently charged to G2 or G3. The earlier 185-declaration / 102,265-byte pool was lexical-only, so a fully comparable count must also include effect-rejected declarations that pass lexical closure; the comparable count is given above. G2 and G4 describe a hypothetical deletion group with the (a) barrier waived; a G2 owner can name a G4 helper.
++
++A hidden friend is **not by itself excluded by (a)**. The G2 hidden-friend rows below identify the actual reason (operator or ADL name).
++
++| G2 exclusion | Declarations | nlm B | compact B |
++| --- | ---: | ---: | ---: |
++'''
++for why in ['operator','hidden friend operator','ADL-listed name','hidden friend ADL name','other']:text+=f"| {why} | {stats([d for d in groups['G2'] if d['exclusionA']==why])} |\n"
++text+='\nG3 witness categories below are overlapping: one declaration can have both a same-name overload and a requires-expression witness.\n\n| External witness category | Declarations with witness | nlm B | compact B |\n| --- | ---: | ---: | ---: |\n'
++for kind in ['same-name declaration/overload','kept body/signature (including uninstantiated)','macro','requires-clause','coincidental member/local/parameter','kept structural/declaration text']:
++ rows=[d for d in groups['G3'] if any(w['kind']==kind for w in d.get('witnesses',[]))]
++ text+=f"| {kind} | {stats(rows)} |\n"
++for g in ['G1','G2','G3','G4','blocked c/d']:
++ text+=f'\n## {g}: top 15 written declarations\n\n| Source declaration | Occurrences | nlm B | compact B | Current reason / external witness |\n| --- | ---: | ---: | ---: | --- |\n'
++ for d in grouped(groups[g])[:15]:
++  reason='; '.join(f'{a} ({n})' for a,n in d['reason'].most_common())
++  if d['witnesses']:
++   kinds=collections.Counter(w['kind'] for w in d['witnesses']);w=d['witnesses'][0]
++   reason='; '.join(kinds)+f"; e.g. `{w['location']}`: `{w['text']}`"
++  text+=f"| `{d['location']}` `{esc(d['name'])}` | {d['count']} | {d['bytes']:,} | {d['compact']:,} | {esc(reason)} |\n"
++text+='\n## G1 current-rule totals\n\nThese are mutually exclusive first retention reasons, not extra gains. `Name rule` is production lexical closure; association is the explicit keep rule 3, under the requested “other” category.\n\n| Current production rule | Declarations | nlm B | compact B |\n| --- | ---: | ---: | ---: |\n'
++reasonGroups=collections.defaultdict(list)
++for d in groups['G1']:
++ reason=d['productionReason']
++ key='Name rule / lexical closure' if reason.startswith('name:') else 'Family aggregation' if reason=='family aggregation' else 'Other: signature/type association (rule 3)' if reason.startswith('associated with') else 'AST closure' if reason.startswith('AST:') else 'Dependent-name closure' if reason.startswith('dependent name:') else reason
++ reasonGroups[key].append(d)
++for key in ['Name rule / lexical closure','Family aggregation','Other: signature/type association (rule 3)','AST closure','Dependent-name closure','A6','Potential effects','Root/pin']:
++ text+=f"| {key} | {stats(reasonGroups.get(key,[]))} |\n"
++text+='\n## G1: why every declaration remains today\n\nThe recorded reason is production’s first retention cause; aggregation and structural ownership can supply additional independent obligations. This complete source-declaration inventory groups repeated example occurrences.\n\n| Declaration | Occurrences | nlm B | compact B | Production rule | Exact first reason |\n| --- | ---: | ---: | ---: | --- | --- |\n'
++for d in grouped(groups['G1']):text+=f"| `{d['location']}` `{esc(d['name'])}` | {d['count']} | {d['bytes']:,} | {d['compact']:,} | {'; '.join(d['rules'])} | {esc('; '.join(f'{a} ({n})' for a,n in d['reason'].most_common()))} |\n"
++text+='\n## Hazards and validation\n\n'
++if len(rs)==126:
++ text+=(R/'.checks/free/hazards.md').read_text()+'\n'
++ checks=[json.loads(p.read_text()) for p in O.glob('*/g1-check.json')]
++ replays=[json.loads(p.read_text()) for p in O.glob('*/replay.json')]
++ passed=sum(c.get('passCheck',False) for c in checks);replayPass=sum(c.get('compare')==0 for c in replays)
++ unique={ (d['location'],d['name']) for d in groups['G1'] }
++ checkedExamples={c['example'] for c in checks if c.get('passCheck')}
++ covered={(d['location'],d['name']) for d in groups['G1'] if d['example'] in checkedExamples}
++ text+=f"\nAll 126 baseline artifacts prune and pass standalone sample output. Production whitespace compaction and token/directive invariants pass for all 126 measured artifacts. G1 deletion artifacts: **{passed}/{len(checks)}** selected example checks pass, covering **{len(covered)}/{len(unique)}** distinct written G1 declarations (the 15 largest example groups plus additional source-declaration coverage). The compacted deletion artifacts compile at `-O2` and match samples; no claim of every target/library instantiation is made. Unmodified-production-extractor replay: **{replayPass}/{len(replays)}** model comparisons pass after sorting/deduplicating unordered graph edges; unordered-edge order does not change retention. Six focused CTest suites pass, as listed above.\n"
++ text+='\nRaw per-example declarations, complete retention chains, raw/preprocessed witnesses, actual effect visits, rendered/compact copy maps, counterfactuals and check results remain in ignored `measurements/trim/`. The diagnostic patch and reproduction commands are in [free-analysis-diag.patch](free-analysis-diag.patch). Production sources are restored; SDK archive/extraction deleted. Only this review and that patch remain as git changes; nothing was committed or pushed.\n'
++else:
++ text+='Hazard audit and additional validation are in progress; partial raw data is in ignored `measurements/trim/`.\n'
++g1=sum(d['bytes'] for d in groups['G1']);share=g1/total*100 if total else 0
++text+=f'\n## Verdict\n\nThe strict candidate rule removes **{g1:,} owned nlm bytes ({share:.3f}% of {total:,} output bytes)** in the {len(rs)} analyzed examples. '
++if len(rs)==126:
++ text+='It looks worth building as a narrow namespace-function refinement: all measured G1 gain comes from namespace functions and their internal bodies, and the largest example (`delaunay-quick`) loses 48,861 owned bytes. The main change is to type association and the family/lexical closure it seeds; this corpus supplies no reason to weaken A6, non-member operator protection or potential-effect barriers, and no additional gain from ordinary hidden friends.\n'
++else:text+='This remains a partial result; no final worth-building judgment yet.\n'
++
++P.write_text(text)
++summary=dict(examples=len(rs),total=total,compact=compact,groups={g:dict(declarations=len(v),nlm=sum(d['bytes'] for d in v),compact=sum(d['compact'] for d in v)) for g,v in groups.items()},g1Share=share)
++(R/'measurements/trim/free-summary.json').write_text(json.dumps(summary,indent=2));print(json.dumps(summary),flush=True)
+diff --git a/.checks/free/continue-analysis.py b/.checks/free/continue-analysis.py
+new file mode 100644
+index 0000000..5048d06
+--- /dev/null
++++ b/.checks/free/continue-analysis.py
+@@ -0,0 +1,12 @@
++import analyze,pathlib,json,subprocess,sys,time
++R=pathlib.Path.cwd();O=R/'measurements/trim';deadline=time.monotonic()+1800
++while time.monotonic()<deadline:
++ for p in sorted(O.glob('*/summary.json')):
++  q=p.parent
++  if (q/'free-analysis.json').exists():continue
++  s=json.loads(p.read_text())
++  if s['rc']==0 and 'wrote pruned' in s['artifact']:
++   r=analyze.analyze(q);print(q.name,len(r['pool']),flush=True)
++ subprocess.run([sys.executable,str(R/'.checks/free/report.py')],check=True,timeout=30)
++ if len(list(O.glob('*/free-analysis.json')))==126:break
++ time.sleep(15)
+diff --git a/.checks/free/enrich.py b/.checks/free/enrich.py
+new file mode 100644
+index 0000000..f6e3287
+--- /dev/null
++++ b/.checks/free/enrich.py
+@@ -0,0 +1,17 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import pathlib,json
++O=pathlib.Path('measurements/trim');NO=2**64-1
++for p in O.glob('*/free-analysis.json'):
++ r=json.loads(p.read_text());m=None
++ m=json.loads((p.parent/'diag.json').read_text());fs=m['families']
++ for d in r['pool']:
++  chain=[];seen=set();cause=d['owner']
++  while cause!=NO and cause not in seen:
++   seen.add(cause);f=fs[cause];chain.append(dict(id=cause,label=f['label'],reason=f['reason']));cause=f['cause']
++  d['retentionChain']=chain
++  if d.get('companionBytes') and not any('local D3e' in v for v in d['productionRules']):d['productionRules'].append(f"local D3e rule 1/family ownership ({d['companionBytes']} body B)")
++  for w in d.get('witnesses',[]):
++   ci=w.get('candidateOwner',-1)
++   if w['kind']=='kept structural/declaration text' and 0<=ci<len(r['pool']) and r['pool'][ci]['hidden']:w['kind']='kept body/signature (including uninstantiated)'
++   if w['kind']=='same-name declaration/overload' and 0<=w['owner']<len(fs) and fs[w['owner']]['memberOf']!=NO:w['kind']='coincidental member/local/parameter'
++ p.write_text(json.dumps(r))
+diff --git a/.checks/free/check.py b/.checks/free/check.py
+new file mode 100644
+index 0000000..d5b6b14
+--- /dev/null
++++ b/.checks/free/check.py
+@@ -0,0 +1,38 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++"""Standalone G1 deletion checks after generation/replay; <=2 examples."""
++import pathlib,json,subprocess,os,resource,concurrent.futures,time,sys,collections
++R=pathlib.Path.cwd();O=R/'measurements/trim';env=dict(os.environ,TMPDIR=str(R/'.checks/free/tmp'));env.pop('DISTILL_TRIM_PREFIX',None)
++def limit():resource.setrlimit(resource.RLIMIT_AS,(2500000*1024,2500000*1024))
++paths=[]
++for f in O.glob('*/free-analysis.json'):
++ r=json.loads(f.read_text())
++ if any(d['group']=='G1' for d in r['pool']):paths.append((sum(d['bytes'] for d in r['pool'] if d['group']=='G1'),f.parent))
++# Prioritize largest deletion groups and newly represented source declarations.
++paths.sort(reverse=True);jobs=[];covered=set()
++for gain,p in paths:
++ ds=json.loads((p/'free-analysis.json').read_text())['pool'];keys={(d['location'],d['name']) for d in ds if d['group']=='G1'}
++ if keys-covered:jobs.append((gain,p));covered|=keys
++if '--all' in sys.argv:jobs=paths
++elif '--top15' in sys.argv:
++ ids={p for g,p in jobs};jobs+= [(g,p) for g,p in paths[:15] if p not in ids]
++def run(job):
++ gain,p=job;start=time.monotonic();s=json.loads((p/'summary.json').read_text());source=pathlib.Path(s['source']);out=p/'g1.cpp';binary=p/'g1.bin';row=dict(example=p.name,ownedGain=gain,passCheck=False)
++ with (p/'g1-check.log').open('w') as log:
++  try:
++   # Check the compact candidate too without another compiler invocation: this
++   # transformation independently verifies full tokens/directive boundaries.
++   c=subprocess.run([str(R/'.checks/free/artifacts'),str(out)],env=env,stdout=subprocess.PIPE,stderr=log,timeout=30,preexec_fn=limit)
++   row['compactInvariant']=c.returncode==0
++   if c.returncode==0:
++    row['compactBytes']=json.loads(c.stdout)['bytes']
++    c=subprocess.run([str(R/'.checks/free/g++13'),'-std=c++23','-O2','-x','c++',str(out)+'.compact','-o',str(binary)],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=120,preexec_fn=limit)
++    row['compile']=c.returncode
++    if c.returncode==0:
++     inp=source.with_suffix('.in').read_bytes() if source.with_suffix('.in').exists() else b''
++     q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],input=inp,stdout=subprocess.PIPE,stderr=log,env=env,timeout=30,preexec_fn=limit)
++     row['passCheck']=q.returncode==0 and q.stdout==source.with_suffix('.out').read_bytes()
++  except subprocess.TimeoutExpired:row['timeout']=True
++ binary.unlink(missing_ok=True);row['seconds']=round(time.monotonic()-start,1);(p/'g1-check.json').write_text(json.dumps(row));return row
++with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
++ for row in pool.map(run,jobs):print(json.dumps(row),flush=True)
++print('Distinct written G1 declarations covered',len(covered),'example checks',len(jobs),flush=True)
+diff --git a/.checks/free/build-baseline.py b/.checks/free/build-baseline.py
+new file mode 100644
+index 0000000..29a1b44
+--- /dev/null
++++ b/.checks/free/build-baseline.py
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import pathlib,subprocess,shlex,os,resource,json
++R=pathlib.Path.cwd();B=R/'.checks/free/baseline';B.mkdir(exist_ok=True)
++env=dict(os.environ,TMPDIR=str(R/'.checks/free/tmp'));env.pop('DISTILL_TRIM_PREFIX',None)
++resource.setrlimit(resource.RLIMIT_AS,(5700000*1024,5700000*1024))
++source=B/'prune_extract.cpp';source.write_bytes(subprocess.check_output(['git','show','HEAD:src/clang/prune_extract.cpp']))
++commands=subprocess.check_output(['ninja','-C','build','-t','commands','distill_prune_worker'],text=True).splitlines()
++compile=next(s for s in commands if ' -c ' in s and s.endswith('/src/clang/prune_extract.cpp'))
++a=shlex.split(compile);a[a.index('-o')+1]=str(B/'prune_extract.cpp.o');a[a.index('-c')+1]=str(source)
++if '-MF' in a:a[a.index('-MF')+1]=str(B/'extract.d')
++subprocess.run(a,cwd=R/'build',env=env,check=True,timeout=240)
++subprocess.run(['ar','qc',str(B/'libdistill_clang.a'),str(R/'build/CMakeFiles/distill_clang.dir/src/clang/evaluate.cpp.o'),str(B/'prune_extract.cpp.o')],env=env,check=True,timeout=30)
++subprocess.run(['ranlib',str(B/'libdistill_clang.a')],env=env,check=True,timeout=30)
++link=commands[-1];a=shlex.split(link);a=a[2:-2]
++a[a.index('-o')+1]=str(B/'distill_prune_worker');a[a.index('libdistill_clang.a')]=str(B/'libdistill_clang.a')
++a=[v for v in a if not v.startswith('--dependency-file=')];a.remove('-Xlinker')
++subprocess.run(a,cwd=R/'build',env=env,check=True,timeout=120)
++(B/'verification.json').write_text(json.dumps(dict(source='HEAD:src/clang/prune_extract.cpp',compile=a,description='Unmodified production extractor, linked to diagnostic-only core with env unset')))
+diff --git a/.checks/free/make-patch.py b/.checks/free/make-patch.py
+new file mode 100644
+index 0000000..4934a7e
+--- /dev/null
++++ b/.checks/free/make-patch.py
+@@ -0,0 +1,10 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import pathlib,subprocess
++R=pathlib.Path.cwd();cache=R/'.checks/free/production.patch'
++def added(path):
++ r=subprocess.run(['git','diff','--no-index','--','/dev/null',path],stdout=subprocess.PIPE);assert r.returncode in (0,1);return r.stdout
++if not cache.exists():
++ data=subprocess.check_output(['git','diff','--','src/clang/prune_extract.cpp','src/core/pipeline/pipeline.cpp','src/core/prune/prune.cpp','src/core/report/prune.cpp'])
++ data+=added('src/core/prune/trim_diag.h');cache.write_bytes(data)
++files=['.checks/free/README.txt','.checks/free/acquire13.py','.checks/free/g++13','.checks/free/analyze.py','.checks/free/artifacts.cpp','.checks/free/report.py','.checks/free/continue-analysis.py','.checks/free/enrich.py','.checks/free/check.py','.checks/free/build-baseline.py','.checks/free/make-patch.py','.checks/free/audit.py','.checks/free/legacy-close.py','.checks/free/refine-local.py','.checks/free/finish.py','.checks/free/hazards.md','.checks/trim/acquire-cross.py','.checks/trim/sweep.py','.checks/trim/replay.cpp','.checks/trim/replay-run.py']
++(R/'docs/reviews/free-analysis-diag.patch').write_bytes(cache.read_bytes()+b''.join(added(p) for p in files))
+diff --git a/.checks/free/audit.py b/.checks/free/audit.py
+new file mode 100644
+index 0000000..4cbd3d8
+--- /dev/null
++++ b/.checks/free/audit.py
+@@ -0,0 +1,24 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import pathlib,json,re,collections,hashlib,subprocess
++R=pathlib.Path.cwd();O=R/'measurements/trim';rs=[json.loads(p.read_text()) for p in O.glob('*/free-analysis.json')];ss=[json.loads(p.read_text()) for p in O.glob('*/summary.json')]
++assert len(rs)==len(ss)==126,(len(rs),len(ss))
++assert all(s['rc']==0 and 'wrote pruned' in s['artifact'] and s.get('sample') for s in ss)
++strings=[];kinds=collections.Counter();effects=0;hidden=0;by=collections.Counter()
++for r in rs:
++ p=O/r['name'];text=(p/'g1.cpp').read_text();effects+=r['effectFamilies']
++ assert sum(d['bytes'] for d in r['pool'])<=r['bytes']
++ for d in r['pool']:
++  by[d['group']]+=d['bytes']
++  if d['group']!='G1':continue
++  assert not d['exclusionA'] and not d['root'] and not d['pin'] and not d['effect']
++  assert re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',d['simple']),d
++  hidden+=int(d['hidden']);kinds[d['productionReason'].split(':')[0] if not d['productionReason'].startswith('associated with') else 'association']+=1
++  if re.search(r'\b'+re.escape(d['simple'])+r'\b',text):strings.append((r['name'],d['name']))
++ assert (p/'out.cpp').stat().st_size==r['bytes']
++ assert (p/'out.cpp.compact').stat().st_size==r['compactBytes']
++assert not strings,strings
++subprocess.run(['git','diff','--exit-code','HEAD','--','src'],check=True)
++assert not (R/'src/core/prune/trim_diag.h').exists()
++assert not (R/'.checks/free/sdk.tar.xz').exists()
++result=dict(examples=126,pruned=126,samplePass=126,bytes=sum(r['bytes'] for r in rs),compact=sum(r['compactBytes'] for r in rs),g1RemainingNamesIncludingStrings=strings,g1HiddenFriends=hidden,effectReachableFamilies=effects,firstReasonDeclarations=dict(kinds),bytesByGroup=dict(by),sourceRestored=True,sdkDeleted=not (R/'.checks/free/sdk').exists())
++(O/'free-audit.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2))
+diff --git a/.checks/free/legacy-close.py b/.checks/free/legacy-close.py
+new file mode 100644
+index 0000000..795efc9
+--- /dev/null
++++ b/.checks/free/legacy-close.py
+@@ -0,0 +1,30 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++"""Comparable earlier lexical-only pool, before the new effect barrier."""
++import pathlib,json,array,re
++O=pathlib.Path('measurements/trim')
++for p in O.glob('*/free-analysis.json'):
++ r=json.loads(p.read_text())
++ if 'legacyClosed' in r:continue
++ ds=r['pool'];blocked={i for i,d in enumerate(ds) if d['group']=='blocked c/d'}
++ if not blocked:
++  closed=[d for d in ds if d['group'] in ['G1','G2','G4']];r['legacyClosed']=dict(declarations=len(closed),nlm=sum(d['bytes'] for d in closed),compact=sum(d['compact'] for d in closed));r['effectClosed']=dict(declarations=0,nlm=0,compact=0)
++ else:
++  m=json.loads((p.parent/'diag.json').read_text());n=len(m['text'].encode());owner=array.array('i',[-1])*n;alive=array.array('b',[1])*n
++  for f in m['families']:
++   if not f['kept']:
++    for a,b in f['ranges']:alive[a:b]=array.array('b',[0])*(b-a)
++  for i,d in enumerate(ds):
++   for a,b in d['ranges']:owner[a:b]=array.array('i',[i])*(b-a)
++  ts=[(a,name) for a,b,name in m['tokens'] if alive[a]]
++  for l in (p.parent/'diag.ast.jsonl').open():
++   e=json.loads(l)
++   if e['event']=='token' and e['at']<n and alive[e['at']]:ts.append((e['at'],e['name']))
++  s=set(range(len(ds)))
++  while True:
++   ext={name for at,name in ts if owner[at] not in s};z={i for i in s if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',ds[i]['simple']) or ds[i]['simple'] not in ext}
++   if z==s:break
++   s=z
++  def stats(ids):return dict(declarations=len(ids),nlm=sum(ds[i]['bytes'] for i in ids),compact=sum(ds[i]['compact'] for i in ids))
++  r['legacyClosed']=stats(s);r['effectClosed']=stats(s&blocked)
++ p.write_text(json.dumps(r))
++print('legacy closure updated')
+diff --git a/.checks/free/refine-local.py b/.checks/free/refine-local.py
+new file mode 100644
+index 0000000..091e9b2
+--- /dev/null
++++ b/.checks/free/refine-local.py
+@@ -0,0 +1,6 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import analyze,pathlib,json
++for p in pathlib.Path('measurements/trim').glob('*/free-analysis.json'):
++ r=json.loads(p.read_text())
++ if any(len(d['ranges'])>1 for d in r['pool']):
++  r=analyze.analyze(p.parent);print(r['name'],[(d['name'],d.get('companionBytes')) for d in r['pool'] if d.get('companionBytes')],flush=True)
+diff --git a/.checks/free/finish.py b/.checks/free/finish.py
+new file mode 100644
+index 0000000..3bc8523
+--- /dev/null
++++ b/.checks/free/finish.py
+@@ -0,0 +1,26 @@
++# SPDX-License-Identifier: GPL-3.0-or-later
++import pathlib,subprocess,os,time,json,sys,datetime,signal
++R=pathlib.Path.cwd();O=R/'measurements/trim';env=dict(os.environ,TMPDIR=str(R/'.checks/free/tmp'));env.pop('DISTILL_TRIM_PREFIX',None)
++end=time.time()+float(os.environ.get("FREE_ANALYSIS_BUDGET_SECONDS","2700"))
++while time.time()<end:
++ if len(list(O.glob('*/summary.json')))==126 and len(list(O.glob('*/free-analysis.json')))==126:break
++ time.sleep(10)
++else:sys.exit(2)
++def stage(name,args,cap):
++ left=int(end-time.time());row=dict(stage=name,remaining=left)
++ if left<20:row['skipped']='time budget';return row
++ with (R/'.checks/free'/name).open('w') as log:
++  try:
++   proc=subprocess.Popen(args,cwd=R,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
++   row['rc']=proc.wait(timeout=min(cap,left))
++  except subprocess.TimeoutExpired:
++   row['timeout']=True;os.killpg(proc.pid,signal.SIGKILL);proc.wait()
++ print(json.dumps(row),flush=True);return row
++rows=[]
++rows.append(stage('local-units.log',[sys.executable,'.checks/free/refine-local.py'],45))
++rows.append(stage('enrich.log',[sys.executable,'.checks/free/enrich.py'],30))
++rows.append(stage('legacy.log',[sys.executable,'.checks/free/legacy-close.py'],45))
++rows.append(stage('candidate-checks.log',[sys.executable,'.checks/free/check.py','--top15'],240))
++rows.append(stage('replay.log',[sys.executable,'.checks/trim/replay-run.py'],240))
++rows.append(stage('audit.log',[sys.executable,'.checks/free/audit.py'],45))
++(O/'finish.json').write_text(json.dumps(rows,indent=2))
+diff --git a/.checks/free/hazards.md b/.checks/free/hazards.md
+new file mode 100644
+index 0000000..a174ffe
+--- /dev/null
++++ b/.checks/free/hazards.md
+@@ -0,0 +1,19 @@
++No concrete ATL example was found in which a G1 declaration remains discoverable after the complete group is removed. The important distinction from the shelved overload experiment is clause (b): an unused overload **stays** whenever the spelling appears anywhere else, even when a failed requires-expression or ambiguity produces no resolved reference. Operators and conversion/deduction protocols are excluded outright. This is an audit under the repository's existing assumptions, not a proof for arbitrary unregistered libraries or preprocessing configurations.
++
++Concrete boundaries checked in ATL:
++
++- `atl::factorization` is G1 only in outputs with no remaining `factorization` token. `docs/examples/factorization/quick.cpp:7` directly calls it; that occurrence is excluded from the pool by references/flags. Likewise, `docs/examples/graph/callbacks.cpp:14` names `dfs_fold`; unused `dfs_fold` overloads in other examples disappear together only when the entire spelling is absent.
++- `counting_permutation` (`utils/counting_sort.hpp:108`) is kept through its scratch-type association even when no kept sort API names it. Its body calls `bucket_by_key`, but it does not call the adjacent `counting_sort_buffers` with block-scope thread storage. Deleting it therefore does not delete an independently rooted storage owner.
++- `convolution_uint64` illustrates the rejected per-overload approach: when a retained overload or caller still spells that name, the unreferenced overload is G3. The same happens to geometry `intersection` overloads in outputs that use that spelling. No worker viability decision is treated as an all-target proof.
++- `hash_float_value` (`utils/hash.hpp:270`) remains in G3 because the retained floating-hash `operator()` names it at line 309 inside an `if constexpr` fallback. That template text must remain valid for another floating representation even when the worker never instantiates the branch.
++- Macro-reached names do occur in G3: `graph::detail::fits_vertex_id` (`graph/concepts.hpp:192`) is present in `atl_assert` arguments at lines 211/215, and `detail::sub_overflows` (`types/detail/checked_arithmetic.hpp:28`) is present in the assertion at `ds/linear_function.hpp:103`. Raw arguments and expanded tokens protect them. The constraint at `graph/concepts.hpp:144` spells `graph_traits<Edge>::target(e)`, protecting the free `target` spelling even when the binding is elsewhere.
++- `graph::weight` (`graph/concepts.hpp:249`) is blocked by the data-member spelling `Weight weight` at line 25 as well as requires-expression uses. Geometry's `orientation` also collides with policy members and constraints. These coincidental identifiers intentionally satisfy (b), even when they do not bind to the free function.
++- `mod_int::operator>>` (`nt/mod_int.hpp:165`) still spells `read_stream_magnitude` at line 166. The matrix `operator*` (`nt/matrix.hpp:361`) still spells `lazy_product` at line 368. These are G4 helpers of G2 operators; an uninstantiated retained body still needs valid lookup. A different target/library can instantiate those protocols, which is why neither owner nor helper is included in G1.
++
++Raw tokens and the user preprocessed stream were checked separately. A macro body or argument that spells a name is a raw witness; a pasted name is a preprocessed witness at its expansion site. The existing external-paste/macro-agreement gates remain in force. A using-declaration, an out-of-group friend declaration, a default argument, a template argument, an address expression or a callback registration that names a candidate likewise supplies a raw/expanded witness; a namespace using-directive still needs a later lookup spelling, or an excluded language/library protocol. A function pointer passed into a library has an AST edge and ordinarily an address/name origin as well. No ATL dynamic-symbol/string lookup mechanism (`dlsym`, `dlopen`, `GetProcAddress`) or assembly was found in the supplied headers/examples. The final audit also searches the retained candidate output for candidate spellings inside strings, beyond the token rule.
++
++`modular-arithmetic-residues` supplies a concrete (d) rejection: `dynamic_mod_int` has template static `reducer_` storage (`nt/dynamic_mod_int.hpp:45`). The production reverse graph marks possible triggers including `add_mod`, `sub_mod`, `mul_mod`, `pow_mod` and `mul_mod_unchecked`; some have no remaining external name. The analysis preserves this conservative graph barrier rather than treating absence of a direct worker call as an effect proof. This is why a separate c/d row is necessary.
++
++The production potential-effect traversal is preserved and recorded, including graph visits whose first retention reason was already something else. A11 still bounds friend injection and instantiation/destruction effects; the analysis does not silently waive it. There are no ordinary hidden-friend G1 cases in the measured corpus, so this result provides no empirical need to split such friends from their structural records. A future implementation should retain all existing root/pin and effect barriers, and treat hidden-friend signature instantiation as a separate review surface if that scope is added.
++
++The changes suggested by the G1 evidence are to signature/type association (keep rule 3), family aggregation, and the lexical closure they seed. The full inventory records each immediate cause, and the raw JSON stores its complete retention chain. There is no measured G1 gain from weakening A6, free-operator protection, root/pin rules or potential-effect handling. A namespace-function implementation would realize the measured gain without changing the D3e ownership of hidden friends.
+diff --git a/.checks/trim/acquire-cross.py b/.checks/trim/acquire-cross.py
+new file mode 100644
+index 0000000..d84bf95
+--- /dev/null
++++ b/.checks/trim/acquire-cross.py
+@@ -0,0 +1,32 @@
++import urllib.request,lzma,pathlib,json,hashlib,subprocess
++root=pathlib.Path('.checks/trim/cross');root.mkdir(exist_ok=True)
++pkgs={}
++for comp in ['main','universe']:
++ p=root/(comp+'.xz')
++ if not p.exists(): p.write_bytes(urllib.request.urlopen('https://ports.ubuntu.com/ubuntu-ports/dists/questing/'+comp+'/binary-arm64/Packages.xz',timeout=60).read())
++ for block in lzma.decompress(p.read_bytes()).decode().split('\n\n'):
++  d={}
++  for line in block.splitlines():
++   if line and line[0]!=' ' and ': ' in line:
++    k,v=line.split(': ',1);d[k]=v
++  if 'Package'in d:pkgs[d['Package']]=d
++names=['g++-15-x86-64-linux-gnu','gcc-15-x86-64-linux-gnu','cpp-15-x86-64-linux-gnu','binutils-x86-64-linux-gnu','libgcc-15-dev-amd64-cross','libstdc++-15-dev-amd64-cross','libc6-dev-amd64-cross','linux-libc-dev-amd64-cross','libc6-amd64-cross','libstdc++6-amd64-cross','libgcc-s1-amd64-cross','libgomp1-amd64-cross','libitm1-amd64-cross','libatomic1-amd64-cross','libasan8-amd64-cross','liblsan0-amd64-cross','libtsan2-amd64-cross','libubsan1-amd64-cross','libquadmath0-amd64-cross','qemu-user','libbinutils','libsframe2']
++records=[]
++for name in names:
++ d=pkgs[name]; print(name,d['Version'],d.get('Depends',''),flush=True)
++ p=root/(name+'.deb')
++ if not p.exists():subprocess.run(['curl','-fL','--retry','2','--max-time','120','-o',str(p),'https://ports.ubuntu.com/ubuntu-ports/'+d['Filename'].replace('+','%2B')],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
++ assert hashlib.sha256(p.read_bytes()).hexdigest()==d['SHA256']
++ import tarfile,io,os
++ dest=(root/'sysroot2').resolve()
++ data=subprocess.check_output(['dpkg-deb','--fsys-tarfile',str(p)],timeout=60)
++ with tarfile.open(fileobj=io.BytesIO(data)) as tf:
++  for m in tf:
++   target=dest/m.name
++   if m.issym() and m.linkname.startswith('/'):continue
++   if target.is_symlink() or (target.exists() and not target.is_dir()):target.unlink()
++   if m.issym() and m.linkname.startswith('/'):
++    m.linkname=os.path.relpath(dest/m.linkname.lstrip('/'),target.parent)
++   tf.extract(m,dest,filter='fully_trusted')
++ records.append({k:d[k]for k in ['Package','Version','Filename','SHA256']})
++(root/'packages.json').write_text(json.dumps(records,indent=2))
+diff --git a/.checks/trim/sweep.py b/.checks/trim/sweep.py
+new file mode 100644
+index 0000000..e9d304e
+--- /dev/null
++++ b/.checks/trim/sweep.py
+@@ -0,0 +1,31 @@
++import pathlib,os,subprocess,concurrent.futures,json,time,resource
++R=pathlib.Path.cwd();ATL=pathlib.Path('/tmp/claude-1000/-workspace-cpp-distill/f0c845e5-23d4-411f-9b94-324515809aa1/scratchpad/atl');OUT=R/'measurements/trim';OUT.mkdir(exist_ok=True)
++SOURCES=sorted((ATL/'docs/examples').rglob('*.cpp'))
++assert len(SOURCES)==126
++
++def limits():resource.setrlimit(resource.RLIMIT_AS,(2500000*1024,2500000*1024))
++def run(src):
++ name=str(src.relative_to(ATL/'docs/examples').with_suffix('')).replace('/','-');p=OUT/name;p.mkdir(exist_ok=True);prefix=p/'diag'
++ env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'),DISTILL_TRIM_PREFIX=str(prefix))
++ cmd=[str(R/'build/distill'),'--strip-comments','--no-line-markers','--judge','cses','--report',str(p/'report.txt'),'-o',str(p/'out.cpp'),str(R/'.checks/free/g++13'),'-std=c++23','-O2','-I'+str(ATL/'include'),str(src)]
++ if (p/'summary.json').exists():return json.loads((p/'summary.json').read_text())
++ start=time.time();row=dict(name=name,source=str(src),command=cmd)
++ with (p/'log.txt').open('w')as log:
++  try:row['rc']=subprocess.run(cmd,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=240,preexec_fn=limits).returncode
++  except subprocess.TimeoutExpired:row['rc']=124
++  out=p/'out.cpp';row['bytes']=out.stat().st_size if out.exists()else 0
++  rep=(p/'report.txt').read_text()if(p/'report.txt').exists()else'';row['artifact']=rep.splitlines()[0]if rep else'-'
++  if row['rc']==0 and out.exists():
++   binary=p/'out.bin'
++   try:
++    c=subprocess.run([str(R/'.checks/free/g++13'),'-std=c++23','-O2',str(out),'-o',str(binary)],env=env,stdout=log,stderr=subprocess.STDOUT,timeout=120,preexec_fn=limits)
++    if c.returncode==0:
++     inp=src.with_suffix('.in').read_bytes()if src.with_suffix('.in').exists()else b''
++     q=subprocess.run([str(R/'.checks/trim/cross/sysroot2/usr/bin/qemu-x86_64'),'-L',str(R/'.checks/trim/cross/sysroot2/usr/x86_64-linux-gnu'),str(binary)],input=inp,stdout=subprocess.PIPE,stderr=log,timeout=30)
++     row['sample']=q.returncode==0 and q.stdout==src.with_suffix('.out').read_bytes();(p/'actual.out').write_bytes(q.stdout)
++    else:row['sample']=False
++   except subprocess.TimeoutExpired:row['sample']=False
++   binary.unlink(missing_ok=True)
++ row['seconds']=round(time.time()-start,1);(p/'summary.json').write_text(json.dumps(row,indent=2));return row
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for row in pool.map(run,SOURCES):print(json.dumps(row),flush=True)
+diff --git a/.checks/trim/replay.cpp b/.checks/trim/replay.cpp
+new file mode 100644
+index 0000000..237440d
+--- /dev/null
++++ b/.checks/trim/replay.cpp
+@@ -0,0 +1,19 @@
++#include "core/prune/prune.h"
++#include <fstream>
++#include <iostream>
++#include <algorithm>
++using namespace distill;
++std::string read(char*p){std::ifstream f(p);return {std::istreambuf_iterator<char>(f),{}};}
++int main(int argc,char**argv){if(argc!=4)return 2;auto p=parsePruningModel(read(argv[2]));if(!p.ok())return 3;auto m=std::move(p.value());if(std::string(argv[1])=="prepare"){
++ m.families.clear();m.unions.clear();m.annotations.clear();m.expansions.clear();m.systemEntities.clear();m.systemUses.clear();m.parseWidths.reset();m.positionUses.clear();m.memberDisabledReasons.clear();m.libraryMemberNames.clear();m.libraryMemberNamesComputed=false;
++ auto bytes=serializePruningModel(m);if(!bytes.ok())return 4;std::ofstream f(argv[3]);f<<bytes.value();return 0;}
++ auto q=parsePruningModel(read(argv[3]));if(!q.ok())return 5;auto normalize=[](PruningModel&x){
++ auto unique=[](auto&v){std::sort(v.begin(),v.end());v.erase(std::unique(v.begin(),v.end()),v.end());};
++ for(auto&f:x.families){unique(f.edges);unique(f.associatedTypes);}
++ for(auto&e:x.systemEntities){unique(e.userEdges);unique(e.systemEdges);}
++ for(auto&u:x.unions)if(u.first>u.second)std::swap(u.first,u.second);unique(x.unions);
++ std::sort(x.systemUses.begin(),x.systemUses.end(),[](auto a,auto b){return std::tie(a.family,a.entity)<std::tie(b.family,b.entity);});
++ x.systemUses.erase(std::unique(x.systemUses.begin(),x.systemUses.end(),[](auto a,auto b){return a.family==b.family&&a.entity==b.entity;}),x.systemUses.end());
++ };normalize(m);normalize(q.value());
++ auto a=serializePruningModel(m);auto b=serializePruningModel(q.value());if(!a.ok()||!b.ok())return 6;
++ if(a.value()!=b.value()){std::size_t i=0;while(i<a.value().size()&&i<b.value().size()&&a.value()[i]==b.value()[i])++i;std::cerr<<"model mismatch at byte "<<i<<"\noriginal="<<a.value().substr(i,250)<<"\nreplay="<<b.value().substr(i,250)<<'\n';return 7;}return 0;}
+diff --git a/.checks/trim/replay-run.py b/.checks/trim/replay-run.py
+new file mode 100644
+index 0000000..b724c95
+--- /dev/null
++++ b/.checks/trim/replay-run.py
+@@ -0,0 +1,16 @@
++import pathlib,subprocess,json,os,concurrent.futures,time
++R=pathlib.Path.cwd();env=dict(os.environ,TMPDIR=str(R/'.checks/trim/tmp'));env.pop('DISTILL_TRIM_PREFIX',None)
++def run(p):
++ if(p/'replay.json').exists():return json.loads((p/'replay.json').read_text())
++ result={'example':p.name};start=time.time()
++ with(p/'replay.log').open('w')as log:
++  prep=subprocess.run([str(R/'.checks/trim/replay'),'prepare',str(p/'diag.model'),str(p/'replay.input')],env=env,timeout=30,stdout=log,stderr=subprocess.STDOUT);result['prepare']=prep.returncode
++  if prep.returncode==0:
++   with(p/'baseline.model').open('w')as output:
++    worker=subprocess.run([str(R/'.checks/free/baseline/distill_prune_worker'),'--internal-prune',str(p/'replay.input')],env=env,timeout=60,stdout=output,stderr=log);result['worker']=worker.returncode
++   if worker.returncode==0:
++    check=subprocess.run([str(R/'.checks/trim/replay'),'compare',str(p/'diag.model'),str(p/'baseline.model')],env=env,timeout=30,stdout=log,stderr=subprocess.STDOUT);result['compare']=check.returncode
++ result['seconds']=round(time.time()-start,1);(p/'replay.json').write_text(json.dumps(result));return result
++paths=sorted(p.parent for p in(R/'measurements/trim').glob('*/diag.model'))
++with concurrent.futures.ThreadPoolExecutor(max_workers=2)as pool:
++ for result in pool.map(run,paths):print(json.dumps(result),flush=True)
