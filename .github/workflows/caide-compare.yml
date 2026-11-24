@@ -38,38 +38,26 @@ jobs:
           persist-credentials: false
       - name: Check out caide and resolve ATL revision
         id: sources
-        env:
-          CAIDE_TOKEN: ${{ secrets.CAIDE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          set +x
           mkdir -p out/caide-compare/build-logs
-          # Keep the credential URL out of git config, output and artifacts.
-          # Git errors can include URLs, so only publish a sanitized failure.
           git init out/caide-compare/caide
           # git fetch cannot resolve abbreviated SHAs such as a8b990b. Resolve
           # both inputs through the commits API before doing shallow fetches.
           caide_api_ref=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["CAIDE_REF"], safe=""))')
-          headers=()
-          url=https://github.com/jcg9129/caide-cpp-inliner.git
-          if [[ -n ${CAIDE_TOKEN:-} ]]; then
-            url="https://x-access-token:${CAIDE_TOKEN}@github.com/jcg9129/caide-cpp-inliner.git"
-            headers=(-H "Authorization: Bearer ${CAIDE_TOKEN}")
-          fi
-          if ! curl --fail --silent --location "${headers[@]}" \
-            "https://api.github.com/repos/jcg9129/caide-cpp-inliner/commits/$caide_api_ref" \
+          if ! curl --fail --silent --location \
+            "https://api.github.com/repos/jcg9129-cp/caide-cpp-inliner/commits/$caide_api_ref" \
             -o out/caide-compare/caide-ref.json; then
-            echo 'caide ref resolution failed; check CAIDE_TOKEN access and caide_ref.' >&2
+            echo 'caide ref resolution failed; check caide_ref.' >&2
             exit 1
           fi
           caide_commit=$(python3 -c 'import json; print(json.load(open("out/caide-compare/caide-ref.json"))["sha"])')
           [[ $caide_commit =~ ^[0-9a-f]{40}$ ]]
-          if ! GIT_TERMINAL_PROMPT=0 git -C out/caide-compare/caide fetch --no-write-fetch-head --no-recurse-submodules --depth 1 -- "$url" "$caide_commit" > /dev/null 2>&1; then
-            echo 'caide fetch failed; check CAIDE_TOKEN access and caide_ref.' >&2
+          if ! GIT_TERMINAL_PROMPT=0 git -C out/caide-compare/caide fetch --no-write-fetch-head --no-recurse-submodules --depth 1 -- https://github.com/jcg9129-cp/caide-cpp-inliner.git "$caide_commit" > /dev/null 2>&1; then
+            echo 'caide fetch failed; check caide_ref.' >&2
             exit 1
           fi
-          unset url headers CAIDE_TOKEN
           git -C out/caide-compare/caide checkout --detach "$caide_commit"
           echo "caide_commit=$(git -C out/caide-compare/caide rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git -C out/caide-compare/caide rev-parse HEAD > out/caide-compare/build-logs/caide-commit.log
