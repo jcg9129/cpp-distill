@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The definition qualifies individually; the later redeclaration vetoes the group.
+family-count helper | 2
+eligible-count helper | 1
+kept helper | associated with R

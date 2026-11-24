@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+family-count helper | 3
+eligible-count helper | 3
+removed helper |
+removed payload |
+report | rule3-unkept: declarations=3 bytes=62

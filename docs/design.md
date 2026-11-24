@@ -198,7 +198,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
-| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12) and `library-macro-values` (A9 standard macros) are switchable; any other name is a usage error (exit 1) listing switchable names |
+| `--no-assume=<name>` | disable a switchable assumption while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), and `unspelled-functions` (D3f) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
 | `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
@@ -1487,6 +1487,57 @@ reported whenever member pruning is enabled, even without a deletion, like A11.
 See the [adopted member review](reviews/2026-11-20-member-pruning.md) for the
 critical review and historical prototype measurements.
 
+**Unspelled functions (policy D3f).** By default rule 3 does not keep an
+eligible non-member function family merely because its signature or template
+arguments name a kept user record or enum. Every declaration in the aggregated
+family must be a user namespace-scope function or function template. Hidden
+friends, members, local declarations, operators (including conversions and
+literal operators), deduction guides, `main`, names with C language linkage,
+and functions written directly inside an `extern "C"` block (including `static`
+functions; the innermost linkage specification governs) are excluded. A function
+whose type gets C linkage only through an `extern "C"` typedef is not excluded:
+Clang and GCC do not model function-type language linkage, and the function is
+still only reachable by its name. Explicit/partial specializations and explicit
+instantiations are excluded too. So are A6 ADL-listed names, macro-produced
+declarations, and declarations with special root/refusal attributes (`alias`,
+`ifunc`, `weak`, `weakref`, `used`, `section`, `constructor`, `destructor`,
+`visibility`, asm labels). The macro veto covers expansions anywhere
+in the declaration before the body (return type, declarator, parameters and
+default arguments, template head, trailing requires-clause, `noexcept`, and
+trailing return type), even when existing boundary pinning does not apply.
+For `= delete`, it stops at the suffix. Expansions confined to the body do not
+veto D3f eligibility; ordinary macro pinning and name retention still apply.
+One excluded declaration excludes its whole overload/redeclaration/template/shared-syntax
+family. Shared declarations that introduce a record or enum remain aggregated
+with that type, preserving both entities when either survives, including
+`struct R* helper();`.
+
+Roots/pins, rule 2's names in kept raw text (including macro bodies/arguments),
+rule 4's AST edges, rule 5's dependent names (including pasted calls), and rule
+6's potential effects continue unchanged. In particular, **all type-association
+edges remain in the reverse potential-effect graph**, even for eligible helpers.
+
+The soundness argument is that every lookup, including ADL and failed
+constraint, `decltype` and `noexcept` probes, needs a name. Kept user spelling
+and AST/dependent-name edges retain the entire matching family. Library and
+language lookup are bounded by A6 names and operators, which are excluded.
+Callbacks, using-declarations, friends and defaults retain their named targets
+through the existing rules. The contract covers programs well-formed on the
+judge. A failed probe still spells a name and preserves its entire family; the
+worker's viability result never filters declarations. `__COUNTER__` and source-position cases
+already have their independent transformation gates. A7 and A11 still apply;
+D3f adds no exception to the effect rules.
+
+`--no-assume=unspelled-functions` restores the previous rule 3 without changing
+other policies. Enabled analyses report `D3f unspelled-functions` among their
+assumptions, even without deletions, and `rule3-unkept: declarations=N bytes=B`.
+These counts cover source declarations in removed eligible function families
+that the legacy rule-3 fixpoint would have kept. Each written redeclaration
+counts separately, including multiple source declarations owned by one family.
+They do not include those families' transitive non-eligible dependencies (for
+example, a variable used only by a removed function). Bytes are the eligible
+declarations' disjoint owned source ranges, excluding surrounding trivia.
+
 **Keep rules**, to a fixpoint:
 
 1. **Roots:** `main`; `// distill: keep`; `--keep`; anything referenced from
@@ -1541,7 +1592,9 @@ critical review and historical prototype measurements.
    involves predefined macros is excluded by the preconditions.
 3. **Association rule:** a non-member function or specialization family is
    kept if its signature or template arguments name a kept user record or
-   enum.
+   enum, except eligible namespace-scope function families under D3f above.
+   This exception narrows only forward retention, never rule 6's potential
+   type-association edges.
 4. **AST edges:** every declaration referenced from the AST of a kept
    family. Covered constructs are enumerated and tested (D3-1-5):
    expressions, types, base classes, default arguments and default template
@@ -1645,9 +1698,9 @@ sources and refusal gates still apply. This mode needs A1–A7 and A9 where
 applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 7 and checked as
+The setting is part of serialized worker protocol version 8 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
-model and policy identity distinguish both A11 and A12 flag combinations.
+model and policy identity distinguish A11, A12 and D3f flag combinations.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. For member units this additional

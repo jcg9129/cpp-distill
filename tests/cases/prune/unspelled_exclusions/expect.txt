@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept specialized |
+kept c_linkage | associated with Kept
+kept macro_function | macro
+kept attributed |
+kept asm_named |
+kept local_static | not inert

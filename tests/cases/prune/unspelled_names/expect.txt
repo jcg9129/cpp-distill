@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept swap |
+kept begin |
+kept get |
+kept operator== |
+kept plain |
+kept dependent |
+kept macro_only |
+kept argument_only |
+kept pasted_call |
+kept ns::using_target |
+kept friended |
+kept callback |
+kept default_arg |
+kept template_arg |
+kept local_target |
+kept local_user |

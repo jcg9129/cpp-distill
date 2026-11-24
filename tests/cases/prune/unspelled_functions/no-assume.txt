@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+args | --no-assume=unspelled-functions
+kept returning | associated with Kept
+kept taking | associated with Kept
+kept templated | associated with Kept
+kept overloaded | associated with Kept
+kept enum_helper | associated with KeptEnum
+report-absent | pruning assumption: D3f unspelled-functions
+report | pruning assumption disabled: D3f unspelled-functions
+report-absent | rule3-unkept:

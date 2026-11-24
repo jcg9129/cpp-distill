@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept requires_target |
+kept decltype_target |
+kept noexcept_target |

@@ -104,6 +104,7 @@ must include the target's C/C++ standard headers and libraries.
 | `--record <dir>` | With `--judge-check`, save dated observation evidence. |
 | `--report <file>` | Write validation, configuration, conditional and pruning explanations. |
 | `--no-prune` | Inline and resolve only. |
+| `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), or `unspelled-functions` (D3f); repeatable, comma lists accepted. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
 | `--no-line-markers` | Omit generated `#line` markers from a `pruned` result when the analysis proves no user code observes source positions (`__LINE__`, `__FILE__`, `__builtin_LINE`, `assert` without `NDEBUG`, call-site default arguments, …); otherwise they stay and the report says `line markers kept: <why>`. |
@@ -310,8 +311,15 @@ library configuration. Conflicting captured values remain unknown.
 when this part of A9 is off.
 
 `--no-assume=<name>` accepts repeated flags and comma lists. The switchable
-names are `instantiation-effects` (A11), `library-spelled-members` (A12), and
-`library-macro-values` (A9 standard macros). Unknown names are usage errors.
+names are `instantiation-effects` (A11), `library-spelled-members` (A12),
+`library-macro-values` (A9 standard macros), and `unspelled-functions` (D3f).
+Unknown names are usage errors.
+
+D3f removes unspelled namespace-scope function families that only the signature
+association rule retained. Operators, ADL customization names, specializations,
+C linkage, macro-produced and attributed functions remain protected. All other
+retention rules, including potential instantiation effects, still apply.
+`--no-assume=unspelled-functions` restores the previous association rule.
 
 ## Build, license and credits
 

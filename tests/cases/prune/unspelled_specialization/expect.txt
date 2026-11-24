@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Separate extracted rows; their overload/template union vetoes the primary.
+family-count helper | 2
+eligible-count helper | 1
+associated helper | R
+same-group helper | helper
+kept helper |

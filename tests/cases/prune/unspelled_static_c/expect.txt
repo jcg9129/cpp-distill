@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Internal name linkage does not cancel the declarator's C language context.
+eligible-count helper | 0
+kept helper | associated with R
+eligible-count cpp_helper | 1
+removed cpp_helper | outside the retention closure

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+target | elf-itanium
+eligible-count target | 1
+eligible-count proxy | 0
+root target | alias symbol reference
+root proxy | attribute: alias
+kept target | root: alias symbol reference
+kept proxy | root: attribute: alias

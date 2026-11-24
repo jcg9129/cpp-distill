@@ -17,7 +17,7 @@ std::string read(const std::filesystem::path& p) { std::ifstream f(p,std::ios::b
 std::string trim(std::string s) { auto a = s.find_first_not_of(" \t\r"); if (a == s.npos) return {}; return s.substr(a,s.find_last_not_of(" \t\r")-a+1); }
 }
 int main(int argc, char** argv) {
-  if (argc != 2) return 1;
+  if (argc != 2 && !(argc == 4 && std::string_view(argv[2]) == "--filter")) return 1;
   try {
     const auto cwd = std::filesystem::current_path();
     TemporaryDirectory work(".prune-cases-",cwd);
@@ -33,6 +33,7 @@ int main(int argc, char** argv) {
     std::sort(cases.begin(),cases.end()); std::size_t count = 0, failed = 0;
     for (const auto& expectation : cases) {
       const auto path = expectation.parent_path();
+      if (argc == 4 && pathToUtf8(path.filename()).find(argv[3]) == std::string::npos) continue;
       PruningModel model; PruningResult retained; bool caseFailed = false; std::string workerDiagnostics;
       auto fail = [&](const std::string& why) {
         std::cerr << "FAIL " << path.filename() << "/" << expectation.filename() << ": " << why << '\n'; caseFailed = true;
@@ -51,15 +52,28 @@ int main(int argc, char** argv) {
         }
         std::vector<std::string> args;
         std::istringstream metadata(read(expectation)); std::string entry;
-        while (std::getline(metadata,entry)) if (entry.starts_with("args |")) {
-          std::istringstream words(entry.substr(6)); std::string word;
-          while (words >> word) args.push_back(word);
+        bool skipTarget = false;
+        while (std::getline(metadata,entry)) {
+          if (entry.starts_with("args |")) {
+            std::istringstream words(entry.substr(6)); std::string word;
+            while (words >> word) args.push_back(word);
+          } else if (entry.starts_with("target |")) {
+            const auto target = trim(entry.substr(8));
+            if (target != "elf-itanium") throw Error{"unknown fixture target: " + target};
+            skipTarget = !configuration.probe.macros.contains("__ELF__") ||
+                !configuration.probe.macros.contains("__GXX_ABI_VERSION");
+          }
+        }
+        if (skipTarget) {
+          std::cout << "SKIP " << name << ": requires ELF/Itanium\n";
+          continue;
         }
         args.push_back("empty.cpp");
         const auto cli = take(parseDistillOptions(args));
         model = take(preparePruning(configuration,{},flat,&configuration.facts,cli.keep));
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
         model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
+        model.assumeUnspelledFunctions = cli.assumeUnspelledFunctions;
         if (*feature || name == "ordinary_builtins") {
           model.dialect = "gnu++23";
           for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";
@@ -77,12 +91,16 @@ int main(int argc, char** argv) {
           return r;
         };
         model = take(extractPruning(model,options)); retained = take(computeRetention(model));
+        std::vector<FamilyId> groups(model.families.size());
+        for (FamilyId id = 0; id < groups.size(); ++id) groups[id] = id;
+        auto group = [&](FamilyId id) { while (groups[id] != id) id = groups[id]; return id; };
+        for (auto [a,b] : model.unions) groups[group(a)] = group(b);
         std::istringstream expect(read(expectation)); std::string line; bool disabled = false, a11Exclusion = false;
         while (std::getline(expect,line)) {
           if (line.empty() || line.starts_with('#')) continue;
           const auto bar = line.find('|'); if (bar == line.npos) { fail("invalid expectation: " + line); continue; }
           auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
-          if (assertion == "args") continue;
+          if (assertion == "args" || assertion == "target") continue;
           if (assertion == "report-absent") {
             matched = take(renderPruningReport(model,retained)).find(reason) == std::string::npos;
           } else if (assertion == "report") {
@@ -97,16 +115,43 @@ int main(int argc, char** argv) {
             disabled = true; for (const auto& why : retained.disabledReasons) matched |= why.find(reason) != why.npos;
           } else {
             auto space = assertion.find(' ');
-            if (space == assertion.npos || (assertion.substr(0,space) != "kept" && assertion.substr(0,space) != "removed")) { fail("invalid expectation: " + line); continue; }
+            if (space == assertion.npos) { fail("invalid expectation: " + line); continue; }
             auto fate = assertion.substr(0,space), label = assertion.substr(space+1);
-            bool found = false, allFates = true;
-            for (FamilyId id = 0; id < model.families.size(); ++id) if (model.families[id].label == label) {
-              found = true;
-              const auto& r = retained.families[id];
-              allFates &= r.kept == (fate == "kept");
-              if (r.kept == (fate == "kept") && r.reason.find(reason) != r.reason.npos) matched = true;
-            }
-            matched &= found && allFates;
+            if (fate == "family-count" || fate == "eligible-count") {
+              std::size_t count = 0;
+              bool found = false;
+              for (const auto& f : model.families) if (f.label == label) {
+                found = true;
+                count += fate == "family-count" || f.unspelledFunctionEligible;
+              }
+              matched = found && std::to_string(count) == reason;
+            } else if (fate == "root" || fate == "associated" || fate == "same-group") {
+              bool found = false; matched = true;
+              FamilyId representative = noFamily;
+              for (FamilyId id = 0; id < model.families.size(); ++id) {
+                const auto& f = model.families[id];
+                if (fate == "same-group" && (f.label == label || f.label == reason)) {
+                  if (representative == noFamily) representative = group(id);
+                  matched &= group(id) == representative;
+                }
+                if (f.label != label) continue;
+                found = true;
+                if (fate == "root") matched &= f.root == reason;
+                else if (fate == "associated") matched &= std::any_of(f.associatedTypes.begin(),f.associatedTypes.end(),
+                    [&](auto target) { return model.families[target].label == reason; });
+              }
+              matched &= found && std::any_of(model.families.begin(),model.families.end(),
+                  [&](const auto& f) { return fate == "root" || f.label == reason; });
+            } else if (fate == "kept" || fate == "removed") {
+              bool found = false, allFates = true;
+              for (FamilyId id = 0; id < model.families.size(); ++id) if (model.families[id].label == label) {
+                found = true;
+                const auto& r = retained.families[id];
+                allFates &= r.kept == (fate == "kept");
+                if (r.kept == (fate == "kept") && r.reason.find(reason) != r.reason.npos) matched = true;
+              }
+              matched &= found && allFates;
+            } else { fail("invalid expectation: " + line); continue; }
           }
           if (!matched) fail("missing " + line);
         }
@@ -159,7 +204,8 @@ int main(int argc, char** argv) {
             std::cerr << "  disabled: " << why << '\n';
         for (FamilyId id = 0; id < model.families.size(); ++id)
           std::cerr << "  " << model.families[id].label << ": "
-                    << (id < retained.families.size() ? retained.families[id].reason : "retention unavailable") << '\n';
+                    << (id < retained.families.size() ? retained.families[id].reason : "retention unavailable")
+                    << " eligible=" << model.families[id].unspelledFunctionEligible << '\n';
       } else {
         std::cout << "PASS " << path.filename() << "/" << expectation.filename() << ": kept=" << retained.keptBytes << " removed=" << retained.removedBytes << '\n'; ++count;
       }

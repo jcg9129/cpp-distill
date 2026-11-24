@@ -82,6 +82,23 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                 check('pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
+    with case('unspelled-functions option reaches retention and modes do not mix'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('struct R {};\nR helper(){return {};}\nint main(){R r;(void)r;}\n')
+        selections = [[], ['--no-assume=unspelled-functions'],
+                      ['--no-assume=unspelled-functions,unspelled-functions', '--no-assume=unspelled-functions'], []]
+        for flags in selections:
+            result = subprocess.run([binary, *flags, '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            check(('R helper' in result.stdout) == bool(flags), result.stdout)
+            check(('pruning assumption: D3f unspelled-functions\n' in report) == (not flags), report)
+            check(('rule3-unkept: declarations=1 bytes=' in report) == (not flags), report)
+            if flags:
+                check('pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
     with case('library-spelled-members flag reaches the worker independently of A11'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('struct S { int unused(){return 0;} };\n'

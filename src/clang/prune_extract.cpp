@@ -39,6 +39,30 @@ using namespace clang;
 bool supportedAttribute(const Attr* a) {
   return isa<WarnUnusedResultAttr,UnusedAttr,LikelyAttr,UnlikelyAttr,AlwaysInlineAttr,AlignedAttr,MaxFieldAlignmentAttr>(a);
 }
+bool unspelledFunctionEligible(const FunctionDecl* f) {
+  if (isa<CXXMethodDecl,CXXDeductionGuideDecl>(f) ||
+      !f->getDeclContext()->getRedeclContext()->isFileContext() ||
+      !f->getLexicalDeclContext()->getRedeclContext()->isFileContext() ||
+      f->getFriendObjectKind() != Decl::FOK_None || !f->getIdentifier() ||
+      f->isMain() || f->getLanguageLinkage() == CLanguageLinkage ||
+      f->getTemplateSpecializationKind() != TSK_Undeclared ||
+      f->getBeginLoc().isMacroID() || f->getLocation().isMacroID() || f->getEndLoc().isMacroID()) return false;
+  // Exclude names with C language linkage (above) and functions written directly
+  // inside an extern "C" block, including static names with NoLanguageLinkage.
+  // The innermost specification governs, including nested extern "C++".
+  // C linkage acquired only by the function type through an extern "C" typedef
+  // does not exclude a function: Clang and GCC do not model function-type
+  // language linkage, and such a function is still only reachable by its name.
+  for (auto* context = f->getLexicalDeclContext(); context; context = context->getParent())
+    if (const auto* linkage = dyn_cast<LinkageSpecDecl>(context)) {
+      if (linkage->getLanguage() == LinkageSpecLanguageIDs::C) return false;
+      break;
+    }
+  for (const auto* attr : f->attrs())
+    if (isa<AliasAttr,IFuncAttr,WeakAttr,WeakRefAttr,UsedAttr,SectionAttr,
+            ConstructorAttr,DestructorAttr,VisibilityAttr,AsmLabelAttr>(attr)) return false;
+  return true;
+}
 bool scalarBuiltin(const Decl* d) {
   const auto* f = dyn_cast<FunctionDecl>(d);
   if (!f || !f->isImplicit() || !f->getBuiltinID()) return false;
@@ -243,6 +267,7 @@ struct Extraction {
     } else if (const auto* fn = dyn_cast<FunctionDecl>(base)) {
       f.kind = FamilyKind::function; f.nonMemberOperator = (fn->isOverloadedOperator() || fn->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName) && !isa<CXXMethodDecl>(fn);
       f.externCDefinition = fn->isExternC() && fn->isThisDeclarationADefinition();
+      f.unspelledFunctionEligible = unspelledFunctionEligible(fn);
       if (fn->getTemplateSpecializationKind() == TSK_ExplicitInstantiationDeclaration || fn->getTemplateSpecializationKind() == TSK_ExplicitInstantiationDefinition) f.root = "explicit instantiation";
     } else if (const auto* v = dyn_cast<VarDecl>(base)) {
       f.kind = FamilyKind::variable; f.externCDefinition = v->isExternC() && v->isThisDeclarationADefinition() != VarDecl::DeclarationOnly;
@@ -340,6 +365,32 @@ struct Extraction {
             if (r->begin <= at && at < r->end) f.pinned = "shared declaration with non-function member";
           }
       }
+    }
+    // Inspect the written declaration before member extraction or shared-syntax
+    // normalization partitions its byte ownership. Body macros do not veto
+    // D3f; their identifiers still participate in the ordinary name rule.
+    if (f.unspelledFunctionEligible) {
+      const auto* fn = cast<FunctionDecl>(base);
+      auto declarationEnd = r->end;
+      if (body) {
+        // The AST boundary includes the complete parameter list (and default
+        // arguments), trailing return, noexcept and requires-clause. A function
+        // try-block begins at 'try', rather than at its compound statement.
+        if (const auto* statement = fn->getBody(); statement && user(statement->getBeginLoc()))
+          declarationEnd = offset(statement->getBeginLoc());
+      } else if (fn->isExplicitlyDefaulted() || fn->isDeletedAsWritten()) {
+        // These definitions have no statement body. Find their written suffix;
+        // an '=' in a parameter default must remain inside the declaration.
+        auto token = std::lower_bound(tokens.begin(),tokens.end(),r->begin,[](const auto& t,auto p) { return t.begin < p; });
+        for (; token != tokens.end() && token->begin < r->end; ++token)
+          if (token->text == "=" && std::next(token) != tokens.end() &&
+              std::next(token)->text == (fn->isExplicitlyDefaulted() ? "default" : "delete"))
+            declarationEnd = token->begin;
+      }
+      for (auto invocation : macroInvocations)
+        if (invocation.begin < declarationEnd && r->begin < invocation.end) {
+          f.unspelledFunctionEligible = false; break;
+        }
     }
     f.ranges.push_back(*r);
     const auto physical = sm.getLineNumber(sm.getMainFileID(),r->begin);
@@ -1154,6 +1205,20 @@ public:
     if (f->getQualifier() && f->getQualifier().isDependent()) memberName(f->getDeclName());
     auto& family = e.model.families[current];
     if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
+      // Written local externs, friends and specializations join these families
+      // and veto eligibility. Lambda call operators are expression-owned, not
+      // namespace-function redeclarations. Implicit instances add no spelling.
+      if (!f->isImplicit() && e.user(f->getBeginLoc()) &&
+          f->getTemplateSpecializationKind() != TSK_ImplicitInstantiation) {
+        const bool eligible = unspelledFunctionEligible(f);
+        family.unspelledFunctionEligible &= eligible;
+        // A block extern's physical spelling belongs to the enclosing
+        // function, while its canonical declaration belongs to the namespace
+        // function. Intersect that certificate too, independently of the
+        // shared-syntax union that already preserves retention.
+        if (const auto it = e.owners.find(f->getCanonicalDecl()); it != e.owners.end())
+          e.model.families[it->second].unspelledFunctionEligible &= eligible;
+      }
       bool carrier = false;
       for (const auto* p : f->parameters()) carrier |= ownRecordParameter(p->getType());
       if (callableCarriersSeen.insert(current).second) family.boundedSystemHooks = carrier;

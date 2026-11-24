@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+args | --no-assume=unspelled-functions
+kept helper | associated with R
+kept payload |
+report-absent | rule3-unkept:

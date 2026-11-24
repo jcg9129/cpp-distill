@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+family-count R | 1
+family-count helper | 1
+same-group helper | R
+kept R |
+kept helper |
+kept p |

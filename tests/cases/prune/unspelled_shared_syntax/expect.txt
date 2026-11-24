@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept return_record |
+kept parameter_record |
+removed return_enum | outside the retention closure
+kept ReturnRecord |
+kept ParameterRecord |

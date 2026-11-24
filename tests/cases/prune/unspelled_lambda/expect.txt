@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed lambda_helper | outside the retention closure
+report | rule3-unkept: declarations=1 bytes=

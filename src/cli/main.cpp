@@ -141,6 +141,7 @@ int run(const std::vector<std::string>& args) {
   options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;
   options.assumeLibrarySpelledMembers = parsed.assumeLibrarySpelledMembers;
   options.assumeLibraryMacroValues = parsed.assumeLibraryMacroValues;
+  options.assumeUnspelledFunctions = parsed.assumeUnspelledFunctions;
   options.noLineMarkers = parsed.noLineMarkers;
   options.compactWhitespace = parsed.compactWhitespace;
   options.samples = take(collectRunSamples(parsed.verifyRun,cwd));
