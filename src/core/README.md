@@ -1450,11 +1450,17 @@ The renderer plans whole logical-line deletions after declaration/empty-shell
 pruning, before marker regeneration, static-name/rendering invariants, builds
 and sample comparisons. Raw and flat artifacts retain their existing bytes.
 `idempotent-standard-headers` removes later top-level includes of the same
-standard C/C++ header spelling, keeping the first in place. It excludes
-`cassert`/`assert.h`, GNU extensions, other system headers, user headers,
-linkage blocks, namespaces, declarations and surviving conditionals. After a
-surviving conditional or a retained non-directive macro expansion, scope is
-unproved and later includes stay. Disable with
+standard C++ header spelling, keeping the first in place. It excludes
+`cassert`, C `.h` headers, GNU extensions, other system headers, user headers,
+and includes inside linkage blocks, namespaces, declarations or surviving
+conditionals. The preceding token must end a family range or close a namespace
+or `extern "C"`/`extern "C++"` block opened at brace depth zero outside every
+family range; a stack tracks these block kinds. After a surviving conditional,
+scope is unproved and later includes stay. Retained non-directive macro
+expansions prevent later trimming only when their replacement definition is
+unknown or unbalanced in `()`, `[]`, `{}` (including digraphs). Definitions come
+from expansion provenance, with output definitions and judge facts as fallbacks;
+nested expansions at the same offset are checked separately. Disable with
 `--no-assume=idempotent-standard-headers`.
 
 A14 `unobserved-guard-macros` removes provenance-confirmed generated empty

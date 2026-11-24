@@ -10,6 +10,21 @@ namespace distill {
 namespace {
 template<class T> T take(Result<T> r) { if (!r.ok()) throw r.error(); return std::move(r.value()); }
 bool contains(EditRange a, EditRange b) { return a.begin <= b.begin && b.end <= a.end; }
+bool balancedDelimiters(const std::vector<Token>& tokens, std::size_t begin = 0) {
+  std::vector<char> stack;
+  for (auto i = begin; i < tokens.size(); ++i) {
+    const auto& v = tokens[i].text;
+    if (v == "(") stack.push_back(')');
+    else if (v == "[" || v == "<:") stack.push_back(']');
+    else if (v == "{" || v == "<%") stack.push_back('}');
+    else if (v == ")" || v == "]" || v == ":>" || v == "}" || v == "%>") {
+      const char close = v == ":>" ? ']' : v == "%>" ? '}' : v.front();
+      if (stack.empty() || stack.back() != close) return false;
+      stack.pop_back();
+    }
+  }
+  return stack.empty();
+}
 struct Input {
   const PruningModel& model;
   ScanResult scan;
@@ -94,8 +109,29 @@ struct Input {
       if (include) { trimming.includeLines += lines; trimming.includeBytes += bytes; }
       else { trimming.guardLines += lines; trimming.guardBytes += bytes; }
     };
-    std::set<std::size_t> expansionOffsets;
-    for (const auto& e : model.expansions) if (!deleted({e.offset,e.offset+1})) expansionOffsets.insert(e.offset);
+    std::map<std::size_t,std::vector<const PruneMacroExpansion*>> expansions;
+    for (const auto& e : model.expansions)
+      if (!deleted({e.offset,e.offset+1})) expansions[e.offset].push_back(&e);
+    std::map<std::string,bool,std::less<>> definitions, balancedReplacements;
+    auto balancedFact = [&](const MacroFact& fact) -> std::optional<bool> {
+      if (fact.state != MacroState::known || !fact.definition) return {};
+      const auto& replacement = fact.definition->replacement;
+      if (auto it = balancedReplacements.find(replacement); it != balancedReplacements.end()) return it->second;
+      // A leading # or %: belongs to the replacement, not a directive.
+      const auto parsed = scanDirectives("0 " + replacement);
+      std::vector<Token> tokens;
+      if (parsed.ok()) for (const auto& line : parsed.value().lines)
+        tokens.insert(tokens.end(),line.tokens.begin(),line.tokens.end());
+      return balancedReplacements[replacement] = parsed.ok() && balancedDelimiters(tokens);
+    };
+    auto balancedExpansion = [&](const PruneMacroExpansion& e) {
+      const auto parse = balancedFact(e.parse), judge = balancedFact(e.judge);
+      if (parse || judge) return parse.value_or(true) && judge.value_or(true);
+      if (auto it = definitions.find(e.name); it != definitions.end()) return it->second;
+      if (auto it = model.judgeInitial.find(e.name); it != model.judgeInitial.end())
+        return balancedFact(it->second).value_or(false);
+      return false;
+    };
     bool reservedMacroWrite = false, macroPragma = false, survivingConditional = false;
     for (const auto& l : scan.lines) {
       if (l.directive) {
@@ -116,10 +152,20 @@ struct Input {
     std::size_t braces = 0, parens = 0, brackets = 0;
     bool uncertain = false;
     const Token* previous = nullptr;
+    enum class BlockKind { other, namespaceBlock, linkageBlock };
+    std::vector<BlockKind> blocks; // One entry per surviving brace depth.
+    enum class Header { none, namespaceName, namespaceTail, nestedName, externLanguage, linkageBrace };
+    Header header = Header::none;
+    bool previousShellClose = false;
+    auto outsideFamilies = [&](const Token& t) {
+      return std::none_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+        return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin < t.end && t.begin < r.end; });
+      });
+    };
     // Ranges may own trailing whitespace. Since no surviving ordinary token
     // intervenes, this must be the range's final surviving token.
     auto familyBoundary = [&](std::size_t begin) {
-      return !previous || std::any_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+      return !previous || previousShellClose || std::any_of(model.families.begin(),model.families.end(),[&](const auto& f) {
         return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) {
           return r.begin <= previous->begin && previous->end <= r.end && r.end <= begin;
         });
@@ -129,6 +175,15 @@ struct Input {
       if (generatedMarker(l)) continue;
       if (l.directive) {
         const auto& d = *l.directive;
+        if ((d.name == "define" || d.name == "undef") && !d.tokens.empty()) {
+          const auto& ts = d.tokens;
+          std::size_t body = 1;
+          if (d.name == "define" && ts.size() > 1 && ts[1].text == "(" && ts[0].end == ts[1].begin) {
+            while (body < ts.size() && ts[body].text != ")") ++body;
+            if (body < ts.size()) ++body;
+          }
+          definitions[ts[0].text] = d.name == "define" && balancedDelimiters(ts,body);
+        }
         if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef" ||
             d.name == "elif" || d.name == "elifdef" || d.name == "elifndef")
           // Alternatives may open different scopes. Never infer scope after
@@ -151,19 +206,42 @@ struct Input {
         }
         continue;
       }
-      // Macro replacement tokens can introduce scopes/declarations absent
-      // from this lexical stream. From such a use onward scope is unproved.
-      if (auto e = expansionOffsets.lower_bound(l.begin); e != expansionOffsets.end() && *e < l.end) uncertain = true;
+      // Balanced replacements leave the lexical nesting intact. Check every
+      // expansion, including nested expansions sharing one invocation offset.
+      for (auto it = expansions.lower_bound(l.begin); it != expansions.end() && it->first < l.end; ++it)
+        for (const auto* e : it->second) if (!balancedExpansion(*e)) uncertain = true;
       for (const auto& t : l.tokens) if (!deleted({t.begin,t.end})) {
-        previous = &t;
         const auto& v = t.text;
+        BlockKind opening = BlockKind::other;
+        // Recognize the namespace/linkage grammar as tokens arrive. Only an
+        // opening at depth zero outside declaration ownership certifies a close.
+        if (!braces && !parens && !brackets &&
+            (header != Header::none || v == "namespace" || v == "extern") && outsideFamilies(t)) {
+          const auto pending = header;
+          header = Header::none;
+          if (pending == Header::namespaceName && (v == "{" || v == "<%")) opening = BlockKind::namespaceBlock;
+          else if ((pending == Header::namespaceName || pending == Header::nestedName) && t.kind == TokenKind::identifier && v != "inline") header = Header::namespaceTail;
+          else if (pending == Header::namespaceTail && v == "::") header = Header::nestedName;
+          else if (pending == Header::nestedName && v == "inline") header = Header::nestedName;
+          else if (pending == Header::namespaceTail && (v == "{" || v == "<%")) opening = BlockKind::namespaceBlock;
+          else if (pending == Header::externLanguage && (v == "\"C\"" || v == "\"C++\"")) header = Header::linkageBrace;
+          else if (pending == Header::linkageBrace && (v == "{" || v == "<%")) opening = BlockKind::linkageBlock;
+          else if (v == "namespace" && (!previous || previous->text != "using")) header = Header::namespaceName;
+          else if (v == "extern") header = Header::externLanguage;
+        } else header = Header::none;
+        previousShellClose = false;
         // Nesting is an extra veto, never evidence of a declaration boundary.
         if (v == "(") ++parens;
         else if (v == ")" && parens) --parens;
         else if (v == "[" || v == "<:") ++brackets;
         else if ((v == "]" || v == ":>") && brackets) --brackets;
-        else if (v == "{" || v == "<%") ++braces;
-        else if ((v == "}" || v == "%>") && braces) --braces;
+        else if (v == "{" || v == "<%") { ++braces; blocks.push_back(opening); }
+        else if ((v == "}" || v == "%>") && braces) {
+          --braces;
+          previousShellClose = !braces && blocks.back() != BlockKind::other;
+          blocks.pop_back();
+        }
+        previous = &t;
       }
     }
     // Count every surviving identifier, including all directive operands and

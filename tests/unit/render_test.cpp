@@ -498,6 +498,83 @@ TEST(render_pp_include_macro_scope_uncertainty) {
   m.expansions.push_back(e);
   PruningResult r; CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
 }
+TEST(render_pp_namespace_and_linkage_boundaries) {
+  for (const std::string block : {
+      "namespace a { int live; }", "namespace { int live; }",
+      "inline namespace a { int live; }", "namespace a::b { int live; }",
+      "namespace a::inline b { int live; }", "namespace a { namespace b { int live; } }",
+      "extern \"C\" { int live; }", "extern \"C++\" { int live; }",
+      "namespace a <% int live; %>", "extern \"C++\" <% int live; %>",
+      "namespace a::b {}", "extern \"C++\" {}"}) {
+    auto m = source("#include <vector>\n" + block + "\n#include <vector> // drop\n");
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,1u);
+    CHECK(out.provenance.text.find("// drop") == std::string::npos);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+  // Family-owned openings and initializer closes cannot certify a shell.
+  for (const std::string block : {
+      "alignas(8) int x{}", "auto x = [] { struct S { int live; }; }",
+      "extern \"C++\" { int live; }"}) {
+    auto m = source("#include <vector>\n" + block + "\n#include <vector>\n;\n");
+    const auto opening = m.text.find('{');
+    PruneFamily f; f.ranges = {{opening,opening+1}}; m.families = {f};
+    PruningResult r; r.families.resize(1); r.families[0].kept = true;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+  }
+}
+TEST(render_pp_balanced_macro_expansions_preserve_scope) {
+  for (const std::string replacement : {"do { (void)(x); } while (0)", "(<% int a<:1:>; %>)",
+                                        "# x", "%: x", "\"{)]\"", "", "{", ")", "<%", ":>", "([)]"}) {
+    const bool balanced = replacement != "{" && replacement != ")" && replacement != "<%" &&
+                          replacement != ":>" && replacement != "([)]";
+    for (int provenance = 0; provenance < 6; ++provenance) {
+      auto m = source("#include <vector>\n" +
+          (provenance == 2 ? "#define CHECK(x) " + replacement + "\n" :
+           provenance == 5 ? "#define CHECK " + replacement + "\n" : std::string{}) +
+          "int live(){ CHECK(1); return 0; }\n#include <vector>\n");
+      PruneFamily f; const auto start = m.text.find("int live");
+      f.ranges = {{start,m.text.find("\n#include",start)}}; m.families = {f};
+      PruneMacroExpansion e; e.offset = m.text.find("CHECK(1)"); e.name = "CHECK";
+      Macro macro; macro.functionLike = true; macro.parameters = {"x"}; macro.replacement = replacement;
+      MacroFact fact{MacroState::known,macro,{}};
+      if (provenance == 0) e.parse = fact;
+      if (provenance == 1) e.judge = fact;
+      if (provenance == 3) m.judgeInitial["CHECK"] = fact;
+      if (provenance == 4) { e.parse = fact; e.judge = fact; }
+      m.expansions = {e};
+      PruningResult r; r.families.resize(1); r.families[0].kept = true;
+      const auto out = take(renderSource(m,&r));
+      CHECK_EQ(out.trimming.includeLines,balanced ? 1u : 0u);
+      take(renderingInvariant(m,&r,out.provenance.text));
+    }
+  }
+}
+TEST(render_pp_macro_unknown_nested_and_conditional_barriers) {
+  for (int barrier = 0; barrier < 5; ++barrier) {
+    auto m = source("#include <vector>\nint live(){ CHECK(1); return 0; }\n" +
+        std::string(barrier == 4 ? "#if 1\n#endif\n" : "") + "#include <vector>\n");
+    PruneFamily f; const auto start = m.text.find("int live");
+    f.ranges = {{start,m.text.find("\n",start)}}; m.families = {f};
+    PruneMacroExpansion e; e.offset = m.text.find("CHECK(1)"); e.name = "CHECK";
+    Macro macro; macro.replacement = "(1)";
+    e.parse = {MacroState::known,macro,{}};
+    m.expansions = {e};
+    if (barrier == 0) m.expansions[0].parse = {}; // Unknown definition.
+    if (barrier == 1) { // Nested expansion at the same invocation offset.
+      e.name = "OPEN"; e.parse.definition->replacement = "{"; m.expansions.push_back(e);
+    }
+    if (barrier == 2) { e.judge = e.parse; e.judge.definition->replacement = ")"; m.expansions = {e}; }
+    if (barrier == 3) { // An object-like definition in the judge profile is sufficient.
+      m.expansions[0].parse = {};
+      m.judgeInitial["CHECK"] = {MacroState::known,macro,{}};
+      m.judgeInitial["CHECK"].definition->functionLike = false;
+    }
+    PruningResult r; r.families.resize(1); r.families[0].kept = true;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,barrier == 3 ? 1u : 0u);
+  }
+}
 TEST(render_pp_guard_provenance_and_observers) {
   const std::string name = "DISTILL_ONCE_0123456789abcdef";
   for (const std::string& use : std::vector<std::string>{"", "#ifdef " + name + "\n#endif\n", "#if defined(" + name + ")\n#endif\n",

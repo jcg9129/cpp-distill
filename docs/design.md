@@ -1829,14 +1829,21 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   `#pragma pop_macro` or an identifier token `_Pragma` (including replacement
   lists). Both includes must be outside every family range. The previous
   surviving non-directive token must end a complete family range before the
-  include; alternatively, only directives/trivia may precede the include.
+  include, or close a namespace or `extern "C"`/`extern "C++"` block whose
+  opening brace was at depth zero outside every family range. A stack of block
+  kinds tracks these closes, including unnamed, inline and nested-name
+  namespaces. Alternatively, only directives/trivia may precede the include.
   Lexical brace/parenthesis/bracket nesting is an additional veto, never proof
   that a declaration has ended. This uses declaration ownership rather than
   guessing function bodies from prefixes containing `)` or `class`.
   Both occurrences must be outside namespaces, linkage blocks (including
   `extern "C++"`), declarations and surviving conditionals. A surviving
-  conditional or retained non-directive macro expansion conservatively prevents
-  proving the scope of later includes.
+  conditional prevents proving the scope of later includes. A retained
+  non-directive macro expansion does so only when its replacement is unknown
+  or has unbalanced `()`, `[]` or `{}` delimiters (including digraphs). Check
+  worker expansion definitions, with output definitions and initial judge
+  facts as fallbacks; known parse and judge replacements must both balance.
+  Nested expansions sharing an invocation offset are checked individually.
   `--no-assume=idempotent-standard-headers` disables this policy.
   Under A14 remove a provenance-confirmed generated empty
   `#define DISTILL_ONCE_<hash>` only when its name is the sole surviving
