@@ -1,0 +1,14 @@
+example,observed executed,emitted but zero,no runtime instance in coverage
+series-composition-quick,42292,24910,21665
+polynomial-points-quick,19178,31374,21046
+power-series-powers-and-roots,31166,18182,19231
+polynomial-gcd-quick,21227,24257,21133
+polynomial-gcd-pade,20004,23554,21133
+point-location-quick,34589,653,24375
+linear-recurrence-quick,12855,16092,24807
+polynomial-points-sampling,21678,15555,20512
+link-cut-tree-basic,16493,0,31525
+polygon-overlay-quick,27485,563,24349
+power-series-quick,16977,16896,20902
+online-convolution-partitions,9419,20375,23193
+online-convolution-quick,6637,20375,25550
