@@ -3,5 +3,5 @@ family-count helper | 1
 eligible-count helper | 0
 kept helper | associated with R
 family-count body_helper | 1
-eligible-count body_helper | 0
-kept body_helper | associated with R
+eligible-count body_helper | 1
+removed body_helper | outside the retention closure

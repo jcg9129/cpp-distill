@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+eligible-count body_macro_helper | 1
+removed body_macro_helper | outside the retention closure
+eligible-count try_macro_helper | 1
+removed try_macro_helper | outside the retention closure
+eligible-count default_macro_helper | 0
+kept default_macro_helper | associated with R
+eligible-count lambda_default_helper | 0
+kept lambda_default_helper | associated with R
+eligible-count declared_macro_helper | 0
+kept declared_macro_helper | associated with R
+eligible-count deleted_helper | 1
+removed deleted_helper | outside the retention closure
+eligible-count deleted_macro_helper | 0
+kept deleted_macro_helper | associated with R
+kept named_in_macro_body |
+kept named_in_macro_argument |
+report | pruning assumption: D3f unspelled-functions

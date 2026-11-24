@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+args | --no-assume=unspelled-functions
+kept body_macro_helper | associated with R
+kept try_macro_helper | associated with R
+kept default_macro_helper | associated with R
+kept lambda_default_helper | associated with R
+kept declared_macro_helper | associated with R
+kept deleted_helper | associated with R
+kept deleted_macro_helper | associated with R
+kept named_in_macro_body |
+kept named_in_macro_argument |
+report-absent | pruning assumption: D3f unspelled-functions

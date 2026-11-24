@@ -363,14 +363,32 @@ struct Extraction {
           }
       }
     }
-    // Inspect the complete written declaration before member extraction or
-    // shared-syntax normalization partitions its byte ownership. Boundary
-    // pinning alone misses expansions wholly inside a declarator or body.
-    if (f.unspelledFunctionEligible)
+    // Inspect the written declaration before member extraction or shared-syntax
+    // normalization partitions its byte ownership. Body macros do not veto
+    // D3f; their identifiers still participate in the ordinary name rule.
+    if (f.unspelledFunctionEligible) {
+      const auto* fn = cast<FunctionDecl>(base);
+      auto declarationEnd = r->end;
+      if (body) {
+        // The AST boundary includes the complete parameter list (and default
+        // arguments), trailing return, noexcept and requires-clause. A function
+        // try-block begins at 'try', rather than at its compound statement.
+        if (const auto* statement = fn->getBody(); statement && user(statement->getBeginLoc()))
+          declarationEnd = offset(statement->getBeginLoc());
+      } else if (fn->isExplicitlyDefaulted() || fn->isDeletedAsWritten()) {
+        // These definitions have no statement body. Find their written suffix;
+        // an '=' in a parameter default must remain inside the declaration.
+        auto token = std::lower_bound(tokens.begin(),tokens.end(),r->begin,[](const auto& t,auto p) { return t.begin < p; });
+        for (; token != tokens.end() && token->begin < r->end; ++token)
+          if (token->text == "=" && std::next(token) != tokens.end() &&
+              std::next(token)->text == (fn->isExplicitlyDefaulted() ? "default" : "delete"))
+            declarationEnd = token->begin;
+      }
       for (auto invocation : macroInvocations)
-        if (invocation.begin < r->end && r->begin < invocation.end) {
+        if (invocation.begin < declarationEnd && r->begin < invocation.end) {
           f.unspelledFunctionEligible = false; break;
         }
+    }
     f.ranges.push_back(*r);
     const auto physical = sm.getLineNumber(sm.getMainFileID(),r->begin);
     if (physical && physical <= model.lineMap.size()) f.original = model.lineMap[physical-1];
