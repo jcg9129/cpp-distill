@@ -62,6 +62,8 @@ struct PruneMacroExpansion {
   // within the same physical user invocation span: the replacement's spelling
   // may reach a stringize/paste operand. Conservative; see the D3d-4 review.
   bool hashOperator = false;
+  // Physical source extent supplied by PPCallbacks, not inferred from tokens.
+  std::optional<std::size_t> invocationEnd;
 };
 // Integer literal widths of the Clang parse target, reported by the worker.
 struct LiteralWidths {

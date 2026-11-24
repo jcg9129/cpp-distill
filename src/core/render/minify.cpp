@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/render/minify.h"
 #include "core/names/adl.h"
+#include "core/names/names.h"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -108,8 +109,11 @@ std::vector<Signature> signature(std::string_view text, const RenameMap& map) {
       // A sentinel preserves ends even for empty directives.
       out.push_back({TokenKind::punctuation,"<directive-end>",directive});
       const auto& t = l.tokens;
-      if (l.directive->name == "define" && t.size() > 3 && t[3].text == "(")
-        out.push_back({TokenKind::punctuation,t[2].end == t[3].begin ? "<function-macro>" : "<object-macro>",directive});
+      if (l.directive->name == "define" && t.size() > 3) {
+        const bool function = t[3].text == "(" && t[2].end == t[3].begin;
+        out.push_back({TokenKind::punctuation,function ? "<function-macro>" :
+            t[2].end < t[3].begin ? "<object-macro>" : "<missing-object-separator>",directive});
+      }
     }
   }
   return out;
@@ -134,11 +138,23 @@ Result<MinifiedSource> minifySource(std::string_view compact, const PruningModel
     MinifiedSource result;
     const auto scan = take(scanDirectives(compact)); const auto all = tokens(scan);
     Names excluded = keywords();
+    excluded.insert(minifyCompilerNames().begin(),minifyCompilerNames().end());
     excluded.insert(model.minifyExcludedNames.begin(),model.minifyExcludedNames.end());
     excluded.insert(model.libraryMemberNames.begin(),model.libraryMemberNames.end());
     for (const auto& row : embeddedAdlRegistry().entries) excluded.insert(row.name);
     Names sensitive;
-    for (const auto& e : model.expansions) if (e.hashOperator) sensitive.insert(e.name);
+    for (const auto& e : model.expansions) if (e.hashOperator) {
+      // hashOperator also marks ordinary macros pre-expanded as operands.
+      // Their actual ranges are protected below, but an object-like operand
+      // does not itself require a following source parenthesis.
+      bool invocation = !e.parse.definition || e.parse.definition->functionLike;
+      if (e.parse.definition) {
+        const auto replacement = take(scanDirectives(e.parse.definition->replacement));
+        for (const auto& t : tokens(replacement)) if (t.kind == TokenKind::punctuation &&
+            (t.text == "#" || t.text == "##" || t.text == "%:" || t.text == "%:%:")) invocation = true;
+      }
+      if (invocation) sensitive.insert(e.name);
+    }
     result.namesKept = model.minifyNamesRefused;
     if (!model.assumeLibrarySpelledNames) result.namesKept = "A15 library-spelled-names disabled (T1 only)";
     else if (!model.libraryMemberNamesComputed) return Error{"library-spelled identifier set was not computed"};
@@ -159,6 +175,16 @@ Result<MinifiedSource> minifySource(std::string_view compact, const PruningModel
       }
       if (i && t.kind == TokenKind::identifier && all[i-1].kind == TokenKind::literal &&
           (all[i-1].end == t.begin || (i > 1 && all[i-2].text == "operator"))) excluded.insert(t.text);
+      if (t.text == "__has_attribute" || t.text == "__has_cpp_attribute" || t.text == "__has_builtin" ||
+          t.text == "__has_feature" || t.text == "__has_extension" || t.text == "__is_identifier") {
+        unsigned depth = 0;
+        for (auto j = i+1; j < all.size(); ++j) {
+          if (all[j].text == "(") ++depth;
+          if (!depth) break;
+          if (all[j].kind == TokenKind::identifier) excluded.insert(all[j].text);
+          if (all[j].text == ")" && !--depth) break;
+        }
+      }
       if (t.text == "[" && i+1 < all.size() && all[i+1].text == "[") ++attribute;
       if (t.text == "__attribute__" || t.text == "__declspec") pendingGnu = true;
       else if (pendingGnu) { pendingGnu = false; if (t.text == "(") gnu = 1; }
@@ -178,6 +204,17 @@ Result<MinifiedSource> minifySource(std::string_view compact, const PruningModel
       if (l.directive->name == "pragma") for (const auto& x : t) if (x.kind == TokenKind::identifier) excluded.insert(x.text);
       if ((l.directive->name == "define" || l.directive->name == "undef") && t.size() > 2) excluded.insert(t[2].text);
       if (l.directive->name == "define" && t.size() > 3) {
+        std::size_t body = 3;
+        if (t[3].text == "(" && t[2].end == t[3].begin) {
+          while (body < t.size() && t[body].text != ")") ++body;
+          ++body;
+        }
+        int depth = 0; bool unbalanced = false;
+        for (auto j = body; j < t.size(); ++j) {
+          if (t[j].text == "(") ++depth;
+          if (t[j].text == ")" && --depth < 0) unbalanced = true;
+        }
+        if (depth || unbalanced) return Error{"T1: unbalanced macro replacement: " + t[2].text};
         if (t[3].text == "(" && t[2].end == t[3].begin) for (auto j = 4u; j < t.size() && t[j].text != ")"; ++j) excluded.insert(t[j].text);
         if (std::any_of(t.begin()+3,t.end(),[](const auto& x) { return x.text == "#" || x.text == "##" || x.text == "%:" || x.text == "%:%:"; })) {
           sensitive.insert(t[2].text);
@@ -185,17 +222,39 @@ Result<MinifiedSource> minifySource(std::string_view compact, const PruningModel
         }
       }
     }
-    // Protect the whole invocation, including forwarding macros identified by
-    // the worker's hash provenance; all argument spellings and gaps stay.
+    // Worker ranges cover expansions assembled from replacement lists and
+    // surrounding source. Never apply flat.cpp offsets to compact.cpp bytes.
     std::vector<EditRange> protectedRanges;
-    for (std::size_t i = 0; i+1 < all.size(); ++i) if (sensitive.contains(all[i].text) && all[i+1].text == "(") {
-      unsigned depth = 0;
-      for (auto j = i+1; j < all.size(); ++j) {
-        if (all[j].kind == TokenKind::identifier) excluded.insert(all[j].text);
-        if (all[j].text == "(") ++depth;
-        if (all[j].text == ")" && !--depth) { protectedRanges.push_back({all[i].begin,all[j].end}); break; }
-      }
+    for (const auto& e : model.expansions) if (e.hashOperator && e.user && !e.condition) {
+      if (model.text != compact || !e.invocationEnd || e.offset >= *e.invocationEnd || *e.invocationEnd > compact.size())
+        return Error{"T1: unavailable sensitive macro invocation extent: " + e.name};
+      protectedRanges.push_back({e.offset,*e.invocationEnd});
     }
+    // Also cover unexpanded/inactive source occurrences. Definitions are
+    // already protected; a matching search may never cross a directive.
+    std::vector<Token> code;
+    auto protectCode = [&]() -> Result<bool> {
+      for (std::size_t i = 0; i < code.size(); ++i) if (sensitive.contains(code[i].text)) {
+        if (i+1 == code.size() || code[i+1].text != "(")
+          return Error{"T1: sensitive macro not followed by source '(': " + code[i].text};
+        unsigned depth = 0; bool closed = false;
+        for (auto j = i+1; j < code.size(); ++j) {
+          if (code[j].text == "(") ++depth;
+          if (code[j].text == ")" && !--depth) {
+            protectedRanges.push_back({code[i].begin,code[j].end}); closed = true; break;
+          }
+        }
+        if (!closed) return Error{"T1: sensitive macro extent crosses directive or end of source: " + code[i].text};
+      }
+      code.clear(); return true;
+    };
+    for (const auto& l : scan.lines) {
+      if (l.directive) take(protectCode());
+      else code.insert(code.end(),l.tokens.begin(),l.tokens.end());
+    }
+    take(protectCode());
+    for (const auto& t : all) for (auto r : protectedRanges)
+      if (r.begin <= t.begin && t.begin < r.end && t.kind == TokenKind::identifier) excluded.insert(t.text);
     std::map<std::string,std::size_t,std::less<>> counts;
     for (const auto& t : all) if (t.kind == TokenKind::identifier && !excluded.contains(t.text)) ++counts[t.text];
     if (result.namesKept.empty()) {
@@ -227,11 +286,11 @@ Result<MinifiedSource> minifySource(std::string_view compact, const PruningModel
       return i->second;
     };
     for (const auto& l : scan.lines) {
-      std::size_t body = compact.size(); bool objectParen = false;
+      std::size_t body = compact.size(); bool objectReplacement = false;
       if (l.directive && l.directive->name == "define" && l.tokens.size() > 3) {
         const auto& ts = l.tokens; std::size_t index = 3;
         const bool function = ts[3].text == "(" && ts[2].end == ts[3].begin;
-        objectParen = ts[3].text == "(" && !function;
+        objectReplacement = !function;
         if (function) { while (index < ts.size() && ts[index].text != ")") ++index; ++index; }
         if (index < ts.size()) body = ts[index].begin;
       }
@@ -240,7 +299,7 @@ Result<MinifiedSource> minifySource(std::string_view compact, const PruningModel
         const bool firstDirectiveToken = l.directive && &t == &l.tokens.front();
         bool protect = firstDirectiveToken || (l.directive && l.directive->name == "pragma") ||
             (previous && previous->begin >= body) || gap.find('\\') != gap.npos;
-        const bool forceSpace = objectParen && &t == &l.tokens[3];
+        const bool forceSpace = objectReplacement && &t == &l.tokens[3];
         // Keep comments should a caller supply bytes without --strip-comments.
         for (const auto& c : scan.comments) if (end <= c.begin && c.begin < t.begin) protect = true;
         for (auto r : protectedRanges) if (end >= r.begin && t.begin < r.end) protect = true;

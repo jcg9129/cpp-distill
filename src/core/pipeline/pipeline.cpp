@@ -270,7 +270,21 @@ struct Pipeline {
     const auto previousRuntime = result.runtime;
     try {
       step("minify checks");
-      const auto candidate = take(minifySource(original,*result.pruningModel));
+      ResolveResult compactSource; compactSource.text = original;
+      auto input = take(preparePruning(*flatConfiguration,{},compactSource,options.profile,{}));
+      input.minify = true;
+      input.assumeLibrarySpelledNames = options.assumeLibrarySpelledNames;
+      input.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
+      input.assumeInstantiationEffects = options.assumeInstantiationEffects;
+      input.assumeUnspelledFunctions = options.assumeUnspelledFunctions;
+      PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
+      worker.timeout = options.stepTimeout; worker.deadline = deadline;
+      worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
+        result.processes.push_back({currentStep,spec}); return runner(spec);
+      };
+      const auto model = take(extractPruning(input,worker));
+      if (!model.disabledReasons.empty()) throw Error{"minify analysis: " + model.disabledReasons.front()};
+      const auto candidate = take(minifySource(original,model));
       take(minifyInvariant(original,candidate.text,candidate.renames));
       const auto path = work.path / "minified.cpp"; write(path,candidate.text);
       auto program = build(*flatConfiguration,path,true,"minified");

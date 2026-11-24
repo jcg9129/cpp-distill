@@ -13,7 +13,8 @@ target_compile_definitions(distill_unit_tests PRIVATE
 target_compile_definitions(distill_unit_tests PRIVATE DISTILL_EXTENSION_DATA="${PROJECT_SOURCE_DIR}/data/extensions" DISTILL_PROFILE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/profile" DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
 add_dependencies(distill_unit_tests distill_test_helper)
 add_test(NAME unit COMMAND distill_unit_tests)
-set_tests_properties(unit PROPERTIES TIMEOUT 120)
+# Full probe/pipeline units and minify allocation regressions on bounded hosts.
+set_tests_properties(unit PROPERTIES TIMEOUT 240)
 # Replace the baseline object in these test binaries with a synthetic baseline
 # emitted by the real merger/embedder. The committed matrix data stays untouched.
 set(member_fixture "${CMAKE_CURRENT_BINARY_DIR}/embedded_members.cpp")

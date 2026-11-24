@@ -6,6 +6,8 @@
 #include "profile.h"
 #include "library_features.h"
 #include "core/render/render.h"
+#include "core/render/minify.h"
+#include "core/prune/extract.h"
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -96,6 +98,30 @@ void inject(const ProcessSpec& spec, const std::string& fault) {
       if (pos != s.npos) { s.replace(pos, 8, "return 1"); write(p, s); }
     }
   }
+}
+// Compile the exact compact and minified/fallback bytes independently of the
+// pipeline's sample gate. This catches candidates accepted only as extensions.
+void compareMinified(const std::filesystem::path& cwd, const CompileCommand& command,
+                     std::string_view compact, std::string_view minified) {
+  std::vector<ProcessResult> outputs;
+  for (const auto& [name,bytes] : std::vector<std::pair<std::string,std::string_view>>{
+      {"regression-compact",compact},{"regression-minified",minified}}) {
+    const auto source = cwd / (name+".cpp"), program = cwd / (name+".exe");
+    write(source,std::string(bytes));
+    ProcessSpec build; build.cwd = cwd; build.timeout = std::chrono::seconds(20);
+    build.argv = command.buildArgv(source,program,true,{},true);
+    build.argv.insert(build.argv.begin()+1,"-Werror");
+    const auto built = take(runProcess(build));
+    check(!built.exitCode && !built.signal && !built.timedOut,"regression build failed: " + built.stderrText);
+    ProcessSpec run; run.cwd = cwd; run.argv = {pathToUtf8(program)}; run.timeout = std::chrono::seconds(10);
+    auto output = take(runProcess(run));
+    check(!output.timedOut && !output.signal && !output.stdoutTruncated && !output.stderrTruncated,
+          "regression run failed: " + output.stderrText);
+    outputs.push_back(std::move(output));
+  }
+  check(outputs[0].exitCode == 0 && outputs[0].exitCode == outputs[1].exitCode &&
+        outputs[0].stdoutText == outputs[1].stdoutText && outputs[0].stderrText == outputs[1].stderrText,
+        "minified program differs from compact program");
 }
 #include "checker_cases.h"
 #include "caide_cases.h"
@@ -400,6 +426,36 @@ int run(int argc, char** argv) {
           check(result.pruningModel.has_value(), "missing minify exclusion model");
           for (const auto& name : words(value("excluded")))
             check(result.pruningModel->minifyExcludedNames.contains(name), "missing worker minify exclusion: " + name);
+        }
+        if (value("compare-compact") == "yes") {
+          check(builtInputs.contains("compact"),"missing compiled compact regression baseline");
+          compareMinified(cwd,cmd,builtInputs.at("compact"),result.bytes);
+        }
+        if (!value("direct-minify").empty()) {
+          // Some library/coroutine cases hit earlier pruning/position gates.
+          // Test final spelling on the whole program without removing families.
+          check(result.pruningModel.has_value(),"missing direct minify configuration");
+          PruningModel input; input.text = take(compactWhitespace(read(cwd / "main.cpp")));
+          input.parseArgv = result.pruningModel->parseArgv; input.dialect = result.pruningModel->dialect;
+          input.minify = true;
+          PruneWorkerOptions options; options.executable = workerPath; options.temporaryRoot = cwd;
+          auto model = take(extractPruning(input,options));
+          // Protocols must survive without incidental header coverage.
+          for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"}) {
+            model.libraryMemberNames.erase(name); model.minifyExcludedNames.erase(name);
+          }
+          check(model.libraryMemberNamesComputed,"missing direct minify library inventory");
+          const auto minified = take(minifySource(input.text,model));
+          if (value("direct-minify") == "observation") {
+            check(minified.namesKept.starts_with("semantic name observation:"),"missed direct semantic observation: " + minified.namesKept);
+            check(minified.renames.empty(),"renamed observable names");
+          } else {
+            check(minified.namesKept.empty(),"direct minify unexpectedly refused T2");
+            for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"})
+              check(!minified.renames.contains(name),"renamed compiler protocol name: " + std::string(name));
+            check(!minified.renames.empty(),"direct minify did not exercise T2");
+          }
+          compareMinified(cwd,cmd,input.text,minified.text);
         }
         diagnostic = result.diagnostic; bytes = result.bytes;
         if (code != 1)

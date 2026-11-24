@@ -649,7 +649,7 @@ public:
       return o == FactOrigin::compilerBuiltin || o == FactOrigin::specialBuiltin || o == FactOrigin::nativeModel || o == FactOrigin::commandOperation;
     });
     if (predefined) e.model.expansions.push_back({e.offset(token.getLocation()),name,true,false,true,
-        {MacroState::undefined,{},{}},f,false,false,true});
+        {MacroState::undefined,{},{}},f,false,false,true,false,{}});
   }
   void FileChanged(clang::SourceLocation loc, FileChangeReason reason,
                    SrcMgr::CharacteristicKind kind, FileID = FileID()) override {
@@ -756,7 +756,8 @@ public:
     bool paste = source && std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.is(tok::hashhash); });
     auto parse = fact(mi);
     parse.provenance = {source ? FactOrigin::source : system ? FactOrigin::systemHeader : command ? FactOrigin::commandOperation : FactOrigin::compilerBuiltin};
-    e.model.expansions.push_back({offset,name,true,false,builtin || judgePredefined,parse,judge,paste,false,true});
+    e.model.expansions.push_back({offset,name,true,false,builtin || judgePredefined,parse,judge,paste,false,true,false,{}});
+    if (auto r = e.range(range)) e.model.expansions.back().invocationEnd = r->end;
     auto& group = e.pasteGroups[offset]; group.first |= paste; group.second |= system || builtin || judgePredefined;
     if (std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); }))
       e.hashOffsets.insert(offset);
@@ -1459,17 +1460,86 @@ public:
     return !x->getField() || evaluated(x->getField()->getInClassInitializer());
   }
 };
+// Semantic name-observation audit, run on the exact kept compact artifact.
+// Canonical types and declaration contexts catch aliases, auto, references,
+// template arguments and library-mediated RTTI without source-token heuristics.
+bool inNamespace(const DeclContext* context, llvm::StringRef name) {
+  for (; context; context = context->getParent())
+    if (const auto* ns = dyn_cast<NamespaceDecl>(context); ns && ns->getName() == name && (name != "std" || ns->isStdNamespace())) return true;
+  return false;
+}
+bool nameObservationEntity(const NamedDecl* d) {
+  if (!d) return false;
+  if (const auto* ns = dyn_cast<NamespaceDecl>(d); ns && (ns->getName() == "abi" || ns->getName() == "__cxxabiv1")) return true;
+  if (inNamespace(d->getDeclContext(), "abi") || inNamespace(d->getDeclContext(), "__cxxabiv1")) return true;
+  if (!inNamespace(d->getDeclContext(), "std")) return false;
+  const auto name = d->getNameAsString();
+  if (name == "type_info" || name == "type_index" || name == "source_location" ||
+      name == "stacktrace" || name == "basic_stacktrace" || name == "stacktrace_entry") return true;
+  if (const auto* method = dyn_cast<CXXMethodDecl>(d)) {
+    const auto parent = method->getParent()->getName();
+    return (parent == "type_info" && name == "name") ||
+           (parent == "function" && name == "target_type") ||
+           (parent == "any" && name == "type");
+  }
+  return false;
+}
+bool nameObservationType(QualType, std::set<const Type*>&);
+bool nameObservationArgument(const TemplateArgument& arg, std::set<const Type*>& seen) {
+  if (arg.getKind() == TemplateArgument::Type) return nameObservationType(arg.getAsType(),seen);
+  if (arg.getKind() == TemplateArgument::Pack)
+    for (const auto& element : arg.pack_elements()) if (nameObservationArgument(element,seen)) return true;
+  return false;
+}
+bool nameObservationType(QualType q, std::set<const Type*>& seen) {
+  if (q.isNull()) return false;
+  const auto* t = q.getCanonicalType().getTypePtr();
+  if (!seen.insert(t).second) return false;
+  if (const auto* tag = dyn_cast<TagType>(t); tag && nameObservationEntity(tag->getDecl())) return true;
+  if (const auto* r = t->getAs<RecordType>()) {
+    if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(r->getDecl()))
+      for (const auto& arg : spec->getTemplateArgs().asArray())
+        if (nameObservationArgument(arg,seen)) return true;
+  }
+  if (const auto* spec = dyn_cast<TemplateSpecializationType>(t))
+    for (const auto& arg : spec->template_arguments()) if (nameObservationArgument(arg,seen)) return true;
+  if (const auto* member = dyn_cast<MemberPointerType>(t))
+    return nameObservationType(member->getPointeeType(),seen) || nameObservationType(QualType(member->getQualifier().getAsType(),0),seen);
+  if (t->isPointerType() || t->isReferenceType())
+    return nameObservationType(t->getPointeeType(),seen);
+  if (const auto* array = dyn_cast<ArrayType>(t)) return nameObservationType(array->getElementType(),seen);
+  if (const auto* f = dyn_cast<FunctionType>(t)) {
+    if (nameObservationType(f->getReturnType(),seen)) return true;
+    if (const auto* proto = dyn_cast<FunctionProtoType>(t))
+      for (auto param : proto->param_types()) if (nameObservationType(param,seen)) return true;
+  }
+  return false;
+}
 class Positions final : public RecursiveASTVisitor<Positions> {
   Extraction& e;
 public:
   explicit Positions(Extraction& x) : e(x) {}
+  void observe(clang::SourceLocation loc, QualType q) {
+    if (!e.model.minify || !e.user(loc) || !e.model.minifyNamesRefused.empty()) return;
+    std::set<const Type*> seen;
+    if (nameObservationType(q,seen)) e.model.minifyNamesRefused = "semantic name observation: " + q.getAsString();
+  }
+  void observe(clang::SourceLocation loc, const NamedDecl* d) {
+    if (e.model.minify && e.user(loc) && e.model.minifyNamesRefused.empty() && nameObservationEntity(d))
+      e.model.minifyNamesRefused = "semantic name observation: " + d->getQualifiedNameAsString();
+  }
+  bool VisitNamedDecl(NamedDecl* d) { observe(d->getLocation(),d); return true; }
+  bool VisitTypedefTypeLoc(TypedefTypeLoc t) { observe(t.getBeginLoc(),t.getTypePtr()->getDecl()); return true; }
+  bool VisitUsingTypeLoc(UsingTypeLoc t) { observe(t.getBeginLoc(),t.getTypePtr()->getDecl()->getTargetDecl()); return true; }
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
   bool VisitExpr(Expr* x) {
+    observe(x->getExprLoc(),x->getType());
     if (e.user(x->getExprLoc()) && positionType(x->getType())) e.position(x->getExprLoc(),"value of type " + x->getType().getAsString());
     return true;
   }
   bool VisitValueDecl(ValueDecl* d) {
+    observe(d->getLocation(),d->getType());
     if (e.model.minify && e.user(d->getLocation())) {
       bool c = false;
       if (const auto* f = dyn_cast<FunctionDecl>(d)) {
@@ -1484,26 +1554,32 @@ public:
     return true;
   }
   bool VisitTypeLoc(TypeLoc t) {
+    observe(t.getBeginLoc(),t.getType());
     if (e.user(t.getBeginLoc()) && positionType(t.getType())) e.position(t.getBeginLoc(),"type " + t.getType().getAsString());
     return true;
   }
   bool VisitDeclRefExpr(DeclRefExpr* x) {
+    observe(x->getLocation(),x->getDecl());
     if (positionEntity(x->getDecl())) e.position(x->getLocation(),"use of " + x->getDecl()->getQualifiedNameAsString());
     return true;
   }
   bool VisitMemberExpr(MemberExpr* x) {
+    observe(x->getMemberLoc(),x->getMemberDecl());
     if (positionEntity(x->getMemberDecl())) e.position(x->getMemberLoc(),"use of " + x->getMemberDecl()->getQualifiedNameAsString());
     return true;
   }
   bool VisitUsingDirectiveDecl(UsingDirectiveDecl* d) {
+    observe(d->getLocation(),d->getNominatedNamespace());
     if (positionEntity(d->getNominatedNamespace())) e.position(d->getLocation(),"using directive for a namespace with source positions");
     return true;
   }
   bool VisitUsingShadowDecl(UsingShadowDecl* d) {
+    observe(d->getLocation(),d->getTargetDecl());
     if (positionEntity(d->getTargetDecl())) e.position(d->getLocation(),"using declaration of " + d->getTargetDecl()->getQualifiedNameAsString());
     return true;
   }
   bool VisitNamespaceAliasDecl(NamespaceAliasDecl* d) {
+    observe(d->getLocation(),d->getNamespace());
     if (positionEntity(d->getNamespace())) e.position(d->getLocation(),"alias of a namespace with source positions");
     return true;
   }
@@ -1608,6 +1684,8 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   auto& sm = compiler.getSourceManager();
   sm.setMainFileID(sm.createFileID(llvm::MemoryBuffer::getMemBufferCopy(model.text,"flat.cpp")));
   Extraction extraction(std::move(model),compiler);
+  if (extraction.model.minify) for (const auto& entry : pp.getIdentifierTable())
+    if (entry.getValue()->getBuiltinID()) extraction.model.minifyExcludedNames.insert(entry.getKey().str());
   auto callbacks = std::make_unique<Macros>(extraction); auto* watcher = callbacks.get();
   compiler.getPreprocessor().setTokenWatcher([watcher](const clang::Token& token) { watcher->finalToken(token); });
   compiler.getPreprocessor().addPPCallbacks(std::move(callbacks));

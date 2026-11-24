@@ -233,6 +233,8 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     const auto& e = m.expansions[i];
     const auto field = "model.expansions["+std::to_string(i)+"]";
     if (e.offset > m.text.size()) return invalid("invalid expansion offset",field+".offset");
+    if (e.invocationEnd && (*e.invocationEnd <= e.offset || *e.invocationEnd > m.text.size()))
+      return invalid("invalid expansion extent",field+".invocationEnd");
     if (!factValid(e.parse)) return invalid("invalid expansion fact",field+".parse");
     if (!factValid(e.judge)) return invalid("invalid expansion fact",field+".judge");
   }

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+minify=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+compare-compact=yes
+report=minify: kept: T1: unbalanced macro replacement: UNUSED_OPEN
+contains=#define UNUSED_OPEN (

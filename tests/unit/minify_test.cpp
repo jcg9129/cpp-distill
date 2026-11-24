@@ -2,6 +2,7 @@
 #include "support.h"
 #include "core/render/minify.h"
 #include "core/command/options.h"
+#include "core/names/names.h"
 using namespace distill;
 namespace {
 template<class T> T take(Result<T> r) { if (!r.ok()) throw std::runtime_error(r.error().message); return std::move(r.value()); }
@@ -78,4 +79,81 @@ TEST(minify_rename_can_introduce_a_literal_prefix) {
   CHECK_EQ(out.renames.at("longIdentifier"),"L");
   CHECK(out.text.find("L \"literal\"") != out.text.npos);
   CHECK(take(minifyInvariant(text,out.text,out.renames)));
+}
+
+TEST(minify_object_macro_separator_invariant) {
+  auto m = model();
+  const std::string text = "#define TEXT \"x\"\n#define EMPTY\n#define SYMBOL +\nint main(){return TEXT[0]!='x';}\n";
+  const auto out = take(minifySource(text,m));
+  CHECK(out.text.find("#define TEXT \"x\"") != out.text.npos);
+  CHECK(out.text.find("#define SYMBOL +") != out.text.npos);
+  CHECK(!minifyInvariant("#define TEXT \"x\"\n", "#define TEXT\"x\"\n",{}).ok());
+  CHECK(!minifyInvariant("#define TEXT x\n", "#defineTEXT x\n",{}).ok());
+  CHECK(!minifyInvariant("#define N x\n", "#define Nx\n",{}).ok());
+}
+TEST(minify_sensitive_ranges_stop_at_directives_and_unknown_extents_refuse) {
+  auto m = model();
+  for (const auto* text : {
+      "#define S(x) #x\n#define OPEN S(\nauto first=OPEN a + b);auto second=OPEN a + b);",
+      "#define UNUSED )\nint main(){return 0;}",
+      "#define S(x) #x\nS\n#define OTHER 1\n(a + b)",
+      "#define S(x) #x\nS(a +\n#define OTHER 1\nb)"}) CHECK(!minifySource(text,m).ok());
+  const std::string text = "#define S(x) #x\nauto first=S(a + b);\n#define OTHER 1\nauto second=S(a + b);";
+  const auto out = take(minifySource(text,m));
+  CHECK(out.text.find("S(a + b)") != out.text.npos);
+  CHECK(out.text.rfind("S(a + b)") != out.text.find("S(a + b)"));
+  m.text = text;
+  PruneMacroExpansion e; e.offset = text.find("S(a"); e.name = "S"; e.hashOperator = true;
+  m.expansions = {e}; CHECK(!minifySource(text,m).ok());
+  e.invocationEnd = text.find(");")+1; m.expansions = {e};
+  CHECK(minifySource(text,m).ok());
+  CHECK(!minifySource(text+" ",m).ok()); // Stale provenance is never used.
+}
+TEST(minify_compiler_protocol_and_generated_names) {
+  auto m = model();
+  const auto& names = minifyCompilerNames();
+  for (const auto* name : {"promise_type","get_return_object","get_return_object_on_allocation_failure",
+      "initial_suspend","final_suspend","return_void","return_value","yield_value","unhandled_exception",
+      "await_transform","await_ready","await_suspend","await_resume","from_promise","from_address","address","resume","destroy","done",
+      "std","tuple_size","tuple_element","value","type","get","begin","end","size",
+      "strong_ordering","weak_ordering","partial_ordering","initializer_list",
+      "linux","unix","i386","i686","sun","sparc","mips","vax","BSD","M68020",
+      "alloca","printf","strlen","ffs"}) CHECK(names.contains(name));
+  std::string text;
+  for (const auto& name : names) text += "int " + name + ";";
+  const auto out = take(minifySource(text,m)); CHECK(out.renames.empty());
+  // Make the allocator reach the three-character names without a huge source.
+  // Both compiler builtin 'ffs' and language protocol 'get' lie in this span.
+  constexpr std::string_view first = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  constexpr std::string_view more = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  for (char a : first) {
+    m.minifyExcludedNames.insert(std::string(1,a));
+    for (char b : more) m.minifyExcludedNames.insert(std::string{a,b});
+  }
+  for (char b : more) for (char c : more) m.minifyExcludedNames.insert(std::string{'a',b,c});
+  // Judge predefines need not be queried or spelled in the source.
+  m.judgeInitial["baa"] = {MacroState::known,Macro{false,{},false,"1"},{}};
+  const auto allocated = take(minifySource("int longUserIdentifier;",m));
+  CHECK_EQ(allocated.renames.at("longUserIdentifier"),"bab");
+  // Start just before 'ffs'; blocked compiler names are skipped by allocation.
+  for (char a : first) {
+    if (a == 'f') break;
+    for (char b : more) for (char c : more) m.minifyExcludedNames.insert(std::string{a,b,c});
+  }
+  for (char b : more) {
+    if (b == 'f') break;
+    for (char c : more) m.minifyExcludedNames.insert(std::string{'f',b,c});
+  }
+  for (char c : more) { if (c == 's') break; m.minifyExcludedNames.insert(std::string{'f','f',c}); }
+  CHECK_EQ(take(minifySource("int longUserIdentifier;",m)).renames.at("longUserIdentifier"),"fft");
+  for (char a : first) {
+    if (a == 's') break;
+    for (char b : more) for (char c : more) m.minifyExcludedNames.insert(std::string{a,b,c});
+  }
+  for (char b : more) {
+    if (b == 'u') break;
+    for (char c : more) m.minifyExcludedNames.insert(std::string{'s',b,c});
+  }
+  for (char c : more) { if (c == 'n') break; m.minifyExcludedNames.insert(std::string{'s','u',c}); }
+  CHECK_EQ(take(minifySource("int longUserIdentifier;",m)).renames.at("longUserIdentifier"),"suo");
 }

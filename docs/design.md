@@ -180,8 +180,8 @@ these, and only these; the report lists each one an output depended on, and
   `--no-assume=unobserved-guard-macros`. Raw and flat artifacts are unchanged.
 
 - **A15 (`library-spelled-names`)** (user, 2026-11-24) The judge's standard
-  library headers and predefined macros spell no identifier that the program
-  spells, other than identifiers spelled in the worker's included library
+  library headers and predefined macros spell no identifier that the original or
+  the minified program spells, other than identifiers spelled in the worker's included library
   headers, produced by their macro expansions, or spelled in a scanned library build.
   `--minify` uses A15 for spelling-based identifier shortening. Disabling it with
   `--no-assume=library-spelled-names` disables only T2; T1 still runs. The worker
@@ -1928,22 +1928,55 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   T2 assigns identifiers by spelling, simultaneously across code and user macro
   replacements, with shortest names assigned by descending token frequency
   (alphabetical ties). Generated names use `[a-zA-Z][a-zA-Z0-9]*`, are injective,
-  and avoid every retained spelling, library spelling and keyword. Exclusions
-  include the A6 registry, `main`, reserved and preprocessing names, macro names
+  and avoid every retained spelling, library spelling and keyword. Both old and
+  generated names exclude the explicit compiler-protocol registry in
+  `data/names/standard-protocols.txt`, with stable clause references: coroutine
+  promise/await hooks, tuple-like structured bindings, range access, comparison
+  categories, initializer lists, allocation types and contract handling.
+  `data/names/standard-compiler.txt` additionally blocks ordinary GCC/Clang target
+  predefines (including GNU-mode `linux`, `unix`, `i386`, `i686`, `sun`, `sparc`,
+  `mips`, `vax`) and a conservative GCC builtin inventory, independently of A15.
+  The allocator also blocks **all** names in the judge's initial macro inventory
+  (`judgeInitial`, not just queried names), and the worker's registered builtin
+  identifiers. The historical GCC documented target list is supplemented because
+  GCC's current manual explicitly does not enumerate every target's predefines.
+  Exclusions include the A6 registry, `main`, reserved and preprocessing names, macro names
   and parameters, stringizing/pasting bodies and invocation arguments (including
   system macros and forwarding invocations), pasted identifier results, literal text and UDL suffixes,
   attribute names/namespaces, C-linkage names, asm/attribute strings, pragma
   names and asm goto labels. `typeid`, `__func__`, `__FUNCTION__`,
   `__PRETTY_FUNCTION__`, `source_location` or `__builtin_FUNCTION` refuses T2
-  because names may be observable; T1 can still run.
+  because names may be observable; T1 can still run. An AST audit also refuses
+  T2 for user expressions/declarations whose canonical type involves
+  `std::type_info`, `std::type_index`, `std::source_location` or stacktrace types,
+  including pointer/reference/array/function types and template arguments. It
+  checks semantic declaration contexts for `type_info::name`,
+  `std::function::target_type`, `std::any::type`, and every entity in namespace
+  `abi`/`__cxxabiv1`. Aliases, deduced types and macro spellings cannot hide these
+  uses; same-named user declarations outside those namespaces do not trigger
+  this semantic guard. A second worker extraction uses the **exact compact
+  artifact**, so offsets and observations describe kept user code rather than
+  earlier flat bytes. The preexisting position-observation gate still governs T1.
   T1 removes inter-token gaps only when re-lexing adjacent tokens preserves
   their kinds and spellings. Directives retain their own logical lines; macro replacement lists, pragmas,
   stringizing/pasting invocations, comments, physical splices and
-  literal bytes retain their spacing. Conservative separators also protect
+  literal bytes retain their spacing. PPCallbacks supply physical invocation
+  ends in `model.expansions`; `hashOperator` propagates sensitivity to forwarding
+  expansions. T1 preserves those actual extents, including invocations assembled
+  from replacement-list tokens and surrounding source. The supplemental source
+  parenthesis search stops at each directive and never scans macro definitions
+  into subsequent code. Any user macro with an unbalanced replacement list,
+  sensitive source occurrence without a following `(`, missing/invalid sensitive
+  invocation extent, or stale provenance refuses T1 for the entire artifact with
+  a reason and keeps compact bytes (including the `OPEN_STRINGIZE` case).
+  Object-like macro names always retain a separator before a nonempty replacement
+  list, including a string literal or punctuation. Conservative separators also protect
   literal suffixes, ellipses and the context-sensitive `<::` digraph rule.
   Every artifact is independently re-lexed against the compact artifact under
   the rename map, including directive membership/end boundaries, macro definition
-  adjacency and exact literal bytes. An invariant, build or sample failure keeps
+  adjacency (including object-like replacement separators) and exact literal bytes.
+  This rescan uses the same lexer as separator selection; it is an independent
+  rescan, not a second lexer or a complete semantic proof. An invariant, build or sample failure keeps
   the compact bytes. Successful T2 reports `minify: renamed=N spellings saved=B bytes`;
   T2 refusal reports its reason and whether T1 applied. A15 is reported only when
   identifier spellings change. Worker identity includes the minify/A15 switches.

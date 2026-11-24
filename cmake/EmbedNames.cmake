@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Included at configure time; CMAKE_CONFIGURE_DEPENDS tracks edits to the data.
 set(names_source "// SPDX-License-Identifier: GPL-3.0-or-later\n#include <string_view>\n#include <cstddef>\nnamespace distill::embedded {\n")
-foreach(kind headers macros)
+foreach(kind headers macros protocols compiler)
   set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/standard-${kind}.txt")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
   file(STRINGS "${input}" entries REGEX "^[^# \t].*")
