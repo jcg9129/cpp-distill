@@ -1,0 +1,272 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: caide comparison
+on:
+  push:
+    branches: [caide-compare]
+    paths:
+      - .github/workflows/caide-compare.yml
+      - ci/caide-compare/run.sh
+  workflow_dispatch:
+    inputs:
+      caide_ref:
+        description: caide-cpp-inliner branch, tag or commit
+        type: string
+        default: a8b990b
+        required: true
+      atl_ref:
+        description: atl-cpp branch, tag or commit
+        type: string
+        default: 5b14f2d
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: caide-compare-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CAIDE_REF: ${{ inputs.caide_ref || 'a8b990b' }}
+  ATL_REF: ${{ inputs.atl_ref || '5b14f2d' }}
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      atl_commit: ${{ steps.sources.outputs.atl_commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Check out caide and resolve ATL revision
+        id: sources
+        env:
+          CAIDE_TOKEN: ${{ secrets.CAIDE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          mkdir -p out/caide-compare/build-logs
+          # Keep the credential URL out of git config, output and artifacts.
+          # Git errors can include URLs, so only publish a sanitized failure.
+          git init out/caide-compare/caide
+          # git fetch cannot resolve abbreviated SHAs such as a8b990b. Resolve
+          # both inputs through the commits API before doing shallow fetches.
+          caide_api_ref=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["CAIDE_REF"], safe=""))')
+          headers=()
+          url=https://github.com/jcg9129/caide-cpp-inliner.git
+          if [[ -n ${CAIDE_TOKEN:-} ]]; then
+            url="https://x-access-token:${CAIDE_TOKEN}@github.com/jcg9129/caide-cpp-inliner.git"
+            headers=(-H "Authorization: Bearer ${CAIDE_TOKEN}")
+          fi
+          if ! curl --fail --silent --location "${headers[@]}" \
+            "https://api.github.com/repos/jcg9129/caide-cpp-inliner/commits/$caide_api_ref" \
+            -o out/caide-compare/caide-ref.json; then
+            echo 'caide ref resolution failed; check CAIDE_TOKEN access and caide_ref.' >&2
+            exit 1
+          fi
+          caide_commit=$(python3 -c 'import json; print(json.load(open("out/caide-compare/caide-ref.json"))["sha"])')
+          [[ $caide_commit =~ ^[0-9a-f]{40}$ ]]
+          if ! GIT_TERMINAL_PROMPT=0 git -C out/caide-compare/caide fetch --no-write-fetch-head --no-recurse-submodules --depth 1 -- "$url" "$caide_commit" > /dev/null 2>&1; then
+            echo 'caide fetch failed; check CAIDE_TOKEN access and caide_ref.' >&2
+            exit 1
+          fi
+          unset url headers CAIDE_TOKEN
+          git -C out/caide-compare/caide checkout --detach "$caide_commit"
+          echo "caide_commit=$(git -C out/caide-compare/caide rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git -C out/caide-compare/caide rev-parse HEAD > out/caide-compare/build-logs/caide-commit.log
+          # As in atl-sweep, fetch the public ATL repo without submodules.
+          atl_api_ref=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["ATL_REF"], safe=""))')
+          curl --fail --silent --show-error --location \
+            "https://api.github.com/repos/jcg9129/atl-cpp/commits/$atl_api_ref" \
+            -o out/caide-compare/atl-ref.json
+          atl_commit=$(python3 -c 'import json; print(json.load(open("out/caide-compare/atl-ref.json"))["sha"])')
+          [[ $atl_commit =~ ^[0-9a-f]{40}$ ]]
+          git init out/caide-compare/atl
+          git -C out/caide-compare/atl remote add origin https://github.com/jcg9129/atl-cpp.git
+          git -C out/caide-compare/atl fetch --depth 1 -- origin "$atl_commit"
+          git -C out/caide-compare/atl checkout --detach FETCH_HEAD
+          echo "atl_commit=$(git -C out/caide-compare/atl rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git -C out/caide-compare/atl rev-parse HEAD > out/caide-compare/build-logs/atl-commit.log
+      - name: Log fork build and verification implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          caide=out/caide-compare/caide
+          # The fork is private: inspect the actual selected sources in CI.
+          cat "$caide/Dockerfile" "$caide/src/CMakeLists.txt" | tee out/caide-compare/build-logs/build-source.log
+          { find "$caide/src/cmd" -type f -print -exec cat {} \; ; cat "$caide/src/inliner.cpp"; } \
+            | tee out/caide-compare/build-logs/verification-source.log
+          # Fail rather than accidentally configure/build bundled LLVM.
+          grep -Eq 'option\(CAIDE_USE_SYSTEM_CLANG[[:space:]]' "$caide/src/CMakeLists.txt"
+          test ! -f "$caide/src/llvm-project/llvm/CMakeLists.txt"
+      - name: Install LLVM 22 from apt.llvm.org
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location https://apt.llvm.org/llvm.sh -o out/caide-compare/llvm.sh
+          sudo bash out/caide-compare/llvm.sh 22
+          sudo apt-get install -y clang-22 libclang-22-dev llvm-22-dev cmake
+      - name: Cache caide build at resolved commit
+        id: cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: out/caide-compare/build
+          key: caide-cmd-v1-${{ runner.os }}-${{ runner.arch }}-llvm22-${{ steps.sources.outputs.caide_commit }}
+      - name: Configure installed LLVM and build cmd
+        env:
+          CAIDE_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ $CAIDE_CACHE_HIT != true || ! -x out/caide-compare/build/cmd/cmd ]]; then
+            cmake -S out/caide-compare/caide/src -B out/caide-compare/build \
+              -DCMAKE_BUILD_TYPE=Release -DCAIDE_USE_SYSTEM_CLANG=ON \
+              -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm \
+              -DClang_DIR=/usr/lib/llvm-22/lib/cmake/clang \
+              2>&1 | tee out/caide-compare/build-logs/configure.log
+            cmake --build out/caide-compare/build --target cmd -j4 \
+              2>&1 | tee out/caide-compare/build-logs/build.log
+          else
+            echo 'Using cached cmd at the resolved caide commit.' | tee out/caide-compare/build-logs/build.log
+          fi
+          mkdir -p out/caide-compare/bin
+          cp out/caide-compare/build/cmd/cmd out/caide-compare/bin/cmd
+      - name: Upload caide command for all shards
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: caide-command
+          path: out/caide-compare/bin/cmd
+          if-no-files-found: error
+      - name: Upload source audit and build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: caide-compare-build
+          path: out/caide-compare/build-logs/
+          if-no-files-found: warn
+  sweep:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      ATL_COMMIT: ${{ needs.build.outputs.atl_commit }}
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: caide-command
+          path: out/caide-compare/bin
+      - name: Install matching caide runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location https://apt.llvm.org/llvm.sh -o out/caide-compare/llvm.sh
+          sudo bash out/caide-compare/llvm.sh 22
+          sudo apt-get install -y clang-22 libclang-22-dev llvm-22-dev
+          chmod +x out/caide-compare/bin/cmd
+      - name: Check out the same public ATL commit in every shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init out/caide-compare/atl
+          git -C out/caide-compare/atl remote add origin https://github.com/jcg9129/atl-cpp.git
+          git -C out/caide-compare/atl fetch --depth 1 -- origin "$ATL_COMMIT"
+          git -C out/caide-compare/atl checkout --detach FETCH_HEAD
+          git -C out/caide-compare/atl rev-parse HEAD
+      - name: Compare both variants on this example-index shard
+        shell: bash
+        run: bash ci/caide-compare/run.sh out/caide-compare/atl out/caide-compare/bin/cmd out/caide-compare/results "$SHARD" 4
+      - name: Upload shard summary and per-example diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: caide-compare-shard-${{ matrix.shard }}
+          path: |
+            out/caide-compare/results/summary.tsv
+            out/caide-compare/results/examples.txt
+            out/caide-compare/results/**/*.log
+            out/caide-compare/results/**/*.rep
+          if-no-files-found: warn
+  merge:
+    if: always()
+    needs: [build, sweep]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: caide-compare-*
+          path: out/caide-compare/artifacts
+      - name: Merge summaries and check complete two-variant coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv
+          import os
+          from pathlib import Path
+          import statistics
+
+          root = Path('out/caide-compare')
+          root.mkdir(parents=True, exist_ok=True)
+          fields = 'example variant caide_exit fallback bytes compile run_check seconds'.split()
+          rows, expected, problems = [], set(), []
+          for shard in range(4):
+              part = root / 'artifacts' / f'caide-compare-shard-{shard}'
+              if not (part / 'summary.tsv').is_file() or not (part / 'examples.txt').is_file():
+                  problems.append(f'Missing shard {shard}')
+                  continue
+              for example in (part / 'examples.txt').read_text().splitlines():
+                  for variant in ('verify', 'noverify'):
+                      key = (example, variant)
+                      if key in expected:
+                          problems.append(f'Duplicate example assignment: {key}')
+                      expected.add(key)
+              with (part / 'summary.tsv').open(newline='') as stream:
+                  reader = csv.DictReader(stream, delimiter='\t')
+                  if reader.fieldnames != fields:
+                      problems.append(f'Bad header in shard {shard}')
+                      continue
+                  rows.extend(reader)
+          rows.sort(key=lambda row: (row['example'], row['variant']))
+          actual = [(row['example'], row['variant']) for row in rows]
+          if len(actual) != len(set(actual)) or set(actual) != expected or not expected:
+              problems.append('Incomplete or duplicate example/variant coverage')
+          with (root / 'summary.tsv').open('w', newline='') as stream:
+              writer = csv.DictWriter(stream, fieldnames=fields, delimiter='\t', lineterminator='\n')
+              writer.writeheader()
+              writer.writerows(rows)
+          lines = ['### caide / ATL comparison', '',
+                   '| Variant | Examples | Median bytes | Compile FAIL | Sample FAIL | Fallback yes / unknown |',
+                   '| --- | ---: | ---: | ---: | ---: | ---: |']
+          for variant in ('verify', 'noverify'):
+              group = [row for row in rows if row['variant'] == variant]
+              sizes = [int(row['bytes']) for row in group]
+              lines.append(f'| {variant} | {len(group)} | {statistics.median(sizes) if sizes else "-"} | '
+                           f'{sum(row["compile"] == "FAIL" for row in group)} | '
+                           f'{sum(row["run_check"] == "FAIL" for row in group)} | '
+                           f'{sum(row["fallback"] == "yes" for row in group)} / '
+                           f'{sum(row["fallback"] == "unknown" for row in group)} |')
+          lines.extend(['', f'Non-zero caide exits: {sum(row["caide_exit"] != "0" for row in rows)}.',
+                        '', 'Fallback: explicit caide diagnostic/report; unknown means an incomplete invocation.',
+                        'Source audit and per-example diagnostics are included in the artifact.', *problems])
+          markdown = '\n'.join(lines) + '\n'
+          print(markdown)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write(markdown)
+          if problems:
+              raise SystemExit(1)
+          PY
+      - name: Upload merged comparison, source audit and all diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: caide-compare
+          path: out/caide-compare/
+          if-no-files-found: warn
