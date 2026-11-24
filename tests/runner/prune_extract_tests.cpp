@@ -1043,6 +1043,51 @@ int main(int argc, char** argv) {
       check(kept("storage"),"pointer destination dependency lost");
       check(!kept("unrelated"),"unrelated function retained");
     });
+    run("shorten names misnested stringizing arguments", [&] {
+      Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
+      ResolveResult flat; flat.text = "#define STRINGIZE(x) #x\n#define OPEN_STRINGIZE STRINGIZE(\n"
+          "const char* first=OPEN_STRINGIZE longArgument + otherArgument);\nconst char* second=OPEN_STRINGIZE longArgument + otherArgument);\nint main(){}\n";
+      auto input = take(preparePruning(c,{},flat)); input.shortenNames = true;
+      m = extracted(input,o);
+      check(m.shorteningExcludedNames.contains("longArgument") && m.shorteningExcludedNames.contains("otherArgument"),
+            "misnested stringizing arguments must keep their spellings");
+    });
+    run("shortenNames semantic library name observation", [&] {
+      const auto dir = temp.path / "shortenNames-observation-system"; std::filesystem::create_directories(dir);
+      { std::ofstream h(dir / "observed.h"); h <<
+          "namespace std { struct type_info { const char* name() const; }; struct type_index {};"
+          "struct source_location {}; struct stacktrace_entry {}; template<class...> struct basic_stacktrace {};"
+          "using stacktrace=basic_stacktrace<>; template<class> struct function { const type_info& target_type() const; };"
+          "struct any { const type_info& type() const; }; }"
+          "namespace __cxxabiv1 { const std::type_info* current(); int ordinary; typedef int integer; enum category { first }; } namespace abi=__cxxabiv1;"
+          "using HiddenInfo=std::type_info; using HiddenIndex=std::type_index; using HiddenLocation=std::source_location;"
+          "using HiddenTrace=std::stacktrace; template<class...> struct Wrapper {};"; }
+      Configuration c; c.probe.triple = "x86_64-unknown-linux-gnu"; c.probe.dialect = {"c++20",false,202002};
+      SearchDirectory d; d.path = dir; d.kind = IncludeKind::system; c.probe.searchLists.directories.push_back(d);
+      auto audit = [&](std::string body) {
+        ResolveResult flat; flat.text = "#include <observed.h>\n" + body;
+        auto input = take(preparePruning(c,{},flat)); input.shortenNames = true;
+        m = extracted(input,o);
+        check(m.disabledReasons.empty(),"semantic observation fixture did not parse");
+      };
+      for (const auto* body : {
+          "HiddenInfo const* p; int main(){}", "HiddenIndex& f(); int main(){}",
+          "Wrapper<HiddenInfo const*> object; int main(){}",
+          "Wrapper<int,HiddenInfo> object; int main(){}",
+          "HiddenIndex* (*callback)(); int main(){}",
+          "struct type_holder {}; HiddenIndex type_holder::*member; int main(){}",
+          "HiddenLocation value; int main(){}", "HiddenTrace value; int main(){}",
+          "int main(){std::any x; auto& info=x.type(); (void)info;}",
+          "int main(){std::function<void()> x; auto& info=x.target_type(); (void)info;}",
+          "int main(){(void)&std::type_info::name;}",
+          "int main(){(void)abi::current();}", "int main(){return abi::ordinary;}",
+          "abi::integer value; int main(){}", "abi::category value; int main(){}"}) {
+        audit(body); check(m.shorteningRefused.starts_with("semantic name observation:"),
+                          "missed semantic observation: " + std::string(body));
+      }
+      audit("struct type_info {}; struct type_index {}; struct any {int type(){return 7;}}; int main(){any x; return x.type()-7;}");
+      check(m.shorteningRefused.empty(),"source spelling confused with std declaration identity");
+    });
     // --no-line-markers observations (docs/reviews/2026-11-18-no-line-markers.md).
     auto hasUse = [&](std::string_view what) {
       return std::any_of(m.positionUses.begin(),m.positionUses.end(),[&](const auto& u) { return u.what.starts_with(what); });

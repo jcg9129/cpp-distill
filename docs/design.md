@@ -179,6 +179,15 @@ these, and only these; the report lists each one an output depended on, and
   `A14 unobserved-guard-macros`, consistently with A11; disable it with
   `--no-assume=unobserved-guard-macros`. Raw and flat artifacts are unchanged.
 
+- **A15 (`library-spelled-names`)** (user, 2026-11-24) The judge's standard
+  library headers and predefined macros spell no identifier that the original or
+  the shortened program spells, other than identifiers spelled in the worker's included library
+  headers, produced by their macro expansions, or spelled in a scanned library build.
+  `--shorten-names` uses A15 for spelling-based identifier shortening. Disabling it with
+  `--no-assume=library-spelled-names` keeps all identifier spellings; compact layout still applies. The worker
+  computes the same raw-header, expanded-system-macro and scanned-build union as
+  A12 even when member pruning is disabled. An unavailable union refuses shortening.
+
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
 
@@ -206,9 +215,10 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
-| `--no-assume=<name>` | disable a switchable assumption or policy while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14) are switchable; any other name is a usage error (exit 1) listing switchable names |
+| `--no-assume=<name>` | disable a switchable assumption or policy while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
+| `--shorten-names` | opt-in readable identifier shortening after preprocessor trimming and checked compaction; implies `--strip-comments --no-line-markers --compact-whitespace`; A15 controls renaming independently (§4.8) |
 | `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
 | `-v` | progress on stderr |
@@ -1706,9 +1716,10 @@ sources and refusal gates still apply. This mode needs A1–A7 and A9 where
 applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 8 and checked as
+The setting is part of serialized worker protocol version 13 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
-model and policy identity distinguish A11, A12 and D3f flag combinations.
+model and policy identity distinguish A11, A12, A14, A15, shorten-names,
+idempotent-standard-headers and D3f flag combinations.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. For member units this additional
@@ -1911,6 +1922,68 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   bytes. A failed gate or marker-free check leaves its artifact unchanged.
   Report `whitespace compacted: ...` or `whitespace kept: <why>`. Renderer
   annotations/provenance are consumed before this final transformation.
+- **Readable shortening** (`--shorten-names`, opt-in): implies `--strip-comments`,
+  `--no-line-markers` and `--compact-whitespace`. Only a checked compact pruned
+  artifact, after preprocessor trimming and the position-observation gate, is eligible; refusal keeps
+  the checked artifact and reports `shorten-names: kept: <why>`.
+  Identifiers are substituted simultaneously by spelling across code and ordinary
+  user macro replacements. The compact layout stays exact: existing statement
+  line breaks, punctuation spacing and literal bytes are retained, with no indentation.
+  Names of at most four characters stay unchanged. Words split at underscores,
+  camelCase and acronym boundaries; any word containing a digit stays unchanged
+  (`uint32`, `float64`, `uint128`). The embedded dictionary in
+  `data/names/abbreviations.txt` supplies conventional abbreviations; other words
+  retain their first letter, drop following vowels and cap at four letters.
+  Case and underscores are preserved, and a word changes only if it saves at
+  least two characters (`Graph` stays `Graph`, `Value` can become `Val`).
+  For example, `read_stream_magnitude` becomes `rd_strm_mgnt` and
+  `isUnsignedIntegral` becomes `isUnsgIntg` when those names are available.
+  Allocation proceeds by descending token frequency, then original spelling.
+  Every original spelling remains reserved, including names scheduled to change.
+  Collisions lengthen original word prefixes in left-to-right rounds; a prefix
+  saving only one character restores that word entirely. If no lengthening fits,
+  decimal digits are appended to the readable base. A candidate must still save
+  at least two bytes; otherwise the original spelling is kept. Generated names
+  are injective and avoid excluded names, keywords and reserved identifiers.
+
+  Both original and generated names exclude the explicit compiler-protocol
+  registry in `data/names/standard-protocols.txt`: coroutine promise/await hooks,
+  tuple-like structured bindings, range access, comparison categories,
+  initializer lists, allocation types and contract handling.
+  `data/names/standard-compiler.txt` additionally blocks ordinary GCC/Clang target
+  predefines and a conservative GCC builtin inventory, independently of A15.
+  The allocator blocks every name in the judge's initial macro inventory and
+  the worker's registered builtin identifiers, even when absent from user text.
+  Exclusions also include the A6 registry, `main`, library spellings, reserved and
+  preprocessing names, macro names and parameters, stringizing/pasting bodies
+  and invocation arguments (including system macros, forwarding and misnested
+  invocations), pasted identifier results, literal text and UDL suffixes,
+  attribute names/namespaces, C-linkage names, asm/attribute strings, pragma
+  names and asm goto labels. Identifiers containing physical splices are kept.
+
+  `typeid`, `__func__`, `__FUNCTION__`, `__PRETTY_FUNCTION__`, `source_location`
+  or `__builtin_FUNCTION` refuses renaming because names may be observable.
+  An AST audit also refuses renaming for user expressions/declarations whose
+  canonical type involves `std::type_info`, `std::type_index`,
+  `std::source_location` or stacktrace types, including pointer/reference/array/
+  function types and template arguments. Semantic declaration contexts identify
+  `type_info::name`, `std::function::target_type`, `std::any::type`, and every
+  entity in namespace `abi`/`__cxxabiv1`. Aliases, deduced types and macros cannot
+  hide these uses; same-named user declarations outside those namespaces do not
+  trigger the semantic guard. A second worker extraction audits the exact compact
+  artifact. Stringizing/pasting argument exclusions use worker facts plus a
+  conservative raw scan for inactive invocations.
+
+  Every candidate is independently re-lexed against the compact artifact under
+  the rename map, including directive membership/end boundaries, macro definition
+  adjacency, literal suffix adjacency and exact literal bytes. It is then built
+  and compared on the configured samples. An invariant, build or sample failure
+  keeps the checked compact bytes. Successful shortening reports
+  `shorten-names: renamed=N spellings saved=B bytes`; refusal reports
+  `shorten-names: kept: <why>`. A15 is reported only when spellings change.
+  `--no-assume=library-spelled-names` retains names and the compact layout.
+  Worker protocol 13 includes the shorten-names/A15 switches and both trimming
+  switches, including the second extraction of the exact compact artifact.
 - `--strip-comments` (D3-1-10) is part of rendering every artifact (`raw`,
   `flat`, `pruned`) and keeps token spellings, directive boundaries and
   logical lines: a comment outside a directive becomes one space, or its
@@ -1953,7 +2026,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7, A11, A12 for member pruning, A14 for guard trimming, and A9 for L1c) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, A11, A12 for member pruning, A14 for guard trimming, A15 for identifier shortening, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

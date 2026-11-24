@@ -8,6 +8,9 @@ Result<std::vector<RunSample>> collectRunSamples(const std::vector<std::string>&
                                                 const std::filesystem::path& cwd);
 struct DistillOptions {
   bool noPrune = false, stripComments = false;
+  bool assumeLibrarySpelledNames = true;
+  // Implies comment stripping, marker omission and checked compaction.
+  bool shortenNames = false;
   bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   // Opt-in: omit generated #line markers from a pruned result when the parse
@@ -44,6 +47,8 @@ struct PipelineResult {
   std::string lineMarkers;
   // With compactWhitespace: "compacted" or "kept: <first reason>".
   std::string compactWhitespace;
+  // "renamed=N spellings saved=B bytes" or "kept: <why>".
+  std::string shortenNames;
   std::optional<std::filesystem::path> keptWork;
   std::vector<ArtifactCheck> checks;
   ResolveResult resolution;

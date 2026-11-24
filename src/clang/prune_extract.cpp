@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "clang/prune_extract.h"
 #include "core/names/names.h"
+#include "core/render/shorten_names.h"
 #include "core/library/library.h"
 #include "resources.h"
 #include "clang/AST/ASTConsumer.h"
@@ -90,6 +91,7 @@ struct Extraction {
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberSpellings;
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberGroups;
   std::set<std::string> virtualMemberNames;
+  std::set<std::string,std::less<>> shorteningSpellings;
   std::set<FamilyId> explicitlyInstantiatedRecords;
   std::vector<std::pair<const Decl*,FamilyId>> declarations;
   std::map<std::size_t,std::pair<bool,bool>> pasteGroups;
@@ -104,6 +106,7 @@ struct Extraction {
   explicit Extraction(PruningModel m, CompilerInstance& c) : model(std::move(m)), compiler(c), sm(c.getSourceManager()) {
     auto scan = scanDirectives(model.text);
     if (!scan.ok()) { disable("directive scan failure in flat.cpp: " + scan.error().message); return; }
+    if (model.shortenNames) for (const auto& t : scan.value().identifiers) shorteningSpellings.insert(t.text);
     for (const auto& l : scan.value().lines) if (!l.directive) tokens.insert(tokens.end(),l.tokens.begin(),l.tokens.end());
     for (const auto& l : scan.value().lines) if (l.directive &&
         (l.directive->name == "if" || l.directive->name == "elif" || l.directive->name == "ifdef" || l.directive->name == "ifndef")) conditionRanges.push_back({l.begin,l.end});
@@ -525,7 +528,7 @@ class Macros final : public PPCallbacks {
   std::set<unsigned> systemMacroInvocations;
   std::set<std::string,std::less<>> expandedLibraryMemberNames;
   void libraryToken(const clang::Token& token) {
-    if (!e.model.assumeLibrarySpelledMembers || !token.is(tok::identifier) ||
+    if (!(e.model.assumeLibrarySpelledMembers || (e.model.shortenNames && e.model.assumeLibrarySpelledNames)) || !token.is(tok::identifier) ||
         !token.getLocation().isMacroID()) return;
     // A pasted token's spelling is in scratch space, and an argument's spelling
     // can be user text. Follow BOTH spelling and expansion ancestry. Recording
@@ -619,6 +622,15 @@ public:
     libraryToken(token); // Full unpruned TU, before filtering to user expansions.
     if (!e.user(token.getLocation())) return;
     attributeToken(token);
+    if (e.model.shortenNames && !token.isAnnotation()) {
+      const auto spelling = e.compiler.getPreprocessor().getSpelling(token);
+      if (tok::getKeywordSpelling(token.getKind())) e.model.shorteningExcludedNames.insert(spelling);
+      // A pasted identifier has no matching identifier token to rewrite in the
+      // invocation. Its declarations/references elsewhere must keep that name.
+      if (token.is(tok::identifier) && e.sm.isWrittenInScratchSpace(e.sm.getSpellingLoc(token.getLocation())))
+        e.model.shorteningExcludedNames.insert(spelling);
+      if (shorteningObservesNames(spelling)) e.model.shorteningRefused = "observable names: " + spelling;
+    }
     // Keywords carry identifier info too; annotation and literal tokens don't.
     if (!token.isAnnotation() && !token.isLiteral()) {
       const auto* info = token.getIdentifierInfo();
@@ -635,11 +647,11 @@ public:
       return o == FactOrigin::compilerBuiltin || o == FactOrigin::specialBuiltin || o == FactOrigin::nativeModel || o == FactOrigin::commandOperation;
     });
     if (predefined) e.model.expansions.push_back({e.offset(token.getLocation()),name,true,false,true,
-        {MacroState::undefined,{},{}},f,false,false,true});
+        {MacroState::undefined,{},{}},f,false,false,true,false});
   }
   void FileChanged(clang::SourceLocation loc, FileChangeReason reason,
                    SrcMgr::CharacteristicKind kind, FileID = FileID()) override {
-    if (!e.model.assumeLibrarySpelledMembers || kind == SrcMgr::C_User ||
+    if (!(e.model.assumeLibrarySpelledMembers || (e.model.shortenNames && e.model.assumeLibrarySpelledNames)) || kind == SrcMgr::C_User ||
         (reason != EnterFile && reason != SystemHeaderPragma)) return;
     const auto file = e.sm.getFileID(loc);
     if (file.isInvalid()) {
@@ -652,7 +664,7 @@ public:
   // Raw lexing includes inactive branches and macro replacement lists. Keep this
   // inventory together with the union of all scanned library builds.
   void collectLibraryMemberNames() {
-    if (!e.model.assumeLibrarySpelledMembers) return;
+    if (!(e.model.assumeLibrarySpelledMembers || (e.model.shortenNames && e.model.assumeLibrarySpelledNames))) return;
     e.model.libraryMemberNames = expandedLibraryMemberNames;
     for (auto name : embeddedLibraryData().memberNames) e.model.libraryMemberNames.emplace(name);
     for (const auto& [key,file] : headerFiles) {
@@ -679,14 +691,33 @@ public:
     }
     e.model.libraryMemberNamesComputed = e.model.memberDisabledReasons.empty();
   }
+  void shortenNamesMacro(const clang::Token& name, const MacroInfo* mi) {
+    if (!e.model.shortenNames || !mi) return;
+    e.model.shorteningExcludedNames.insert(name.getIdentifierInfo()->getName().str());
+    for (const auto* p : mi->params()) e.model.shorteningExcludedNames.insert(p->getName().str());
+    const bool hash = std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); });
+    if (hash) for (const auto& t : mi->tokens()) if (const auto* info = t.getIdentifierInfo())
+      e.model.shorteningExcludedNames.insert(info->getName().str());
+  }
   void MacroDefined(const clang::Token& name, const MacroDirective* md) override {
+    shortenNamesMacro(name,md->getMacroInfo());
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = fact(md->getMacroInfo());
   }
   void MacroUndefined(const clang::Token& name, const MacroDefinition&, const MacroDirective*) override {
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = {MacroState::undefined,{}, {}};
   }
-  void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs*) override {
-    if (e.model.assumeLibrarySpelledMembers) {
+  void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs* args) override {
+    shortenNamesMacro(token,definition.getMacroInfo());
+    if (e.model.shortenNames && args) if (const auto* mi = definition.getMacroInfo()) {
+      const bool hash = std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); });
+      if (hash) for (unsigned i = 0; i < args->getNumMacroArguments(); ++i) {
+        const auto* argument = args->getUnexpArgument(i);
+        const auto count = MacroArgs::getArgLength(argument);
+        for (unsigned j = 0; j < count; ++j)
+          if (const auto* info = argument[j].getIdentifierInfo()) e.model.shorteningExcludedNames.insert(info->getName().str());
+      }
+    }
+    if (e.model.assumeLibrarySpelledMembers || (e.model.shortenNames && e.model.assumeLibrarySpelledNames)) {
       if (const auto* mi = definition.getMacroInfo()) {
         const auto def = e.sm.getSpellingLoc(mi->getDefinitionLoc());
         if (def.isValid() && !e.sm.isWrittenInBuiltinFile(def) &&
@@ -723,7 +754,7 @@ public:
     bool paste = source && std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.is(tok::hashhash); });
     auto parse = fact(mi);
     parse.provenance = {source ? FactOrigin::source : system ? FactOrigin::systemHeader : command ? FactOrigin::commandOperation : FactOrigin::compilerBuiltin};
-    e.model.expansions.push_back({offset,name,true,false,builtin || judgePredefined,parse,judge,paste,false,true});
+    e.model.expansions.push_back({offset,name,true,false,builtin || judgePredefined,parse,judge,paste,false,true,false});
     auto& group = e.pasteGroups[offset]; group.first |= paste; group.second |= system || builtin || judgePredefined;
     if (std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); }))
       e.hashOffsets.insert(offset);
@@ -815,6 +846,11 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     if (found == symbols.end()) {
       e.disable("unresolved " + std::string(form) + " symbol: " + std::string(symbol)); return false;
     }
+    // Linker strings can contain mangled namespace/type/function names as
+    // components of one identifier. Preserve every source spelling embedded
+    // in the resolved symbol, including parameter types hidden behind aliases.
+    if (e.model.shortenNames) for (const auto& spelling : e.shorteningSpellings)
+      if (symbol.find(spelling) != symbol.npos) e.model.shorteningExcludedNames.insert(spelling);
     for (auto id : found->second) {
       e.model.families[id].root = std::string(form) + " symbol reference";
       if (templatedSymbols.contains(id)) e.model.families[id].instantiationEffect = "template symbol reference";
@@ -1157,6 +1193,8 @@ public:
   bool VisitStmt(Stmt* s) {
     if (current == noFamily || !e.user(s->getBeginLoc())) return true;
     if (const auto* a = dyn_cast<GCCAsmStmt>(s)) {
+      if (e.model.shortenNames) for (unsigned i = 0; i < a->getNumLabels(); ++i)
+        e.model.shorteningExcludedNames.insert(a->getLabelExpr(i)->getLabel()->getNameAsString());
       assembly(a->getAsmString(),s->getBeginLoc());
       // Operand expressions are traversed normally; keeping the enclosing
       // family makes their referenced declarations roots through AST closure.
@@ -1419,41 +1457,126 @@ public:
     return !x->getField() || evaluated(x->getField()->getInClassInitializer());
   }
 };
+// Semantic name-observation audit, run on the exact kept compact artifact.
+// Canonical types and declaration contexts catch aliases, auto, references,
+// template arguments and library-mediated RTTI without source-token heuristics.
+bool inNamespace(const DeclContext* context, llvm::StringRef name) {
+  for (; context; context = context->getParent())
+    if (const auto* ns = dyn_cast<NamespaceDecl>(context); ns && ns->getName() == name && (name != "std" || ns->isStdNamespace())) return true;
+  return false;
+}
+bool nameObservationEntity(const NamedDecl* d) {
+  if (!d) return false;
+  if (const auto* ns = dyn_cast<NamespaceDecl>(d); ns && (ns->getName() == "abi" || ns->getName() == "__cxxabiv1")) return true;
+  if (inNamespace(d->getDeclContext(), "abi") || inNamespace(d->getDeclContext(), "__cxxabiv1")) return true;
+  if (!inNamespace(d->getDeclContext(), "std")) return false;
+  const auto name = d->getNameAsString();
+  if (name == "type_info" || name == "type_index" || name == "source_location" ||
+      name == "stacktrace" || name == "basic_stacktrace" || name == "stacktrace_entry") return true;
+  if (const auto* method = dyn_cast<CXXMethodDecl>(d)) {
+    const auto parent = method->getParent()->getName();
+    return (parent == "type_info" && name == "name") ||
+           (parent == "function" && name == "target_type") ||
+           (parent == "any" && name == "type");
+  }
+  return false;
+}
+bool nameObservationType(QualType, std::set<const Type*>&);
+bool nameObservationArgument(const TemplateArgument& arg, std::set<const Type*>& seen) {
+  if (arg.getKind() == TemplateArgument::Type) return nameObservationType(arg.getAsType(),seen);
+  if (arg.getKind() == TemplateArgument::Pack)
+    for (const auto& element : arg.pack_elements()) if (nameObservationArgument(element,seen)) return true;
+  return false;
+}
+bool nameObservationType(QualType q, std::set<const Type*>& seen) {
+  if (q.isNull()) return false;
+  const auto* t = q.getCanonicalType().getTypePtr();
+  if (!seen.insert(t).second) return false;
+  if (const auto* tag = dyn_cast<TagType>(t); tag && nameObservationEntity(tag->getDecl())) return true;
+  if (const auto* r = t->getAs<RecordType>()) {
+    if (const auto* spec = dyn_cast<ClassTemplateSpecializationDecl>(r->getDecl()))
+      for (const auto& arg : spec->getTemplateArgs().asArray())
+        if (nameObservationArgument(arg,seen)) return true;
+  }
+  if (const auto* spec = dyn_cast<TemplateSpecializationType>(t))
+    for (const auto& arg : spec->template_arguments()) if (nameObservationArgument(arg,seen)) return true;
+  if (const auto* member = dyn_cast<MemberPointerType>(t))
+    return nameObservationType(member->getPointeeType(),seen) || nameObservationType(QualType(member->getQualifier().getAsType(),0),seen);
+  if (t->isPointerType() || t->isReferenceType())
+    return nameObservationType(t->getPointeeType(),seen);
+  if (const auto* array = dyn_cast<ArrayType>(t)) return nameObservationType(array->getElementType(),seen);
+  if (const auto* f = dyn_cast<FunctionType>(t)) {
+    if (nameObservationType(f->getReturnType(),seen)) return true;
+    if (const auto* proto = dyn_cast<FunctionProtoType>(t))
+      for (auto param : proto->param_types()) if (nameObservationType(param,seen)) return true;
+  }
+  return false;
+}
 class Positions final : public RecursiveASTVisitor<Positions> {
   Extraction& e;
 public:
   explicit Positions(Extraction& x) : e(x) {}
+  void observe(clang::SourceLocation loc, QualType q) {
+    if (!e.model.shortenNames || !e.user(loc) || !e.model.shorteningRefused.empty()) return;
+    std::set<const Type*> seen;
+    if (nameObservationType(q,seen)) e.model.shorteningRefused = "semantic name observation: " + q.getAsString();
+  }
+  void observe(clang::SourceLocation loc, const NamedDecl* d) {
+    if (e.model.shortenNames && e.user(loc) && e.model.shorteningRefused.empty() && nameObservationEntity(d))
+      e.model.shorteningRefused = "semantic name observation: " + d->getQualifiedNameAsString();
+  }
+  bool VisitNamedDecl(NamedDecl* d) { observe(d->getLocation(),d); return true; }
+  bool VisitTypedefTypeLoc(TypedefTypeLoc t) { observe(t.getBeginLoc(),t.getTypePtr()->getDecl()); return true; }
+  bool VisitUsingTypeLoc(UsingTypeLoc t) { observe(t.getBeginLoc(),t.getTypePtr()->getDecl()->getTargetDecl()); return true; }
   bool shouldVisitTemplateInstantiations() const { return true; }
   bool shouldVisitImplicitCode() const { return true; }
   bool VisitExpr(Expr* x) {
+    observe(x->getExprLoc(),x->getType());
     if (e.user(x->getExprLoc()) && positionType(x->getType())) e.position(x->getExprLoc(),"value of type " + x->getType().getAsString());
     return true;
   }
   bool VisitValueDecl(ValueDecl* d) {
+    observe(d->getLocation(),d->getType());
+    if (e.model.shortenNames && e.user(d->getLocation())) {
+      bool c = false;
+      if (const auto* f = dyn_cast<FunctionDecl>(d)) {
+        c = f->isExternC();
+        if (f->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName)
+          e.model.shorteningExcludedNames.insert(f->getDeclName().getCXXLiteralIdentifier()->getName().str());
+      }
+      if (const auto* v = dyn_cast<VarDecl>(d)) c = v->isExternC();
+      if (c && d->getIdentifier()) e.model.shorteningExcludedNames.insert(d->getNameAsString());
+    }
     if (e.user(d->getLocation()) && positionType(d->getType())) e.position(d->getLocation(),"declaration of type " + d->getType().getAsString());
     return true;
   }
   bool VisitTypeLoc(TypeLoc t) {
+    observe(t.getBeginLoc(),t.getType());
     if (e.user(t.getBeginLoc()) && positionType(t.getType())) e.position(t.getBeginLoc(),"type " + t.getType().getAsString());
     return true;
   }
   bool VisitDeclRefExpr(DeclRefExpr* x) {
+    observe(x->getLocation(),x->getDecl());
     if (positionEntity(x->getDecl())) e.position(x->getLocation(),"use of " + x->getDecl()->getQualifiedNameAsString());
     return true;
   }
   bool VisitMemberExpr(MemberExpr* x) {
+    observe(x->getMemberLoc(),x->getMemberDecl());
     if (positionEntity(x->getMemberDecl())) e.position(x->getMemberLoc(),"use of " + x->getMemberDecl()->getQualifiedNameAsString());
     return true;
   }
   bool VisitUsingDirectiveDecl(UsingDirectiveDecl* d) {
+    observe(d->getLocation(),d->getNominatedNamespace());
     if (positionEntity(d->getNominatedNamespace())) e.position(d->getLocation(),"using directive for a namespace with source positions");
     return true;
   }
   bool VisitUsingShadowDecl(UsingShadowDecl* d) {
+    observe(d->getLocation(),d->getTargetDecl());
     if (positionEntity(d->getTargetDecl())) e.position(d->getLocation(),"using declaration of " + d->getTargetDecl()->getQualifiedNameAsString());
     return true;
   }
   bool VisitNamespaceAliasDecl(NamespaceAliasDecl* d) {
+    observe(d->getLocation(),d->getNamespace());
     if (positionEntity(d->getNamespace())) e.position(d->getLocation(),"alias of a namespace with source positions");
     return true;
   }
@@ -1558,6 +1681,8 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   auto& sm = compiler.getSourceManager();
   sm.setMainFileID(sm.createFileID(llvm::MemoryBuffer::getMemBufferCopy(model.text,"flat.cpp")));
   Extraction extraction(std::move(model),compiler);
+  if (extraction.model.shortenNames) for (const auto& entry : pp.getIdentifierTable())
+    if (entry.getValue()->getBuiltinID()) extraction.model.shorteningExcludedNames.insert(entry.getKey().str());
   auto callbacks = std::make_unique<Macros>(extraction); auto* watcher = callbacks.get();
   compiler.getPreprocessor().setTokenWatcher([watcher](const clang::Token& token) { watcher->finalToken(token); });
   compiler.getPreprocessor().addPPCallbacks(std::move(callbacks));
@@ -1590,6 +1715,14 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   for (auto& fact : extraction.model.expansions) {
     auto i = std::upper_bound(merged.begin(),merged.end(),fact.offset,[](std::size_t o, auto r) { return o < r.begin; });
     fact.hashOperator = extraction.hashOffsets.contains(fact.offset) || (i != merged.begin() && fact.offset < std::prev(i)->end);
+  }
+  if (extraction.model.shortenNames) {
+    const auto scan = scanDirectives(extraction.model.text);
+    if (!scan.ok()) extraction.model.shorteningRefused = "macro argument scan failed";
+    else for (const auto& t : scan.value().identifiers) {
+      const auto i = std::upper_bound(merged.begin(),merged.end(),t.begin,[](auto at,auto r) { return at < r.begin; });
+      if (i != merged.begin() && t.begin < std::prev(i)->end) extraction.model.shorteningExcludedNames.insert(t.text);
+    }
   }
   auto valid = validatePruningModel(extraction.model); if (!valid.ok()) return valid.error();
   return std::move(extraction.model);

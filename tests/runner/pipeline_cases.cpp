@@ -6,6 +6,8 @@
 #include "profile.h"
 #include "library_features.h"
 #include "core/render/render.h"
+#include "core/render/shorten_names.h"
+#include "core/prune/extract.h"
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -97,6 +99,43 @@ void inject(const ProcessSpec& spec, const std::string& fault) {
     }
   }
 }
+// Compile the exact compact and shortened/fallback bytes independently of the
+// pipeline's sample gate. This catches candidates accepted only as extensions.
+void compareShortened(const std::filesystem::path& cwd, const CompileCommand& command,
+                     std::string_view compact, std::string_view shortened, std::string_view input = {}) {
+  auto layout = [](std::string_view source) {
+    const auto scan = take(scanDirectives(source));
+    std::string gaps; std::size_t end = 0;
+    for (const auto& line : scan.lines) for (const auto& token : line.tokens) {
+      gaps += source.substr(end,token.begin-end);
+      gaps += token.kind == TokenKind::identifier ? "<identifier>" : std::string(source.substr(token.begin,token.end-token.begin));
+      end = token.end;
+    }
+    gaps += source.substr(end); return gaps;
+  };
+  check(layout(compact) == layout(shortened),"shortening changed compact layout or non-identifier bytes");
+  write(cwd / "regression.in",std::string(input));
+  std::vector<ProcessResult> outputs;
+  for (const auto& [name,bytes] : std::vector<std::pair<std::string,std::string_view>>{
+      {"regression-compact",compact},{"regression-shortened",shortened}}) {
+    const auto source = cwd / (name+".cpp"), program = cwd / (name+".exe");
+    write(source,std::string(bytes));
+    ProcessSpec build; build.cwd = cwd; build.timeout = std::chrono::seconds(20);
+    build.argv = command.buildArgv(source,program,true,{},true);
+    build.argv.insert(build.argv.begin()+1,"-Werror");
+    const auto built = take(runProcess(build));
+    check(!built.exitCode && !built.signal && !built.timedOut,"regression build failed: " + built.stderrText);
+    ProcessSpec run; run.cwd = cwd; run.argv = {pathToUtf8(program)}; run.timeout = std::chrono::seconds(10);
+    run.stdinFile = cwd / "regression.in";
+    auto output = take(runProcess(run));
+    check(!output.timedOut && !output.signal && !output.stdoutTruncated && !output.stderrTruncated,
+          "regression run failed: " + output.stderrText);
+    outputs.push_back(std::move(output));
+  }
+  check(outputs[0].exitCode == 0 && outputs[0].exitCode == outputs[1].exitCode &&
+        outputs[0].stdoutText == outputs[1].stdoutText && outputs[0].stderrText == outputs[1].stderrText,
+        "shortened program differs from compact program");
+}
 #include "checker_cases.h"
 #include "caide_cases.h"
 int run(int argc, char** argv) {
@@ -124,6 +163,7 @@ int run(int argc, char** argv) {
   std::sort(dirs.begin(), dirs.end());
   for (const auto& dir : dirs) {
     const auto name = pathToUtf8(dir.filename());
+    if (const auto* filter = std::getenv("DISTILL_PIPELINE_CASE_FILTER"); filter && name.find(filter) == name.npos) continue;
     std::string caseDiagnostics, caseReport;
     try {
       const auto cwd = temp.path / dir.filename(); std::filesystem::create_directory(cwd);
@@ -166,6 +206,11 @@ int run(int argc, char** argv) {
       }
       auto command = words(uncomment(read(cwd / "cmd.txt")));
       check(!command.empty(), "empty cmd.txt"); command[0] = pathToUtf8(*gcc);
+      if (value("compiler") == "clang") {
+        const auto clang = resolveExecutable("clang++",cwd);
+        if (!clang.ok()) { std::cout << "SKIP " << name << ": Clang unavailable\n"; continue; }
+        command[0] = pathToUtf8(clang.value());
+      }
       std::optional<Profile> profile;
       if (value("profile") == "fixture") profile = fixture;
       else if (!value("profile").empty()) profile = take(lookupProfile(value("profile")));
@@ -219,6 +264,7 @@ int run(int argc, char** argv) {
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (value("lines") == "no") s.argv.push_back("--no-line-markers");
         if (value("compact") == "yes") s.argv.push_back("--compact-whitespace");
+        if (value("shorten-names") == "yes") s.argv.push_back("--shorten-names");
         if (!value("no-assume").empty()) s.argv.push_back("--no-assume=" + value("no-assume"));
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
@@ -297,10 +343,12 @@ int run(int argc, char** argv) {
         // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
         DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
-        o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no"; o.compactWhitespace = value("compact") == "yes";
+        o.shortenNames = value("shorten-names") == "yes";
+        o.stripComments = value("strip") == "yes" || o.shortenNames; o.noLineMarkers = value("lines") == "no" || o.shortenNames; o.compactWhitespace = value("compact") == "yes" || o.shortenNames;
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (!value("no-assume").empty()) {
           const auto flags = take(parseDistillOptions({"--no-assume=" + value("no-assume"),"main.cpp"}));
+          o.assumeLibrarySpelledNames = flags.assumeLibrarySpelledNames;
           o.assumeInstantiationEffects = flags.assumeInstantiationEffects;
           o.assumeLibrarySpelledMembers = flags.assumeLibrarySpelledMembers;
           o.assumeLibraryMacroValues = flags.assumeLibraryMacroValues;
@@ -343,7 +391,7 @@ int run(int argc, char** argv) {
         auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
-            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp") continue;
+            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp" && p.filename() != "shortened.cpp") continue;
             workPath = p.parent_path();
             check(std::filesystem::equivalent(workPath.parent_path(), workRoot), "work is outside requested temp root");
             check(spec.cwd == workPath, "generated check uses user cwd");
@@ -359,6 +407,7 @@ int run(int argc, char** argv) {
               if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
               if (p.filename() == "unmarked.cpp") builtInputs["unmarked"] = read(p);
               if (p.filename() == "compact.cpp") builtInputs["compact"] = read(p);
+              if (p.filename() == "shortened.cpp") builtInputs["shortened"] = read(p);
             }
           auto process = caseRunner(spec);
           // Test-only bad analysis: remove a user-pasted callee's positive AST
@@ -392,6 +441,47 @@ int run(int argc, char** argv) {
           }
           check(skipped, "incompatible check compiler was not recorded as skipped");
         }
+        if (!value("excluded").empty()) {
+          check(result.pruningModel.has_value(), "missing shortenNames exclusion model");
+          for (const auto& name : words(value("excluded")))
+            check(result.pruningModel->shorteningExcludedNames.contains(name), "missing worker shortenNames exclusion: " + name);
+        }
+        if (value("compare-compact") == "yes") {
+          check(builtInputs.contains("compact"),"missing compiled compact regression baseline");
+          compareShortened(cwd,cmd,builtInputs.at("compact"),result.bytes,value("regression-input"));
+        }
+        if (!value("direct-shorten-names").empty()) {
+          // Test the original compact program when resolution removes branches
+          // or earlier pruning/position gates prevent the final spelling pass.
+          check(result.pruningModel.has_value(),"missing direct shortenNames configuration");
+          PruningModel input; input.text = take(compactWhitespace(read(cwd / "main.cpp")));
+          input.parseArgv = result.pruningModel->parseArgv; input.dialect = result.pruningModel->dialect;
+          input.shortenNames = true;
+          PruneWorkerOptions options; options.executable = workerPath; options.temporaryRoot = cwd;
+          auto model = take(extractPruning(input,options));
+          // Protocols must survive without incidental header coverage.
+          for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"}) {
+            model.libraryMemberNames.erase(name); model.shorteningExcludedNames.erase(name);
+          }
+          check(model.libraryMemberNamesComputed,"missing direct shortenNames library inventory");
+          const auto shortened = take(shortenNamesSource(input.text,model));
+          if (value("direct-shorten-names") == "observation") {
+            check(shortened.namesKept.starts_with("semantic name observation:"),"missed direct semantic observation: " + shortened.namesKept);
+            check(shortened.renames.empty(),"renamed observable names");
+          } else if (value("direct-shorten-names") == "observable" || value("direct-shorten-names") == "conditional") {
+            const auto reason = value("direct-shorten-names") == "observable" ? "observable names: " : "surviving conditional directive: #";
+            check(shortened.namesKept.starts_with(reason),"missed direct refusal: " + shortened.namesKept);
+            check(shortened.renames.empty() && shortened.text == input.text,"refusal changed compact bytes");
+            if (value("direct-shorten-names") == "observable")
+              check(model.shorteningRefused.starts_with("observable names: "),"worker missed observable builtin");
+          } else {
+            check(shortened.namesKept.empty(),"direct shortenNames unexpectedly refused shortening");
+            for (const auto* name : {"await_transform","std","tuple_size","tuple_element","value","type","get","begin","end"})
+              check(!shortened.renames.contains(name),"renamed compiler protocol name: " + std::string(name));
+            check(!shortened.renames.empty(),"direct shortenNames did not exercise shortening");
+          }
+          compareShortened(cwd,cmd,input.text,shortened.text,value("regression-input"));
+        }
         diagnostic = result.diagnostic; bytes = result.bytes;
         if (code != 1)
           check(result.resultLine == "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime " + result.runtime,
@@ -405,9 +495,9 @@ int run(int argc, char** argv) {
           if (artifact == "raw") kind = "local";
           check(kind == value("configuration"), "wrong configuration kind: " + kind);
           // The returned bytes are exactly the checked output; no renderer runs afterwards.
-          const auto written = result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
+          const auto written = result.shortenNames.starts_with("renamed=") ? std::string("shortened") : result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
           check(builtInputs.contains(written) && bytes == builtInputs.at(written), "returned bytes differ from compiled bytes");
-          check((value("lines") == "no" || value("compact") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
+          check((value("lines") == "no" || value("compact") == "yes" || value("shorten-names") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
         } else {
           check(bytes.empty(), "failed pipeline returned output");
           if (value("kept") == "yes") {
@@ -421,6 +511,11 @@ int run(int argc, char** argv) {
       check(code == std::stoi(value("exit")), "wrong exit: " + std::to_string(code) + "\n" + diagnostic);
       for (const auto& [key, line] : expected) if (key == "report" || key.starts_with("report."))
         check(report.find(line) != report.npos, "missing report line: " + line + "\n" + report);
+      if (!value("report-any").empty()) {
+        const auto alternatives = words(value("report-any"));
+        check(std::any_of(alternatives.begin(),alternatives.end(),[&](const auto& line) { return report.find(line) != report.npos; }),
+              "missing report alternative: " + value("report-any") + "\n" + report);
+      }
       for (const auto& [key,text] : expected) {
         if (key == "diagnostic" || key.starts_with("diagnostic.")) check(diagnostic.find(text) != diagnostic.npos,"missing diagnostic: " + text);
         if (key.starts_with("count.")) {

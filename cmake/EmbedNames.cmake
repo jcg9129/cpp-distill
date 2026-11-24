@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Included at configure time; CMAKE_CONFIGURE_DEPENDS tracks edits to the data.
 set(names_source "// SPDX-License-Identifier: GPL-3.0-or-later\n#include <string_view>\n#include <cstddef>\nnamespace distill::embedded {\n")
-foreach(kind headers macros)
+foreach(kind headers macros protocols compiler)
   set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/standard-${kind}.txt")
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
   file(STRINGS "${input}" entries REGEX "^[^# \t].*")
@@ -16,6 +16,11 @@ foreach(kind headers macros)
   endforeach()
   string(APPEND names_source "};\nextern const std::size_t ${kind}Count = sizeof(${kind}) / sizeof(${kind}[0]);\n")
 endforeach()
+# Readable shortening dictionary, embedded so installed binaries need no data files.
+set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/abbreviations.txt")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")
+file(READ "${input}" abbreviations)
+string(APPEND names_source "extern const std::string_view abbreviations = R\"DISTILL(${abbreviations})DISTILL\";\n")
 # A2 identity registry: keep names and library coverage aligned and sorted.
 set(input "${CMAKE_CURRENT_SOURCE_DIR}/data/names/identity-macros.txt")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${input}")

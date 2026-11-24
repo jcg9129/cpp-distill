@@ -4,7 +4,7 @@ target_link_libraries(distill_test_helper PRIVATE distill_core)
 if(WIN32)
   target_compile_definitions(distill_test_helper PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
-add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp judge_probe_test.cpp resolve_test.cpp validate_test.cpp option_model_test.cpp prune_test.cpp render_test.cpp pipeline_test.cpp)
+add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp judge_probe_test.cpp resolve_test.cpp validate_test.cpp option_model_test.cpp prune_test.cpp render_test.cpp shorten_names_test.cpp pipeline_test.cpp)
 target_link_libraries(distill_unit_tests PRIVATE distill_core distill_test_evaluate)
 target_compile_definitions(distill_unit_tests PRIVATE
   DISTILL_EXPECTED_VERSION="${DISTILL_VERSION}"
@@ -13,7 +13,8 @@ target_compile_definitions(distill_unit_tests PRIVATE
 target_compile_definitions(distill_unit_tests PRIVATE DISTILL_EXTENSION_DATA="${PROJECT_SOURCE_DIR}/data/extensions" DISTILL_PROFILE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/profile" DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
 add_dependencies(distill_unit_tests distill_test_helper)
 add_test(NAME unit COMMAND distill_unit_tests)
-set_tests_properties(unit PROPERTIES TIMEOUT 120)
+# Full probe/pipeline units and readable shortening regressions on bounded hosts.
+set_tests_properties(unit PROPERTIES TIMEOUT 240)
 # Replace the baseline object in these test binaries with a synthetic baseline
 # emitted by the real merger/embedder. The committed matrix data stays untouched.
 set(member_fixture "${CMAKE_CURRENT_BINARY_DIR}/embedded_members.cpp")

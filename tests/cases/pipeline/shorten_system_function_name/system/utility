@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Exercise the system-header refusal without depending on library assertions.
+template<class T> const char* describe_type() { return __PRETTY_FUNCTION__; }

@@ -99,6 +99,31 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                 check('pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
+    with case('shortenNames and A15 remain independent of member pruning'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('int main(){int longLocal=0;return longLocal;}\n')
+        (root / 'sample.in').write_text('')
+        selections = [[], ['--no-assume=library-spelled-names'],
+                      ['--no-assume=library-spelled-members'],
+                      ['--no-assume=library-spelled-members,library-spelled-names'], []]
+        for flags in selections:
+            result = subprocess.run([binary, '--shorten-names', *flags, '--verify-run', 'sample.in',
+                                     '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            disabled = any('library-spelled-names' in flag for flag in flags)
+            check(('longLocal' in result.stdout) == disabled, result.stdout)
+            assumptions = next(line for line in report.splitlines() if line.startswith('assumptions:'))
+            check(('A15 library-spelled-names' in assumptions) == (not disabled), report)
+            check(('pruned with shortened names: passed' in report) == (not disabled), report)
+            if disabled:
+                check('shorten-names: kept: A15 library-spelled-names disabled' in report, report)
+            check('runtime compared 1 samples' in report, report)
+            check('#line' not in result.stdout, result.stdout)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
+        (root / 'sample.in').unlink()
     with case('library-spelled-members flag reaches the worker independently of A11'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('struct S { int unused(){return 0;} };\n'
@@ -140,6 +165,36 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(f'guard-defines-removed: lines={0 if guard else 1} bytes=' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'once.h').unlink()
+        (root / 'report.txt').unlink()
+    with case('shortening follows trimming with independent A14 and A15 opt-outs'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'once.h').write_text('#pragma once\n')
+        (root / 'sample.in').write_text('')
+        (root / 'main.cpp').write_text('#include <cstddef>\n#include "once.h"\n#include <cstddef>\n'
+                                      'int main(){int longLocal=5;return longLocal-5;}\n')
+        # A minimal standard header avoids unrelated library assertion observations.
+        names = ['idempotent-standard-headers', 'unobserved-guard-macros', 'library-spelled-names']
+        for mask in range(8):
+            disabled = [name for bit, name in enumerate(names) if mask & (1 << bit)]
+            flags = ['--no-assume=' + ','.join(disabled)] if disabled else []
+            result = subprocess.run([binary, '--shorten-names', *flags, '--verify-run', 'sample.in',
+                                     '--report', 'report.txt', 'g++', '-std=c++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=60)
+            check(result.returncode == 0 and 'wrote pruned' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            check(result.stdout.count('#include <cstddef>') == (2 if mask & 1 else 1), result.stdout)
+            check(('#define DISTILL_ONCE_' in result.stdout) == bool(mask & 2), result.stdout)
+            check(('longLocal' in result.stdout) == bool(mask & 4), result.stdout)
+            assumptions = next(line for line in report.splitlines() if line.startswith('assumptions:'))
+            check(('A14 unobserved-guard-macros' in assumptions) == (not mask & 2), report)
+            check(('A15 library-spelled-names' in assumptions) == (not mask & 4), report)
+            check(f'idempotent-includes-removed: lines={0 if mask & 1 else 1} bytes=' in report, report)
+            check(f'guard-defines-removed: lines={0 if mask & 2 else 1} bytes=' in report, report)
+            check('whitespace compacted:' in report and '#line' not in result.stdout, report)
+            check('runtime compared 1 samples' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'once.h').unlink()
+        (root / 'sample.in').unlink()
         (root / 'report.txt').unlink()
     with case('library-macro-values switch reaches resolution and reports A9 scope'):
         saved = (root / 'main.cpp').read_bytes()

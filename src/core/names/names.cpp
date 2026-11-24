@@ -9,12 +9,23 @@ namespace distill {
 namespace embedded {
 extern const std::string_view headers[];
 extern const std::size_t headersCount;
+extern const std::string_view protocols[], compiler[];
+extern const std::size_t protocolsCount, compilerCount;
 extern const std::string_view macros[];
 extern const std::size_t macrosCount;
 extern const std::string_view identityNames[], identityScopes[];
 extern const std::size_t identityCount;
 const std::string_view* extensionData(std::size_t index);
 std::size_t extensionCount(std::size_t index);
+}
+const std::set<std::string, std::less<>>& shortenNamesCompilerNames() {
+  static const std::set<std::string, std::less<>> names = [] {
+    std::set<std::string, std::less<>> out;
+    for (std::size_t i = 0; i < embedded::protocolsCount; ++i) out.emplace(embedded::protocols[i]);
+    for (std::size_t i = 0; i < embedded::compilerCount; ++i) out.emplace(embedded::compiler[i]);
+    return out;
+  }();
+  return names;
 }
 std::vector<std::string> standardHeaders() {
   return {embedded::headers, embedded::headers + embedded::headersCount};

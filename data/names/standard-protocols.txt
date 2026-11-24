@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Compiler language protocols. Excluded as both old and generated T2 names.
+# Stable clauses: https://eel.is/c++draft/<clause>
+# [dcl.fct.def.coroutine], [expr.await], [coroutine.traits]
+# [coroutine.handle.general], [coroutine.handle.con]
+# [coroutine.handle.export.import], [coroutine.handle.resumption]
+# [coroutine.handle.observers]
+coroutine_traits
+coroutine_handle
+promise_type
+get_return_object
+get_return_object_on_allocation_failure
+initial_suspend
+final_suspend
+return_void
+return_value
+yield_value
+unhandled_exception
+await_transform
+await_ready
+await_suspend
+await_resume
+from_promise
+from_address
+address
+resume
+destroy
+done
+# [dcl.struct.bind], [tuple.helper]
+std
+tuple_size
+tuple_element
+value
+type
+get
+# [stmt.ranged], [range.access], [range.prim.size]
+begin
+end
+size
+# [cmp.categories], [class.compare.default], [expr.spaceship]
+strong_ordering
+weak_ordering
+partial_ordering
+equal
+equivalent
+less
+greater
+unordered
+# [dcl.init.list], [support.initlist], [except.handle]
+initializer_list
+align_val_t
+destroying_delete_t
+exception_ptr
+# [support.contract], [basic.contract.handler] (C++26 draft)
+contracts
+contract_violation
+invoke_default_contract_violation_handler
+handle_contract_violation
+# Allocation/deallocation and conversion functions use keyword/operator tokens.
