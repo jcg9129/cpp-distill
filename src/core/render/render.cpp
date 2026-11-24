@@ -28,6 +28,10 @@ struct Input {
     joinDeletions();
     if (r) removeEmptyShells();
     joinDeletions();
+    // Validate declaration/shell ownership before trimming can exempt directives.
+    for (const auto& l : scan.lines)
+      if (l.directive && !generatedMarker(l) && !touching({l.begin,l.end}).empty())
+        throw Error{"deletion touches source directive #" + l.directive->name + " at line " + std::to_string(l.firstLine)};
     if (r) trimPreprocessor();
     joinDeletions();
     std::map<std::size_t, std::string_view> directives; // Other directives by physical start.
@@ -92,71 +96,79 @@ struct Input {
     };
     std::set<std::size_t> expansionOffsets;
     for (const auto& e : model.expansions) if (!deleted({e.offset,e.offset+1})) expansionOffsets.insert(e.offset);
+    bool reservedMacroWrite = false, macroPragma = false, survivingConditional = false;
+    for (const auto& l : scan.lines) {
+      if (l.directive) {
+        const auto& d = *l.directive;
+        survivingConditional |= d.name == "if" || d.name == "ifdef" || d.name == "ifndef" ||
+            d.name == "elif" || d.name == "elifdef" || d.name == "elifndef";
+        if ((d.name == "define" || d.name == "undef") && !d.tokens.empty()) {
+          const auto& name = d.tokens.front().text;
+          reservedMacroWrite |= isReserved(name);
+        }
+        macroPragma |= d.name == "pragma" && !d.tokens.empty() &&
+            (d.tokens.front().text == "push_macro" || d.tokens.front().text == "pop_macro");
+      }
+      for (const auto& t : l.tokens)
+        if (!deleted({t.begin,t.end}) && t.kind == TokenKind::identifier && t.text == "_Pragma") macroPragma = true;
+    }
     std::set<std::string> seen;
-    std::size_t braces = 0, parens = 0, brackets = 0, conditional = 0;
-    bool pending = false, uncertain = false, scopeBody = false;
-    std::vector<std::string> prefix;
+    std::size_t braces = 0, parens = 0, brackets = 0;
+    bool uncertain = false;
+    const Token* previous = nullptr;
+    // Ranges may own trailing whitespace. Since no surviving ordinary token
+    // intervenes, this must be the range's final surviving token.
+    auto familyBoundary = [&](std::size_t begin) {
+      return !previous || std::any_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+        return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) {
+          return r.begin <= previous->begin && previous->end <= r.end && r.end <= begin;
+        });
+      });
+    };
     for (const auto& l : scan.lines) {
       if (generatedMarker(l)) continue;
       if (l.directive) {
         const auto& d = *l.directive;
-        if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef") {
-          ++conditional;
-          // Different alternatives may open different scopes. Do not infer
-          // the lexical scope after a surviving conditional from one parse.
+        if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef" ||
+            d.name == "elif" || d.name == "elifdef" || d.name == "elifndef")
+          // Alternatives may open different scopes. Never infer scope after
+          // a surviving conditional from just the worker's active parse.
           uncertain = true;
-        }
-        if (model.assumeIdempotentStandardHeaders && !uncertain && !conditional &&
-            !braces && !parens && !brackets && !pending && d.name == "include" &&
-            d.tokens.size() == 1 && d.tokens[0].kind == TokenKind::header &&
+        if (model.assumeIdempotentStandardHeaders && !reservedMacroWrite && !macroPragma && !uncertain &&
+            !braces && !parens && !brackets && d.name == "include" &&
+            d.tokens.size() == 1 && d.tokens[0].kind == TokenKind::header && familyBoundary(l.begin) &&
             std::none_of(model.families.begin(),model.families.end(),[&](const auto& f) {
-              return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin <= l.begin && l.begin < r.end; });
+              return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin < l.end && l.begin < r.end; });
             })) {
           const auto& spelling = d.tokens[0].text;
           if (spelling.starts_with('<') && spelling.ends_with('>')) {
             const auto h = std::string_view(spelling).substr(1,spelling.size()-2);
-            // The broader A1 list also contains GNU extensions. The standard
-            // headers all have simple names; extension paths are ineligible.
-            if (h != "cassert" && h != "assert.h" && h.find('/') == h.npos && isStandardHeader(h) &&
+            // C .h headers can implement partial-inclusion protocols. A1 also
+            // lists extensions; only simple C++ library names qualify here.
+            if (h != "cassert" && !h.ends_with(".h") && h.find('/') == h.npos && isStandardHeader(h) &&
                 !seen.insert(spelling).second) drop(l,true);
           }
         }
-        if (d.name == "endif" && conditional) --conditional;
         continue;
       }
       // Macro replacement tokens can introduce scopes/declarations absent
       // from this lexical stream. From such a use onward scope is unproved.
       if (auto e = expansionOffsets.lower_bound(l.begin); e != expansionOffsets.end() && *e < l.end) uncertain = true;
       for (const auto& t : l.tokens) if (!deleted({t.begin,t.end})) {
+        previous = &t;
         const auto& v = t.text;
-        if (!braces) prefix.push_back(v);
+        // Nesting is an extra veto, never evidence of a declaration boundary.
         if (v == "(") ++parens;
         else if (v == ")" && parens) --parens;
         else if (v == "[" || v == "<:") ++brackets;
         else if ((v == "]" || v == ":>") && brackets) --brackets;
-        else if (v == "{" || v == "<%") {
-          if (!braces) {
-            // Namespace/linkage blocks and function bodies finish at '}'.
-            // Record bodies and braced initializers still require a ';'.
-            scopeBody = std::find(prefix.begin(),prefix.end(),"namespace") != prefix.end() ||
-                (prefix.size() >= 2 && prefix[0] == "extern" && (prefix[1] == "\"C\"" || prefix[1] == "\"C++\"")) ||
-                (std::find(prefix.begin(),prefix.end(),")") != prefix.end() &&
-                 std::find(prefix.begin(),prefix.end(),"=") == prefix.end() &&
-                 std::find(prefix.begin(),prefix.end(),"struct") == prefix.end() &&
-                 std::find(prefix.begin(),prefix.end(),"class") == prefix.end());
-          }
-          ++braces;
-        } else if ((v == "}" || v == "%>") && braces) {
-          --braces;
-          if (!braces && scopeBody) { pending = false; prefix.clear(); continue; }
-        }
-        if (v == ";" && !braces && !parens && !brackets) { pending = false; prefix.clear(); }
-        else pending = true;
+        else if (v == "{" || v == "<%") ++braces;
+        else if ((v == "}" || v == "%>") && braces) --braces;
       }
     }
     // Count every surviving identifier, including all directive operands and
-    // macro replacements. Comments/literals are not macro observations.
-    if (model.assumeUnobservedGuardMacros) {
+    // macro replacements. Pragma strings are excluded artifact-wide above.
+    if (model.assumeUnobservedGuardMacros && !survivingConditional && !macroPragma) {
       constexpr std::string_view guardPrefix = "DISTILL_ONCE_";
       std::map<std::string,std::size_t,std::less<>> uses;
       for (const auto& l : scan.lines)
@@ -166,18 +178,15 @@ struct Input {
       // in the source. Keep observed surviving expansions as well.
       for (const auto& e : model.expansions)
         if (e.name.starts_with(guardPrefix) && !deleted({e.offset,e.offset+1})) ++uses[e.name];
-      conditional = 0;
       for (const auto& l : scan.lines) if (l.directive) {
         const auto& d = *l.directive;
-        if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef") ++conditional;
-        if (!conditional && d.name == "define" && d.tokens.size() == 1) {
+        if (d.name == "define" && d.tokens.size() == 1) {
           const auto& name = d.tokens[0].text;
           const bool generated = l.lastLine <= model.lineMap.size() &&
               std::all_of(model.lineMap.begin()+l.firstLine-1,model.lineMap.begin()+l.lastLine,[](const auto& at) { return !at; });
           if (generated && name.starts_with(guardPrefix) && name.size() == guardPrefix.size()+16 &&
               name.find_first_not_of("0123456789abcdef",guardPrefix.size()) == name.npos && uses[name] == 1) drop(l,false);
         }
-        if (d.name == "endif" && conditional) --conditional;
       }
     }
     deletions.insert(deletions.end(),trimmedDirectives.begin(),trimmedDirectives.end());

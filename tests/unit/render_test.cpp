@@ -482,8 +482,11 @@ TEST(render_pp_include_scope_spelling_and_trivia) {
   CHECK_EQ(take(renderSource(m)).trimming.includeLines,0u);
 }
 TEST(render_pp_first_eligible_include_stays) {
-  auto m = source("extern \"C++\" {\n#include <vector>\n}\n#include <vector> // first global\n#include <vector> // later global\n");
-  PruningResult r; const auto out = take(renderSource(m,&r));
+  auto m = source("extern \"C++\" {\n#include <vector>\n}\nint boundary;\n#include <vector> // first global\n#include <vector> // later global\n");
+  PruneFamily f; const auto begin = m.text.find("int boundary;");
+  f.ranges = {{begin,begin+13}}; m.families.push_back(f);
+  PruningResult r; r.families.resize(1); r.families[0].kept = true;
+  const auto out = take(renderSource(m,&r));
   take(renderingInvariant(m,&r,out.provenance.text));
   CHECK_EQ(out.trimming.includeLines,1u);
   CHECK(out.provenance.text.find("// first global") != std::string::npos);
@@ -520,4 +523,71 @@ TEST(render_pp_guard_observer_removed_with_family) {
   const auto start = m.text.find("int dead");
   const auto out = render(m,{{start,m.text.find("int main")}});
   CHECK_EQ(out.trimming.guardLines,1u);
+}
+
+TEST(render_pp_requires_authoritative_family_boundary) {
+  for (const std::string declaration : {"alignas(8) int x{};", "template<class T> void f() {}",
+                                       "auto lambda = []() {};", "[[deprecated(\"x\")]] int x{};",
+                                       "template<class T> constexpr bool value = requires(T t) { t(); };"}) {
+    auto m = source("#include <cstddef>\n" + declaration + "\n#include <cstddef>\n");
+    PruningResult r;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+    PruneFamily f; const auto begin = m.text.find(declaration);
+    f.ranges = {{begin,begin+declaration.size()}}; m.families.push_back(f);
+    r.families.resize(1); r.families[0].kept = true;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,1u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_artifact_wide_macro_barriers) {
+  for (const auto* barrier : {"#define __request\n", "#undef _Request\n", "#define request__detail\n",
+                            "#pragma push_macro(\"request\")\n", "#pragma pop_macro(\"request\")\n",
+                            "#define SAVE _Pragma(\"pack(1)\")\n"}) {
+    auto m = source(std::string("#include <cstddef>\n#include <cstddef>\n") + barrier);
+    PruningResult r;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+  }
+  // A removed ordinary use of _Pragma does not disable the surviving artifact.
+  auto m = source("#include <cstddef>\n#include <cstddef>\nvoid dead(){_Pragma(\"pack(1)\")}\n");
+  CHECK_EQ(render(m,{{m.text.find("void dead"),m.text.size()}}).trimming.includeLines,1u);
+}
+TEST(render_pp_guard_conditional_and_pragma_barriers) {
+  for (const auto* barrier : {"#if OTHER\n#endif\n", "#ifdef OTHER\n#endif\n", "#ifndef OTHER\n#endif\n",
+                            "#if 0\n#elif OTHER\n#endif\n", "#if 0\n#elifdef OTHER\n#endif\n",
+                            "#if 0\n#elifndef OTHER\n#endif\n", "#pragma push_macro(\"DISTILL_ONCE_0123456789abcdef\")\n",
+                            "#pragma pop_macro(\"DISTILL_ONCE_0123456789abcdef\")\n", "#define SAVE _Pragma(\"pack(1)\")\n"}) {
+    auto m = source(std::string("#line 1 \"a.cpp\"\n#define DISTILL_ONCE_0123456789abcdef\n") + barrier);
+    m.lineMap[0].reset(); m.lineMap[1].reset();
+    PruningResult r;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.guardLines,0u);
+  }
+}
+TEST(render_pp_trimming_cannot_exempt_invalid_prior_directive_deletion) {
+  auto m = source("#line 1 \"a.cpp\"\n#define DISTILL_ONCE_0123456789abcdef\nint main(){}\n");
+  m.lineMap[0].reset(); m.lineMap[1].reset();
+  const auto begin = m.text.find("#define"), end = m.text.find("int main");
+  for (const auto range : {EditRange{begin,end}, EditRange{begin,begin+1}, EditRange{end-1,end}}) {
+    PruneFamily f; f.ranges = {range}; m.families = {f};
+    PruningResult r; r.families.resize(1);
+    const auto out = renderSource(m,&r);
+    CHECK(!out.ok());
+    if (!out.ok()) CHECK(out.error().message.find("deletion touches source directive #define") != std::string::npos);
+  }
+}
+TEST(render_pp_partial_header_review_examples_stay) {
+  for (const std::string text : {
+      "#define __need_size_t\n#include <stddef.h>\n#include <stddef.h>\n"
+      "int main(){ptrdiff_t n = 0; return n;}\n",
+      "#define __need_size_t\n#pragma push_macro(\"__need_size_t\")\n#include <stddef.h>\n"
+      "#pragma pop_macro(\"__need_size_t\")\n#include <stddef.h>\n"
+      "#ifdef __need_size_t\nint main(){return 1;}\n#else\nint main(){return 0;}\n#endif\n"}) {
+    auto m = source(text); PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,0u);
+    const auto first = out.provenance.text.find("#include <stddef.h>");
+    CHECK(first != std::string::npos);
+    CHECK(out.provenance.text.find("#include <stddef.h>",first+1) != std::string::npos);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
 }

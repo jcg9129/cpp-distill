@@ -1,0 +1,3 @@
+output-count #include <cstddef> | 4
+report | idempotent-includes-removed: lines=3 bytes=
+output-absent | // completed declaration

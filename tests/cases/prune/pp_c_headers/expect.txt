@@ -1,0 +1,3 @@
+output-count #include <stddef.h> | 2
+output-count #include <stdarg.h> | 2
+report | idempotent-includes-removed: lines=0 bytes=0

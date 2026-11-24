@@ -1813,25 +1813,42 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   inside a deleted range.
 - **Preprocessor trimming** (user, 2026-11-24) runs in the pruned renderer,
   after declaration and empty-shell deletion, in immutable flat coordinates.
+  Existing declaration/shell deletions are first checked against all source
+  directives, before trimming grants any directive-deletion exemption.
   `idempotent-standard-headers` is a policy justified by C++20
-  [using.headers]/2 (16.4.2.3) and the corresponding C library rule: repeated
-  library-header inclusion has the effect of one inclusion, except `<cassert>`
-  and `<assert.h>`, which recheck NDEBUG. Keep the first top-level angle include
-  in place and remove later occurrences of the exact same standard C/C++ header
-  spelling. Never hoist or equate `<cstdio>` and `<stdio.h>`. The broader A1
-  header list's GNU extensions (`bits/stdc++.h`, `ext/...`), other system headers
-  and user headers are ineligible. Both occurrences must be outside namespaces,
-  linkage blocks (including `extern "C++"`), declarations and surviving
-  conditionals. A surviving conditional or a retained non-directive macro
-  expansion conservatively prevents proving the scope of later includes.
+  [using.headers]/2 (16.4.2.3). Keep the first eligible angle include in place
+  and remove later occurrences of that exact C++ library-header spelling:
+  `<cxxx>` wrappers and headers such as `<vector>` and `<type_traits>`, except
+  `<cassert>`, which rechecks NDEBUG. C `.h` headers are never eligible:
+  `<stddef.h>` and `<stdarg.h>` can implement `__need_*` partial inclusion.
+  The broader A1 header list's GNU extensions (`bits/stdc++.h`, `ext/...`),
+  other system headers and user headers are also ineligible. Never hoist headers.
+  Disable this policy for the whole surviving artifact if any `#define` or
+  `#undef` names a reserved identifier containing `__` or beginning with `_`
+  followed by an uppercase letter, or if it contains `#pragma push_macro`,
+  `#pragma pop_macro` or an identifier token `_Pragma` (including replacement
+  lists). Both includes must be outside every family range. The previous
+  surviving non-directive token must end a complete family range before the
+  include; alternatively, only directives/trivia may precede the include.
+  Lexical brace/parenthesis/bracket nesting is an additional veto, never proof
+  that a declaration has ended. This uses declaration ownership rather than
+  guessing function bodies from prefixes containing `)` or `class`.
+  Both occurrences must be outside namespaces, linkage blocks (including
+  `extern "C++"`), declarations and surviving conditionals. A surviving
+  conditional or retained non-directive macro expansion conservatively prevents
+  proving the scope of later includes.
   `--no-assume=idempotent-standard-headers` disables this policy.
   Under A14 remove a provenance-confirmed generated empty
   `#define DISTILL_ONCE_<hash>` only when its name is the sole surviving
   identifier token with that spelling, counting directives and macro replacement
   lists after declaration deletion, plus surviving worker-observed macro
   expansions (which can synthesize a guard name with token pasting).
-  User-written lookalikes stay. Generated
-  defines inside surviving conditionals stay because skipped markers cannot
+  User-written lookalikes stay. Disable guard trimming for the whole artifact
+  if any conditional directive (`#if`, `#ifdef`, `#ifndef`, `#elif`, `#elifdef`,
+  `#elifndef`) survives, or if any of the macro pragmas/operators above survives.
+  These barriers cover macro-generated `defined` operands constructed with
+  token pasting (the GCC `PRESENT(a,b)` extension) and macro observation through
+  pragma strings. Conditional groups also permit skipped markers that cannot
   repair positions in later conditional expressions. Raw/flat rendering never
   applies either rule. Both rules retain the normal marker-emitting path and
   its location invariant; marker omission still requires the existing position

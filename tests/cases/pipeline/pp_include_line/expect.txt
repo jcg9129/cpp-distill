@@ -1,0 +1,8 @@
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+contains=static_assert(__LINE__ == 3);
+count.1=#include <cstddef>
+report=idempotent-includes-removed: lines=1 bytes=19
