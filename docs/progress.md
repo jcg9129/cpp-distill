@@ -692,3 +692,68 @@ Per-declaration rule-1 pruning (PR #113) was closed unmerged. Review fixes cut
 the atl gain from −1.81% to −0.26% nlm (guides only, 11.5 KB). Five review rounds
 kept finding failed-check holes. Details and numbers:
 `docs/reviews/2026-11-23-unreferenced-overloads.md`. D3e rule 1 is unchanged.
+
+## D3f unspelled-functions (2026-11-24)
+
+Rule 3 now skips eligible namespace-scope function families. Eligibility is
+intersected across overload/redeclaration/template/shared-declaration unions;
+operators, A6 names, C linkage, specializations/instantiations, macro-produced
+and specially attributed declarations stay excluded. Lambda call operators
+belong to their expressions and do not veto the enclosing namespace function.
+Written local extern declarations still veto the aggregated family.
+
+Only forward association retention changes. All association edges remain in
+rule 6's reverse potential-effect graph. The report lists `D3f unspelled-functions` and
+`rule3-unkept: declarations=N bytes=B`; the counter
+replays the old forward fixpoint without rerunning the unchanged effect graph.
+The opt-out travels through CLI/options, pipeline and immutable worker protocol
+8, and restores the original association rule independently of A11/A12/A9.
+
+Shared-syntax decision: use the existing overlapping-range unions. The return-
+and parameter-type first declarations in the new fixtures remain aggregated
+with their records, retaining `struct R* helper();` when the record is kept.
+A separately declared enum does not prevent deleting an unused returning helper.
+Weakref/ifunc fixtures preserve the existing unsupported-attribute refusal;
+alias string targets use the existing symbol-root interpretation.
+
+Validation: all **109 CTest entries pass** in a complete final run (two jobs,
+120-second test caps); all **409 Python tooling tests pass**, including 200
+library tests. All 96 extraction cases pass; their runtime fixtures compile/run under GCC
+and Clang. A separately built pre-change worker/renderer and the
+new opt-out produce **84/84 byte-identical original prune-corpus outputs**,
+including unchanged flat text for expected refusals. The positive/negative
+pipeline pair also builds and compares original and published output.
+
+Built with the SHA256SUMS-verified LLVM **23.1.5** Linux ARM64 SDK
+(`5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de`),
+Clang 22.1.8, LLD, `-O1 -DNDEBUG`, `-j2` builds and CTest `-j2`, six-GiB virtual
+memory caps and hard configure/build/test timeouts. GCC compilation exceeded the
+container memory limit; the unoptimized diagnostic build also hit the unit
+suite's time cap before switching to the analysis's optimized build settings.
+The complete final optimized run is green.
+
+Six-example ATL comparison follows (read-only revision `5b14f2d`, CSES
+`cses-gcc13-cpp23`, local GCC 13.3, `-O2 --strip-comments --no-line-markers`).
+
+
+| Example | Opt-out bytes | D3f bytes | Delta | Artifact |
+|---|---:|---:|---:|---|
+| `delaunay/quick` | 190,805 | 190,805 | +0 | flat |
+| `graph/quick` | 94,034 | 94,034 | +0 | flat |
+| `graph-components/scc` | 96,625 | 96,625 | +0 | flat |
+| `bipartite-matching/quick` | 114,953 | 114,953 | +0 | flat |
+| `factorization/quick` | 25,433 | 24,387 | -1,046 | pruned |
+| `sieve/quick` | 9,303 | 9,168 | -135 | pruned |
+
+All **12/12** standalone builds and published sample-output checks pass.
+Four examples fall back to flat because the ARM64 checking compiler disagrees
+with CSES's x86_64 conditionals (`utils/hash.hpp`, plus geometry predicates for
+Delaunay). Their zero deltas do not measure D3f pruning gain. No refusal gate
+was waived; the two number-theory examples prune and save 1,181 bytes in total.
+Generation/build/run caps are 240/120/30 seconds with 2,500,000-KiB address-space
+caps and at most two examples running concurrently. Measurements and reports
+remain under ignored `.checks/atl-six/`.
+
+The downloaded SDK archive and extraction were deleted after validation.
+A post-deletion CLI pruning/build/run smoke check also passes. Changes remain
+uncommitted on `unspelled-functions`; nothing was pushed.

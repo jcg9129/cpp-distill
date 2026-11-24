@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+args | --keep flag_root
+kept flag_root | root: --keep
+kept annotated | root: distill: keep
+removed cpp_linkage | outside the retention closure

@@ -245,6 +245,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   PruningResult out; out.dialect = m.dialect; out.registryVersion = registry.version; out.registryDigest = registry.digest;
   if (!m.assumeInstantiationEffects) out.policy += ", without instantiation-effects";
   if (!m.assumeLibrarySpelledMembers) out.policy += ", without library-spelled-members";
+  if (!m.assumeUnspelledFunctions) out.policy += ", without unspelled-functions";
   out.memberDisabledReasons = m.memberDisabledReasons;
   if (!m.assumeLibrarySpelledMembers) out.memberDisabledReasons.push_back("--no-assume=library-spelled-members");
   else if (!m.libraryMemberNamesComputed) out.memberDisabledReasons.push_back("library-spelled identifier set could not be computed");
@@ -305,6 +306,17 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     }
   };
   const auto adl = registry.names(m.dialect);
+  // D3f requires every declaration in an aggregated family to qualify. Shared
+  // syntax with a record/enum and any excluded overload veto the whole group.
+  std::vector<bool> unspelledEligible(n,true);
+  for (FamilyId i = 0; i < n; ++i) {
+    const auto& f = m.families[i];
+    unspelledEligible[find(i)] = unspelledEligible[find(i)] &&
+        f.unspelledFunctionEligible && f.kind == FamilyKind::function &&
+        f.memberOf == noFamily && !f.nonMemberOperator && !f.systemSpecialization &&
+        !f.externCDefinition && f.pinned.empty() && !f.names.contains("main") &&
+        std::none_of(f.callableNames.begin(),f.callableNames.end(),[&](const auto& name) { return adl.contains(name); });
+  }
   // Also cover models supplied without worker extraction (and offline tests).
   auto memberRegistry = m.libraryMemberNames;
   const auto scannedMemberNames = embeddedLibraryData().memberNames;
@@ -484,18 +496,36 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     }
   }
   if (!out.disabledReasons.empty()) for (FamilyId id = 0; id < n; ++id) keep(id,"pruning disabled",noFamily);
-  while (!work.empty()) {
-    const auto id = work.front(); work.pop(); const auto& f = m.families[id];
-    if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
-    for (auto member : members[id]) {
-      if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
-      if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
+  auto closure = [&](bool legacyAssociations) {
+    while (!work.empty()) {
+      const auto id = work.front(); work.pop(); const auto& f = m.families[id];
+      if (f.memberOf != noFamily) keep(f.memberOf,"AST: referenced by " + f.label,id);
+      for (auto member : members[id]) {
+        if (!memberReasons[member].empty()) keep(member,memberReasons[member],id);
+        if (pendingNames[member]) keep(member,pendingNames[member]->first,pendingNames[member]->second);
+      }
+      for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
+      for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
+      for (auto target : associations[id])
+        if (legacyAssociations || !unspelledEligible[find(target)]) keep(target,"associated with " + f.label,id);
+      for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
+      for (auto entity : systemUses[id]) system(entity,id);
     }
-    for (const auto& name : lexical[id]) for (auto target : index[name]) if (target != id) keepName(target,"name: " + name,id);
-    for (auto target : f.edges) keep(target,"AST: referenced by " + f.label,id);
-    for (auto target : associations[id]) keep(target,"associated with " + f.label,id);
-    for (const auto& name : f.dependentNames) for (auto target : callables[name]) keepName(target,"dependent name: " + name,id);
-    for (auto entity : systemUses[id]) system(entity,id);
+  };
+  closure(!m.assumeUnspelledFunctions);
+  if (m.assumeUnspelledFunctions && out.disabledReasons.empty() &&
+      std::any_of(out.families.begin(),out.families.end(),[](const auto& f) { return !f.kept; })) {
+    // Exact old-rule counterfactual, starting from the new closure. Roots and
+    // rule-6 effects are identical, so only the forward fixpoint is replayed.
+    auto actual = out.families;
+    for (FamilyId i = 0; i < n; ++i) if (actual[i].kept) work.push(i);
+    closure(true);
+    for (FamilyId i = 0; i < n; ++i)
+      if (!actual[i].kept && out.families[i].kept && unspelledEligible[find(i)]) {
+        ++out.rule3UnkeptDeclarations;
+        for (auto range : m.families[i].ranges) out.rule3UnkeptBytes += range.end-range.begin;
+      }
+    out.families = std::move(actual);
   }
   for (FamilyId i = 0; i < n; ++i) {
     std::size_t bytes = 0; for (auto r : m.families[i].ranges) bytes += r.end - r.begin;
@@ -513,6 +543,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   // plus destruction of never-reached block storage, even in empty-shell rendering.
   if (out.disabledReasons.empty()) {
     out.assumptions.insert("A7");
+    if (m.assumeUnspelledFunctions) out.assumptions.insert("D3f");
     if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
     if (out.memberDisabledReasons.empty()) out.assumptions.insert("A12");
   }

@@ -861,10 +861,11 @@ library-hook refusals are unchanged. See the
 A11 exclusions, compiler probes and measurements.
 `--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
 accepts repetition and comma lists; `instantiation-effects`,
-`library-spelled-members` and `library-macro-values` are the switchable names.
+`library-spelled-members`, `library-macro-values` and `unspelled-functions` are
+the switchable names.
 Other names (including assumption IDs) are usage errors (exit 1) listing all
-three names. For A11 and A12, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
-the worker. Pruning protocol **7** serializes both flags, and the parent rejects a worker
+four names. For A11, A12 and D3f, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
+the worker. Pruning protocol **8** serializes the A11, A12 and D3f flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
 identity and `D3e, without instantiation-effects` distinguish the two modes.
 Both report formats print the readable A11 name; the flag mode lists it as
@@ -1419,13 +1420,24 @@ The worker inventories raw included system headers and identifiers emitted by
 the full TU's system macro expansions, including pasted results and user arguments.
 An incomplete inventory disables only member pruning.
 `--no-assume=library-spelled-members` also keeps records whole. Both flags are
-immutable protocol-v7 identity fields. Reports list A12 whenever members can be
+immutable protocol-v8 identity fields. Reports list A12 whenever members can be
 pruned, even without a deletion. Units retained with their owner by rules 1–4/8
 share its whole-record effect component and incoming system-dispatch analysis.
 Member spelling is stored separately from namespace-scope names; forward
-ownership retention is separate from actual effect dependencies. Protocol 7
+ownership retention is separate from actual effect dependencies. Protocol 8
 rejects older models with the previous interpretation of those fields.
 The adopted rules, regression coverage and
 historical prototype measurements are in
 [`2026-11-20-member-pruning.md`](../../docs/reviews/2026-11-20-member-pruning.md).
 The obsolete variant sweep script was removed; CI's normal ATL sweep measures D3e.
+
+## D3f unspelled functions
+
+Rule 3 no longer retains an eligible namespace-scope function family solely
+because its signature names a kept user record or enum. All name, AST,
+dependent-name, root and potential-effect rules still apply. Shared declaration
+syntax stays aggregated with every entity it introduces. Reports list
+`D3f unspelled-functions` and the removed declaration/byte counter
+`rule3-unkept`. `--no-assume=unspelled-functions` restores the old rule 3;
+like `instantiation-effects`, `library-spelled-members` and
+`library-macro-values`, it accepts repeated options and comma lists.

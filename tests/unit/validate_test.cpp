@@ -360,3 +360,23 @@ TEST(validate_atcoder_flat_pruning_remaining_reasons_and_link_provenance) {
     CHECK_EQ(computeRetention(model.value()).value().disabledReasons, expected);
   }
 }
+
+TEST(validate_unspelled_functions_option) {
+  CHECK(parseDistillOptions({"main.cpp"}).value().assumeUnspelledFunctions);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--no-assume=unspelled-functions","main.cpp"},
+      {"--no-assume","unspelled-functions","main.cpp"},
+      {"--no-assume=unspelled-functions,unspelled-functions","main.cpp"},
+      {"--no-assume=unspelled-functions","--no-assume=unspelled-functions","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok());
+    CHECK(!r.value().assumeUnspelledFunctions); CHECK(r.value().assumeInstantiationEffects);
+    CHECK(r.value().assumeLibrarySpelledMembers); CHECK(r.value().assumeLibraryMacroValues);
+    CHECK(!r.value().noPrune);
+  }
+  const auto all = parseDistillOptions({"--no-assume=unspelled-functions,instantiation-effects,library-spelled-members,library-macro-values","main.cpp"});
+  CHECK(all.ok()); CHECK(!all.value().assumeUnspelledFunctions); CHECK(!all.value().assumeInstantiationEffects);
+  CHECK(!all.value().assumeLibrarySpelledMembers); CHECK(!all.value().assumeLibraryMacroValues);
+  CHECK(!parseDistillOptions({"--no-assume=unspelled-functions","--judge-probe","cses"}).ok());
+  CHECK(!parseDistillOptions({"--no-assume=unspelled-functions","--judge-check","cses","out.txt"}).ok());
+  CHECK(distillHelp().find("unspelled-functions (D3f)") != std::string::npos);
+}

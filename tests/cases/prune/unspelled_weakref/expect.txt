@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+disabled | unsupported attribute: weakref
+kept weakref_target | pruning disabled
+kept weakref_name | pruning disabled

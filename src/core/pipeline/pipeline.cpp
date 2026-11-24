@@ -152,6 +152,7 @@ struct Pipeline {
       auto m = take(preparePruning(*flatConfiguration,raw,result.resolution,options.profile,options.keep));
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
       m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
+      m.assumeUnspelledFunctions = options.assumeUnspelledFunctions;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {
@@ -459,6 +460,8 @@ struct Pipeline {
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
     if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
+    if (!options.assumeUnspelledFunctions && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)\n";
     if (!options.assumeLibraryMacroValues)
       result.diagnostic += "resolution assumption disabled: A9 library-macro-values (--no-assume=library-macro-values); __cpp_lib_* facts retained\n";
     result.report = renderReport(result, command, options.profile);

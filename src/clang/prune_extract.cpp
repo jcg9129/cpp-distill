@@ -39,6 +39,19 @@ using namespace clang;
 bool supportedAttribute(const Attr* a) {
   return isa<WarnUnusedResultAttr,UnusedAttr,LikelyAttr,UnlikelyAttr,AlwaysInlineAttr,AlignedAttr,MaxFieldAlignmentAttr>(a);
 }
+bool unspelledFunctionEligible(const FunctionDecl* f) {
+  if (isa<CXXMethodDecl,CXXDeductionGuideDecl>(f) ||
+      !f->getDeclContext()->getRedeclContext()->isFileContext() ||
+      !f->getLexicalDeclContext()->getRedeclContext()->isFileContext() ||
+      f->getFriendObjectKind() != Decl::FOK_None || !f->getIdentifier() ||
+      f->isMain() || f->getLanguageLinkage() == CLanguageLinkage ||
+      f->getTemplateSpecializationKind() != TSK_Undeclared ||
+      f->getBeginLoc().isMacroID() || f->getLocation().isMacroID() || f->getEndLoc().isMacroID()) return false;
+  for (const auto* attr : f->attrs())
+    if (isa<AliasAttr,IFuncAttr,WeakAttr,WeakRefAttr,UsedAttr,SectionAttr,
+            ConstructorAttr,DestructorAttr,VisibilityAttr,AsmLabelAttr>(attr)) return false;
+  return true;
+}
 bool scalarBuiltin(const Decl* d) {
   const auto* f = dyn_cast<FunctionDecl>(d);
   if (!f || !f->isImplicit() || !f->getBuiltinID()) return false;
@@ -243,6 +256,7 @@ struct Extraction {
     } else if (const auto* fn = dyn_cast<FunctionDecl>(base)) {
       f.kind = FamilyKind::function; f.nonMemberOperator = (fn->isOverloadedOperator() || fn->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName) && !isa<CXXMethodDecl>(fn);
       f.externCDefinition = fn->isExternC() && fn->isThisDeclarationADefinition();
+      f.unspelledFunctionEligible = unspelledFunctionEligible(fn);
       if (fn->getTemplateSpecializationKind() == TSK_ExplicitInstantiationDeclaration || fn->getTemplateSpecializationKind() == TSK_ExplicitInstantiationDefinition) f.root = "explicit instantiation";
     } else if (const auto* v = dyn_cast<VarDecl>(base)) {
       f.kind = FamilyKind::variable; f.externCDefinition = v->isExternC() && v->isThisDeclarationADefinition() != VarDecl::DeclarationOnly;
@@ -1154,6 +1168,12 @@ public:
     if (f->getQualifier() && f->getQualifier().isDependent()) memberName(f->getDeclName());
     auto& family = e.model.families[current];
     if (!isa<CXXMethodDecl, CXXDeductionGuideDecl>(f)) {
+      // Written local externs, friends and specializations join these families
+      // and veto eligibility. Lambda call operators are expression-owned, not
+      // namespace-function redeclarations. Implicit instances add no spelling.
+      if (!f->isImplicit() && e.user(f->getBeginLoc()) &&
+          f->getTemplateSpecializationKind() != TSK_ImplicitInstantiation)
+        family.unspelledFunctionEligible &= unspelledFunctionEligible(f);
       bool carrier = false;
       for (const auto* p : f->parameters()) carrier |= ownRecordParameter(p->getType());
       if (callableCarriersSeen.insert(current).second) family.boundedSystemHooks = carrier;

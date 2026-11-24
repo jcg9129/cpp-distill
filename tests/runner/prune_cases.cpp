@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
         model = take(preparePruning(configuration,{},flat,&configuration.facts,cli.keep));
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
         model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
+        model.assumeUnspelledFunctions = cli.assumeUnspelledFunctions;
         if (*feature || name == "ordinary_builtins") {
           model.dialect = "gnu++23";
           for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/pipeline/pipeline.h"
+#include "core/command/options.h"
 #include "core/path.h"
 #include "evaluate.h"
 #include "profile.h"
@@ -218,6 +219,7 @@ int run(int argc, char** argv) {
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (value("lines") == "no") s.argv.push_back("--no-line-markers");
         if (value("compact") == "yes") s.argv.push_back("--compact-whitespace");
+        if (!value("no-assume").empty()) s.argv.push_back("--no-assume=" + value("no-assume"));
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
         if (profile) { s.argv.push_back("--judge"); s.argv.push_back(value("profile") == "fixture" ? pathToUtf8(fixture.provenance.file.filename()) : value("profile")); }
@@ -297,6 +299,13 @@ int run(int argc, char** argv) {
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
         o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no"; o.compactWhitespace = value("compact") == "yes";
         if (!value("keep").empty()) o.keep = {value("keep")};
+        if (!value("no-assume").empty()) {
+          const auto flags = take(parseDistillOptions({"--no-assume=" + value("no-assume"),"main.cpp"}));
+          o.assumeInstantiationEffects = flags.assumeInstantiationEffects;
+          o.assumeLibrarySpelledMembers = flags.assumeLibrarySpelledMembers;
+          o.assumeLibraryMacroValues = flags.assumeLibraryMacroValues;
+          o.assumeUnspelledFunctions = flags.assumeUnspelledFunctions;
+        }
         if (value("prune") == "yes" || value("samples") == "yes") {
           write(cwd / "sample.in",value("sample")); o.samples = {{"sample.in",cwd / "sample.in"}};
         }

@@ -11,6 +11,7 @@ inline constexpr std::string_view pruningPolicyVersion = "D3e";
 inline std::string_view assumptionLabel(std::string_view id) {
   if (id == "A11") return "A11 instantiation-effects";
   if (id == "A12") return "A12 library-spelled-members";
+  if (id == "D3f") return "D3f unspelled-functions";
   return id;
 }
 struct EditRange {
@@ -38,6 +39,9 @@ struct PruneFamily {
   bool boundedSystemHooks = false;
   bool nonMemberOperator = false, namespaceUsing = false, externCDefinition = false;
   bool systemSpecialization = false;
+  // Worker certificate for this declaration, intersected across family unions
+  // by retention. False for non-function declarations and unclassified models.
+  bool unspelledFunctionEligible = false;
   // D3e: same-name declarations share one unit; owner is the
   // retained record's structural family (also for records nested in it).
   FamilyId memberOf = noFamily;
@@ -78,6 +82,7 @@ struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
+  bool assumeUnspelledFunctions = true;
   // Raw system-header identifiers plus identifiers emitted through system macro
   // expansion in the full unpruned TU, unioned with all scanned-library names.
   bool libraryMemberNamesComputed = false;
@@ -113,6 +118,7 @@ struct PruningResult {
   std::set<std::string> assumptions;
   std::map<std::string, std::size_t> primaryBytes, transitiveBytes;
   std::size_t keptBytes = 0, removedBytes = 0;
+  std::size_t rule3UnkeptDeclarations = 0, rule3UnkeptBytes = 0;
 };
 Result<PruningResult> computeRetention(const PruningModel&);
 Result<bool> staticNameInvariant(const PruningModel&, const PruningResult&, std::string_view rendered);

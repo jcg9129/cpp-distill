@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+removed returning | outside the retention closure
+removed taking | outside the retention closure
+removed templated | outside the retention closure
+removed overloaded | outside the retention closure
+removed enum_helper | outside the retention closure
+report | pruning assumption: D3f unspelled-functions
+report | rule3-unkept: declarations=6 bytes=

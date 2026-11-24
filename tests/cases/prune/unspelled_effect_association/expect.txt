@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+kept associated_helper | instantiation effect:
+kept Carrier | instantiation effect:
+kept dormant | instantiation effect:
+report | rule3-unkept: declarations=0 bytes=0

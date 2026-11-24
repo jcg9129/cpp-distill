@@ -23,6 +23,10 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     out << "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
   if (!m.assumeLibrarySpelledMembers)
     out << "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
+  if (!m.assumeUnspelledFunctions)
+    out << "pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)\n";
+  if (m.assumeUnspelledFunctions && r.disabledReasons.empty())
+    out << "rule3-unkept: declarations=" << r.rule3UnkeptDeclarations << " bytes=" << r.rule3UnkeptBytes << '\n';
   for (const auto& a : r.assumptions) out << "pruning assumption: " << assumptionLabel(a) << '\n';
   out << "extension coverage:\n" << embeddedExtensionCoverage();
   for (FamilyId id = 0; id < m.families.size(); ++id) {
