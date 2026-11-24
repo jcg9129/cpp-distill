@@ -219,6 +219,7 @@ int run(int argc, char** argv) {
         if (value("strip") == "yes") s.argv.push_back("--strip-comments");
         if (value("lines") == "no") s.argv.push_back("--no-line-markers");
         if (value("compact") == "yes") s.argv.push_back("--compact-whitespace");
+        if (value("minify") == "yes") s.argv.push_back("--minify");
         if (!value("no-assume").empty()) s.argv.push_back("--no-assume=" + value("no-assume"));
         if (!value("keep").empty()) { s.argv.push_back("--keep"); s.argv.push_back(value("keep")); }
         if (value("strict") == "yes") s.argv.push_back("--strict");
@@ -297,10 +298,12 @@ int run(int argc, char** argv) {
         // Diagnostic-only fixtures exercise preparation/retention without an SDK worker.
         DistillOptions o; o.noPrune = value("prune") != "yes" && value("prune") != "diagnostics"; o.pruningWorker = workerPath;
         if (!value("checker").empty()) o.temporaryRoot = temp.path;
-        o.stripComments = value("strip") == "yes"; o.noLineMarkers = value("lines") == "no"; o.compactWhitespace = value("compact") == "yes";
+        o.minify = value("minify") == "yes";
+        o.stripComments = value("strip") == "yes" || o.minify; o.noLineMarkers = value("lines") == "no" || o.minify; o.compactWhitespace = value("compact") == "yes" || o.minify;
         if (!value("keep").empty()) o.keep = {value("keep")};
         if (!value("no-assume").empty()) {
           const auto flags = take(parseDistillOptions({"--no-assume=" + value("no-assume"),"main.cpp"}));
+          o.assumeLibrarySpelledNames = flags.assumeLibrarySpelledNames;
           o.assumeInstantiationEffects = flags.assumeInstantiationEffects;
           o.assumeLibrarySpelledMembers = flags.assumeLibrarySpelledMembers;
           o.assumeLibraryMacroValues = flags.assumeLibraryMacroValues;
@@ -343,7 +346,7 @@ int run(int argc, char** argv) {
         auto result = take(distillProgram(cmd, o, *evaluator, [&](const ProcessSpec& spec) {
           for (const auto& arg : spec.argv) {
             const auto p = pathFromUtf8(arg);
-            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp") continue;
+            if (p.filename() != "raw.cpp" && p.filename() != "flat.cpp" && p.filename() != "pruned.cpp" && p.filename() != "unmarked.cpp" && p.filename() != "compact.cpp" && p.filename() != "minified.cpp") continue;
             workPath = p.parent_path();
             check(std::filesystem::equivalent(workPath.parent_path(), workRoot), "work is outside requested temp root");
             check(spec.cwd == workPath, "generated check uses user cwd");
@@ -359,6 +362,7 @@ int run(int argc, char** argv) {
               if (p.filename() == "pruned.cpp") builtInputs["pruned"] = read(p);
               if (p.filename() == "unmarked.cpp") builtInputs["unmarked"] = read(p);
               if (p.filename() == "compact.cpp") builtInputs["compact"] = read(p);
+              if (p.filename() == "minified.cpp") builtInputs["minified"] = read(p);
             }
           auto process = caseRunner(spec);
           // Test-only bad analysis: remove a user-pasted callee's positive AST
@@ -392,6 +396,11 @@ int run(int argc, char** argv) {
           }
           check(skipped, "incompatible check compiler was not recorded as skipped");
         }
+        if (!value("excluded").empty()) {
+          check(result.pruningModel.has_value(), "missing minify exclusion model");
+          for (const auto& name : words(value("excluded")))
+            check(result.pruningModel->minifyExcludedNames.contains(name), "missing worker minify exclusion: " + name);
+        }
         diagnostic = result.diagnostic; bytes = result.bytes;
         if (code != 1)
           check(result.resultLine == "distill: wrote " + value("artifact") + " (" + wantedLevel + "), runtime " + result.runtime,
@@ -405,9 +414,9 @@ int run(int argc, char** argv) {
           if (artifact == "raw") kind = "local";
           check(kind == value("configuration"), "wrong configuration kind: " + kind);
           // The returned bytes are exactly the checked output; no renderer runs afterwards.
-          const auto written = result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
+          const auto written = result.minify.starts_with("renamed=") || result.minify.find("T1 applied") != result.minify.npos ? std::string("minified") : result.compactWhitespace == "compacted" ? std::string("compact") : result.lineMarkers == "omitted" ? std::string("unmarked") : artifact;
           check(builtInputs.contains(written) && bytes == builtInputs.at(written), "returned bytes differ from compiled bytes");
-          check((value("lines") == "no" || value("compact") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
+          check((value("lines") == "no" || value("compact") == "yes" || value("minify") == "yes") != result.lineMarkers.empty(), "line-marker outcome without --no-line-markers or missing");
         } else {
           check(bytes.empty(), "failed pipeline returned output");
           if (value("kept") == "yes") {

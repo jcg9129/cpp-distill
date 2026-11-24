@@ -103,6 +103,8 @@ struct Archive {
     field("systemEntities",x.systemEntities); field("systemUses",x.systemUses); field("includes",x.includes); field("disabledReasons",x.disabledReasons);
     field("untranslatedOptions",x.untranslatedOptions); field("parseArgv",x.parseArgv); field("judgeInitial",x.judgeInitial); field("parseWidths",x.parseWidths); field("judgeProfile",x.judgeProfile);
     field("judgeComplete",x.judgeComplete); field("unknownInUserCode",x.unknownInUserCode); field("positionUses",x.positionUses);
+    field("minify",x.minify); field("assumeLibrarySpelledNames",x.assumeLibrarySpelledNames);
+    field("minifyExcludedNames",x.minifyExcludedNames); field("minifyNamesRefused",x.minifyNamesRefused);
     field("assumeInstantiationEffects",x.assumeInstantiationEffects);
     field("assumeLibrarySpelledMembers",x.assumeLibrarySpelledMembers);
     field("assumeUnspelledFunctions",x.assumeUnspelledFunctions);

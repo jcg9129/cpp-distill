@@ -179,6 +179,15 @@ these, and only these; the report lists each one an output depended on, and
   `A14 unobserved-guard-macros`, consistently with A11; disable it with
   `--no-assume=unobserved-guard-macros`. Raw and flat artifacts are unchanged.
 
+- **A15 (`library-spelled-names`)** (user, 2026-11-24) The judge's standard
+  library headers and predefined macros spell no identifier that the program
+  spells, other than identifiers spelled in the worker's included library
+  headers, produced by their macro expansions, or spelled in a scanned library build.
+  `--minify` uses A15 for spelling-based identifier shortening. Disabling it with
+  `--no-assume=library-spelled-names` disables only T2; T1 still runs. The worker
+  computes the same raw-header, expanded-system-macro and scanned-build union as
+  A12 even when member pruning is disabled. An unavailable union refuses minify.
+
 **Reserved** means what C++ reserves: identifiers containing `__` anywhere,
 or beginning with `_` and a capital letter (R4-A).
 
@@ -206,9 +215,10 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | inline and resolve only |
-| `--no-assume=<name>` | disable a switchable assumption or policy while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14) are switchable; any other name is a usage error (exit 1) listing switchable names |
+| `--no-assume=<name>` | disable a switchable assumption or policy while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
+| `--minify` | opt-in spelling and whitespace shrinking after checked compaction; implies `--strip-comments --no-line-markers --compact-whitespace`; A15 controls T2 independently (§4.8) |
 | `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
 | `-v` | progress on stderr |
@@ -1708,7 +1718,7 @@ applicable, plus A12 when member pruning is enabled, but does not need A11. Repo
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
 The setting is part of serialized worker protocol version 8 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
-model and policy identity distinguish A11, A12 and D3f flag combinations.
+model and policy identity distinguish A11, A12, A15, minify and D3f flag combinations.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. For member units this additional
@@ -1911,6 +1921,32 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   bytes. A failed gate or marker-free check leaves its artifact unchanged.
   Report `whitespace compacted: ...` or `whitespace kept: <why>`. Renderer
   annotations/provenance are consumed before this final transformation.
+- **Minify** (`--minify`, opt-in): implies `--strip-comments`,
+  `--no-line-markers` and `--compact-whitespace`. Only a checked compact pruned
+  artifact that passed the position-observation gate is eligible; refusal keeps
+  the checked artifact and reports `minify: kept: <why>`.
+  T2 assigns identifiers by spelling, simultaneously across code and user macro
+  replacements, with shortest names assigned by descending token frequency
+  (alphabetical ties). Generated names use `[a-zA-Z][a-zA-Z0-9]*`, are injective,
+  and avoid every retained spelling, library spelling and keyword. Exclusions
+  include the A6 registry, `main`, reserved and preprocessing names, macro names
+  and parameters, stringizing/pasting bodies and invocation arguments (including
+  system macros and forwarding invocations), pasted identifier results, literal text and UDL suffixes,
+  attribute names/namespaces, C-linkage names, asm/attribute strings, pragma
+  names and asm goto labels. `typeid`, `__func__`, `__FUNCTION__`,
+  `__PRETTY_FUNCTION__`, `source_location` or `__builtin_FUNCTION` refuses T2
+  because names may be observable; T1 can still run.
+  T1 removes inter-token gaps only when re-lexing adjacent tokens preserves
+  their kinds and spellings. Directives retain their own logical lines; macro replacement lists, pragmas,
+  stringizing/pasting invocations, comments, physical splices and
+  literal bytes retain their spacing. Conservative separators also protect
+  literal suffixes, ellipses and the context-sensitive `<::` digraph rule.
+  Every artifact is independently re-lexed against the compact artifact under
+  the rename map, including directive membership/end boundaries, macro definition
+  adjacency and exact literal bytes. An invariant, build or sample failure keeps
+  the compact bytes. Successful T2 reports `minify: renamed=N spellings saved=B bytes`;
+  T2 refusal reports its reason and whether T1 applied. A15 is reported only when
+  identifier spellings change. Worker identity includes the minify/A15 switches.
 - `--strip-comments` (D3-1-10) is part of rendering every artifact (`raw`,
   `flat`, `pruned`) and keeps token spellings, directive boundaries and
   logical lines: a comment outside a directive becomes one space, or its
@@ -1953,7 +1989,7 @@ Clarifications from D3b (implementation, reviewed):
 
 Header: result (artifact, verification level, runtime status), the
 configuration used per artifact and the facts it satisfied, profile and its
-date, option classes, the assumptions (A1–A7, A11, A12 for member pruning, A14 for guard trimming, and A9 for L1c) the output relied on. Then one
+date, option classes, the assumptions (A1–A7, A11, A12 for member pruning, A14 for guard trimming, A15 for identifier minification, and A9 for L1c) the output relied on. Then one
 line per conditional directive (`#if`/`#elif`/`#else`/`#endif`:
 `resolved false (ONLINE_JUDGE: profile)`, `kept (unknown: __has_include)`,
 `dead region` for directives inside removed text; `#else` reports

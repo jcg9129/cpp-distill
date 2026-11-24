@@ -802,3 +802,22 @@ TEST(prune_pp_trimming_worker_identity) {
     CHECK(report.find(guard ? "pruning assumption disabled: A14" : "pruning policy disabled: idempotent-standard-headers") != std::string::npos);
   }
 }
+
+TEST(prune_minify_and_a15_worker_identity) {
+  Model b; b.add("main","int main(){}");
+  b.m.minify = true; b.m.minifyExcludedNames = {"macroParameter"};
+  b.m.minifyNamesRefused = "observable names: typeid";
+  const auto assumed = serializePruningModel(b.m).value();
+  CHECK(parsePruningModel(assumed).value().minify);
+  CHECK_EQ(parsePruningModel(assumed).value().minifyExcludedNames,b.m.minifyExcludedNames);
+  CHECK_EQ(parsePruningModel(assumed).value().minifyNamesRefused,b.m.minifyNamesRefused);
+  test::TempDirectory temp; PruneWorkerOptions o; o.temporaryRoot = temp.path; o.executable = test::helper;
+  o.runner = [&](const ProcessSpec&) -> Result<ProcessResult> {
+    ProcessResult response; response.exitCode = 0; response.stdoutText = assumed; return response;
+  };
+  b.m.assumeLibrarySpelledNames = false;
+  CHECK(!parsePruningModel(serializePruningModel(b.m).value()).value().assumeLibrarySpelledNames);
+  CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
+  b.m.assumeLibrarySpelledNames = true; b.m.minify = false;
+  CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}

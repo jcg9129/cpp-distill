@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+minify=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+no-assume=library-spelled-names
+report=minify: kept: T2: A15 library-spelled-names disabled (T1 only); T1 applied
+contains=longLocal
+report.1=pruned with minify: passed

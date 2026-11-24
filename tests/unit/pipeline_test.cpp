@@ -32,6 +32,7 @@ struct Fixture {
     return take(distillProgram(command,options,*evaluator,[&](const ProcessSpec& spec) -> Result<ProcessResult> {
       if (spec.argv.size() == 3 && spec.argv[1] == "--internal-prune") {
         auto m = take(parsePruningModel(test::read(pathFromUtf8(spec.argv[2]))));
+        if (m.minify) m.libraryMemberNamesComputed = fault != "minify-library";
         if (fault == "uint64") {
           // Model the real compiler-builtin expansion behind UINT64_C. This
           // must reach retention's predefined-macro judge-fact comparison.
@@ -75,7 +76,7 @@ struct Fixture {
       }
       for (const auto& arg : spec.argv) {
         const auto p = pathFromUtf8(arg);
-        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp" || p.filename() == "compact.cpp")
+        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp" || p.filename() == "compact.cpp" || p.filename() == "minified.cpp")
           built[pathToUtf8(p.stem())] = test::read(p);
       }
       auto result = runProcess(spec);
@@ -85,7 +86,7 @@ struct Fixture {
       if (result.ok() && spec.argv.size() == 1) {
         if (fault == "stderr") result.value().stderrText = pathToUtf8(program);
         if ((fault == "raw-stdout" && program == "raw.exe") || (fault == "flat-stdout" && program == "flat.exe") ||
-            (fault == "unmarked-stdout" && program == "unmarked.exe") || (fault == "compact-stdout" && program == "compact.exe"))
+            (fault == "unmarked-stdout" && program == "unmarked.exe") || (fault == "compact-stdout" && program == "compact.exe") || (fault == "minify-stdout" && program == "minified.exe"))
           result.value().stdoutText = "different sample output";
         if (fault == "raw-exit" && program == "raw.exe") ++result.value().exitCode;
         if (fault == "raw-timeout" && program == "raw.exe") result.value().timedOut = true;
@@ -97,6 +98,7 @@ struct Fixture {
       if (result.ok() && fault == "compact-build" && built.contains("compact") &&
           std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() && spec.argv.size() > 1)
         result.value().exitCode = 1;
+      if (result.ok() && fault == "minify-build" && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "minified.cpp"; })) result.value().exitCode = 1;
       if (fault == "stdout" && pathFromUtf8(spec.argv.front()).filename() == "pruned.exe" && result.ok())
         result.value().stdoutText = "different output";
       return result;
@@ -511,4 +513,27 @@ TEST(pipeline_pp_trimming_preserves_raw_flat_and_position_gate) {
   CHECK(opted.bytes.find("#define DISTILL_ONCE_") != opted.bytes.npos);
   CHECK_EQ(raw,f.built.at("raw")); CHECK_EQ(flat,f.built.at("flat"));
   CHECK(!opted.assumptions.contains("A14"));
+}
+
+TEST(pipeline_minify_implied_flags_report_and_checked_fallbacks) {
+  const std::string source = "// strip this comment\nint main(){int longLocal=5;return longLocal-5;}\n";
+  for (const auto& fault : {"", "minify-library", "minify-build", "minify-stdout"}) {
+    Fixture f(source); f.options.minify = true;
+    const auto r = f.run(fault);
+    CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
+    CHECK_EQ(r.lineMarkers,"omitted"); CHECK_EQ(r.compactWhitespace,"compacted");
+    CHECK(r.bytes.find("strip this comment") == r.bytes.npos);
+    if (std::string_view(fault).empty()) {
+      CHECK(r.minify.starts_with("renamed=")); CHECK(r.assumptions.contains("A15"));
+      CHECK(r.bytes.find("longLocal") == r.bytes.npos); CHECK_EQ(r.bytes,f.built.at("minified"));
+      CHECK(r.report.find("A15 library-spelled-names") != r.report.npos);
+    } else {
+      CHECK(r.minify.starts_with("kept: ")); CHECK(!r.assumptions.contains("A15"));
+      CHECK_EQ(r.bytes,f.built.at("compact"));
+    }
+  }
+  Fixture f(source); f.options.minify = true; f.options.assumeLibrarySpelledNames = false;
+  const auto r = f.run(); CHECK_EQ(r.bytes,f.built.at("minified"));
+  CHECK(r.bytes.find("longLocal") != r.bytes.npos); CHECK(!r.assumptions.contains("A15"));
+  CHECK(r.minify.find("A15 library-spelled-names disabled") != r.minify.npos);
 }

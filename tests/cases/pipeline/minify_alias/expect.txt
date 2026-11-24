@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+minify=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+requires=linux
+report=minify: renamed=
+report.1=pruned with minify: passed
+contains=longTarget
+contains.1=LongNamespace
+contains.2=LongType
+absent=longLocal

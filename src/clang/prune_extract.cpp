@@ -90,6 +90,7 @@ struct Extraction {
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberSpellings;
   std::map<std::pair<std::size_t,std::string>,FamilyId> memberGroups;
   std::set<std::string> virtualMemberNames;
+  std::set<std::string,std::less<>> minifySpellings;
   std::set<FamilyId> explicitlyInstantiatedRecords;
   std::vector<std::pair<const Decl*,FamilyId>> declarations;
   std::map<std::size_t,std::pair<bool,bool>> pasteGroups;
@@ -104,6 +105,7 @@ struct Extraction {
   explicit Extraction(PruningModel m, CompilerInstance& c) : model(std::move(m)), compiler(c), sm(c.getSourceManager()) {
     auto scan = scanDirectives(model.text);
     if (!scan.ok()) { disable("directive scan failure in flat.cpp: " + scan.error().message); return; }
+    if (model.minify) for (const auto& t : scan.value().identifiers) minifySpellings.insert(t.text);
     for (const auto& l : scan.value().lines) if (!l.directive) tokens.insert(tokens.end(),l.tokens.begin(),l.tokens.end());
     for (const auto& l : scan.value().lines) if (l.directive &&
         (l.directive->name == "if" || l.directive->name == "elif" || l.directive->name == "ifdef" || l.directive->name == "ifndef")) conditionRanges.push_back({l.begin,l.end});
@@ -525,7 +527,7 @@ class Macros final : public PPCallbacks {
   std::set<unsigned> systemMacroInvocations;
   std::set<std::string,std::less<>> expandedLibraryMemberNames;
   void libraryToken(const clang::Token& token) {
-    if (!e.model.assumeLibrarySpelledMembers || !token.is(tok::identifier) ||
+    if (!(e.model.assumeLibrarySpelledMembers || (e.model.minify && e.model.assumeLibrarySpelledNames)) || !token.is(tok::identifier) ||
         !token.getLocation().isMacroID()) return;
     // A pasted token's spelling is in scratch space, and an argument's spelling
     // can be user text. Follow BOTH spelling and expansion ancestry. Recording
@@ -619,6 +621,18 @@ public:
     libraryToken(token); // Full unpruned TU, before filtering to user expansions.
     if (!e.user(token.getLocation())) return;
     attributeToken(token);
+    if (e.model.minify && !token.isAnnotation()) {
+      const auto spelling = e.compiler.getPreprocessor().getSpelling(token);
+      if (tok::getKeywordSpelling(token.getKind())) e.model.minifyExcludedNames.insert(spelling);
+      // A pasted identifier has no matching identifier token to rewrite in the
+      // invocation. Its declarations/references elsewhere must keep that name.
+      if (token.is(tok::identifier) && e.sm.isWrittenInScratchSpace(e.sm.getSpellingLoc(token.getLocation())))
+        e.model.minifyExcludedNames.insert(spelling);
+      static const std::set<std::string,std::less<>> observable = {
+        "typeid", "__func__", "__FUNCTION__", "__PRETTY_FUNCTION__", "source_location", "__builtin_FUNCTION"
+      };
+      if (observable.contains(spelling)) e.model.minifyNamesRefused = "observable names: " + spelling;
+    }
     // Keywords carry identifier info too; annotation and literal tokens don't.
     if (!token.isAnnotation() && !token.isLiteral()) {
       const auto* info = token.getIdentifierInfo();
@@ -639,7 +653,7 @@ public:
   }
   void FileChanged(clang::SourceLocation loc, FileChangeReason reason,
                    SrcMgr::CharacteristicKind kind, FileID = FileID()) override {
-    if (!e.model.assumeLibrarySpelledMembers || kind == SrcMgr::C_User ||
+    if (!(e.model.assumeLibrarySpelledMembers || (e.model.minify && e.model.assumeLibrarySpelledNames)) || kind == SrcMgr::C_User ||
         (reason != EnterFile && reason != SystemHeaderPragma)) return;
     const auto file = e.sm.getFileID(loc);
     if (file.isInvalid()) {
@@ -652,7 +666,7 @@ public:
   // Raw lexing includes inactive branches and macro replacement lists. Keep this
   // inventory together with the union of all scanned library builds.
   void collectLibraryMemberNames() {
-    if (!e.model.assumeLibrarySpelledMembers) return;
+    if (!(e.model.assumeLibrarySpelledMembers || (e.model.minify && e.model.assumeLibrarySpelledNames))) return;
     e.model.libraryMemberNames = expandedLibraryMemberNames;
     for (auto name : embeddedLibraryData().memberNames) e.model.libraryMemberNames.emplace(name);
     for (const auto& [key,file] : headerFiles) {
@@ -679,14 +693,33 @@ public:
     }
     e.model.libraryMemberNamesComputed = e.model.memberDisabledReasons.empty();
   }
+  void minifyMacro(const clang::Token& name, const MacroInfo* mi) {
+    if (!e.model.minify || !mi) return;
+    e.model.minifyExcludedNames.insert(name.getIdentifierInfo()->getName().str());
+    for (const auto* p : mi->params()) e.model.minifyExcludedNames.insert(p->getName().str());
+    const bool hash = std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); });
+    if (hash) for (const auto& t : mi->tokens()) if (const auto* info = t.getIdentifierInfo())
+      e.model.minifyExcludedNames.insert(info->getName().str());
+  }
   void MacroDefined(const clang::Token& name, const MacroDirective* md) override {
+    minifyMacro(name,md->getMacroInfo());
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = fact(md->getMacroInfo());
   }
   void MacroUndefined(const clang::Token& name, const MacroDefinition&, const MacroDirective*) override {
     if (e.user(name.getLocation())) sourceBindings[name.getIdentifierInfo()->getName().str()] = {MacroState::undefined,{}, {}};
   }
-  void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs*) override {
-    if (e.model.assumeLibrarySpelledMembers) {
+  void MacroExpands(const clang::Token& token, const MacroDefinition& definition, SourceRange range, const MacroArgs* args) override {
+    minifyMacro(token,definition.getMacroInfo());
+    if (e.model.minify && args) if (const auto* mi = definition.getMacroInfo()) {
+      const bool hash = std::any_of(mi->tokens_begin(),mi->tokens_end(),[](const auto& t) { return t.isOneOf(tok::hash,tok::hashat,tok::hashhash); });
+      if (hash) for (unsigned i = 0; i < args->getNumMacroArguments(); ++i) {
+        const auto* argument = args->getUnexpArgument(i);
+        const auto count = MacroArgs::getArgLength(argument);
+        for (unsigned j = 0; j < count; ++j)
+          if (const auto* info = argument[j].getIdentifierInfo()) e.model.minifyExcludedNames.insert(info->getName().str());
+      }
+    }
+    if (e.model.assumeLibrarySpelledMembers || (e.model.minify && e.model.assumeLibrarySpelledNames)) {
       if (const auto* mi = definition.getMacroInfo()) {
         const auto def = e.sm.getSpellingLoc(mi->getDefinitionLoc());
         if (def.isValid() && !e.sm.isWrittenInBuiltinFile(def) &&
@@ -815,6 +848,11 @@ class Dependencies final : public RecursiveASTVisitor<Dependencies> {
     if (found == symbols.end()) {
       e.disable("unresolved " + std::string(form) + " symbol: " + std::string(symbol)); return false;
     }
+    // Linker strings can contain mangled namespace/type/function names as
+    // components of one identifier. Preserve every source spelling embedded
+    // in the resolved symbol, including parameter types hidden behind aliases.
+    if (e.model.minify) for (const auto& spelling : e.minifySpellings)
+      if (symbol.find(spelling) != symbol.npos) e.model.minifyExcludedNames.insert(spelling);
     for (auto id : found->second) {
       e.model.families[id].root = std::string(form) + " symbol reference";
       if (templatedSymbols.contains(id)) e.model.families[id].instantiationEffect = "template symbol reference";
@@ -1157,6 +1195,8 @@ public:
   bool VisitStmt(Stmt* s) {
     if (current == noFamily || !e.user(s->getBeginLoc())) return true;
     if (const auto* a = dyn_cast<GCCAsmStmt>(s)) {
+      if (e.model.minify) for (unsigned i = 0; i < a->getNumLabels(); ++i)
+        e.model.minifyExcludedNames.insert(a->getLabelExpr(i)->getLabel()->getNameAsString());
       assembly(a->getAsmString(),s->getBeginLoc());
       // Operand expressions are traversed normally; keeping the enclosing
       // family makes their referenced declarations roots through AST closure.
@@ -1430,6 +1470,16 @@ public:
     return true;
   }
   bool VisitValueDecl(ValueDecl* d) {
+    if (e.model.minify && e.user(d->getLocation())) {
+      bool c = false;
+      if (const auto* f = dyn_cast<FunctionDecl>(d)) {
+        c = f->isExternC();
+        if (f->getDeclName().getNameKind() == DeclarationName::CXXLiteralOperatorName)
+          e.model.minifyExcludedNames.insert(f->getDeclName().getCXXLiteralIdentifier()->getName().str());
+      }
+      if (const auto* v = dyn_cast<VarDecl>(d)) c = v->isExternC();
+      if (c && d->getIdentifier()) e.model.minifyExcludedNames.insert(d->getNameAsString());
+    }
     if (e.user(d->getLocation()) && positionType(d->getType())) e.position(d->getLocation(),"declaration of type " + d->getType().getAsString());
     return true;
   }
@@ -1590,6 +1640,14 @@ Result<PruningModel> extractPruningInWorker(PruningModel model) {
   for (auto& fact : extraction.model.expansions) {
     auto i = std::upper_bound(merged.begin(),merged.end(),fact.offset,[](std::size_t o, auto r) { return o < r.begin; });
     fact.hashOperator = extraction.hashOffsets.contains(fact.offset) || (i != merged.begin() && fact.offset < std::prev(i)->end);
+  }
+  if (extraction.model.minify) {
+    const auto scan = scanDirectives(extraction.model.text);
+    if (!scan.ok()) extraction.model.minifyNamesRefused = "macro argument scan failed";
+    else for (const auto& t : scan.value().identifiers) {
+      const auto i = std::upper_bound(merged.begin(),merged.end(),t.begin,[](auto at,auto r) { return at < r.begin; });
+      if (i != merged.begin() && t.begin < std::prev(i)->end) extraction.model.minifyExcludedNames.insert(t.text);
+    }
   }
   auto valid = validatePruningModel(extraction.model); if (!valid.ok()) return valid.error();
   return std::move(extraction.model);

@@ -10,6 +10,7 @@ inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
 inline constexpr std::string_view pruningPolicyVersion = "D3e";
 inline std::string_view assumptionLabel(std::string_view id) {
   if (id == "A11") return "A11 instantiation-effects";
+  if (id == "A15") return "A15 library-spelled-names";
   if (id == "A12") return "A12 library-spelled-members";
   if (id == "A14") return "A14 unobserved-guard-macros";
   if (id == "D3f") return "D3f unspelled-functions";
@@ -84,6 +85,11 @@ struct PositionUse {
 struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
 struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
+  bool assumeLibrarySpelledNames = true;
+  bool minify = false;
+  // Worker-collected spelling exclusions, including system macro parameters.
+  std::set<std::string, std::less<>> minifyExcludedNames;
+  std::string minifyNamesRefused;
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
   bool assumeUnspelledFunctions = true;

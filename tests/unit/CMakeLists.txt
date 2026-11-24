@@ -4,7 +4,7 @@ target_link_libraries(distill_test_helper PRIVATE distill_core)
 if(WIN32)
   target_compile_definitions(distill_test_helper PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
-add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp judge_probe_test.cpp resolve_test.cpp validate_test.cpp option_model_test.cpp prune_test.cpp render_test.cpp pipeline_test.cpp)
+add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp judge_probe_test.cpp resolve_test.cpp validate_test.cpp option_model_test.cpp prune_test.cpp render_test.cpp minify_test.cpp pipeline_test.cpp)
 target_link_libraries(distill_unit_tests PRIVATE distill_core distill_test_evaluate)
 target_compile_definitions(distill_unit_tests PRIVATE
   DISTILL_EXPECTED_VERSION="${DISTILL_VERSION}"

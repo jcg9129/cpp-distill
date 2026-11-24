@@ -104,10 +104,11 @@ must include the target's C/C++ standard headers and libraries.
 | `--record <dir>` | With `--judge-check`, save dated observation evidence. |
 | `--report <file>` | Write validation, configuration, conditional and pruning explanations. |
 | `--no-prune` | Inline and resolve only. |
-| `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), or `unobserved-guard-macros` (A14); repeatable, comma lists accepted. |
+| `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), or `unobserved-guard-macros` (A14); repeatable, comma lists accepted. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
 | `--no-line-markers` | Omit generated `#line` markers from a `pruned` result when the analysis proves no user code observes source positions (`__LINE__`, `__FILE__`, `__builtin_LINE`, `assert` without `NDEBUG`, call-site default arguments, …); otherwise they stay and the report says `line markers kept: <why>`. |
+| `--minify` | Opt-in spelling and whitespace shrinking of a checked pruned artifact; implies `--strip-comments --no-line-markers --compact-whitespace`. Uses A15 `library-spelled-names` for consistent identifier shortening; `--no-assume=library-spelled-names` runs whitespace shrinking only. Observable names disable shortening; position observations or failed checks keep the checked artifact, with the reason in the report. |
 | `--compact-whitespace` | Opt-in trimming of leading horizontal whitespace, trailing whitespace and empty lines; implies `--no-line-markers` and requires its proof that source positions (including columns) are unobserved. Preserves literal/comment contents and spliced logical lines. If refused, output stays unchanged and the report says `whitespace kept: <why>`. |
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
