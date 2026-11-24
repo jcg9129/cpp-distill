@@ -47,6 +47,14 @@ bool unspelledFunctionEligible(const FunctionDecl* f) {
       f->isMain() || f->getLanguageLinkage() == CLanguageLinkage ||
       f->getTemplateSpecializationKind() != TSK_Undeclared ||
       f->getBeginLoc().isMacroID() || f->getLocation().isMacroID() || f->getEndLoc().isMacroID()) return false;
+  // Internal-linkage names have NoLanguageLinkage, but a static function in
+  // a C linkage specification still has C function type. The innermost
+  // specification governs, including an extern "C++" nested in extern "C".
+  for (auto* context = f->getLexicalDeclContext(); context; context = context->getParent())
+    if (const auto* linkage = dyn_cast<LinkageSpecDecl>(context)) {
+      if (linkage->getLanguage() == LinkageSpecLanguageIDs::C) return false;
+      break;
+    }
   for (const auto* attr : f->attrs())
     if (isa<AliasAttr,IFuncAttr,WeakAttr,WeakRefAttr,UsedAttr,SectionAttr,
             ConstructorAttr,DestructorAttr,VisibilityAttr,AsmLabelAttr>(attr)) return false;
@@ -355,6 +363,14 @@ struct Extraction {
           }
       }
     }
+    // Inspect the complete written declaration before member extraction or
+    // shared-syntax normalization partitions its byte ownership. Boundary
+    // pinning alone misses expansions wholly inside a declarator or body.
+    if (f.unspelledFunctionEligible)
+      for (auto invocation : macroInvocations)
+        if (invocation.begin < r->end && r->begin < invocation.end) {
+          f.unspelledFunctionEligible = false; break;
+        }
     f.ranges.push_back(*r);
     const auto physical = sm.getLineNumber(sm.getMainFileID(),r->begin);
     if (physical && physical <= model.lineMap.size()) f.original = model.lineMap[physical-1];
@@ -1172,8 +1188,16 @@ public:
       // and veto eligibility. Lambda call operators are expression-owned, not
       // namespace-function redeclarations. Implicit instances add no spelling.
       if (!f->isImplicit() && e.user(f->getBeginLoc()) &&
-          f->getTemplateSpecializationKind() != TSK_ImplicitInstantiation)
-        family.unspelledFunctionEligible &= unspelledFunctionEligible(f);
+          f->getTemplateSpecializationKind() != TSK_ImplicitInstantiation) {
+        const bool eligible = unspelledFunctionEligible(f);
+        family.unspelledFunctionEligible &= eligible;
+        // A block extern's physical spelling belongs to the enclosing
+        // function, while its canonical declaration belongs to the namespace
+        // function. Intersect that certificate too, independently of the
+        // shared-syntax union that already preserves retention.
+        if (const auto it = e.owners.find(f->getCanonicalDecl()); it != e.owners.end())
+          e.model.families[it->second].unspelledFunctionEligible &= eligible;
+      }
       bool carrier = false;
       for (const auto* p : f->parameters()) carrier |= ownRecordParameter(p->getType());
       if (callableCarriersSeen.insert(current).second) family.boundedSystemHooks = carrier;

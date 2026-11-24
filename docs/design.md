@@ -1492,10 +1492,12 @@ eligible non-member function family merely because its signature or template
 arguments name a kept user record or enum. Every declaration in the aggregated
 family must be a user namespace-scope function or function template. Hidden
 friends, members, local declarations, operators (including conversions and
-literal operators), deduction guides, `main`, C linkage, explicit/partial
+literal operators), deduction guides, `main`, C linkage (including `static`
+functions declared inside an innermost `extern "C"`), explicit/partial
 specializations and explicit instantiations are excluded. So are A6 ADL-listed
-names, macro-produced declarations, and declarations with special root/refusal
-attributes (`alias`, `ifunc`, `weak`, `weakref`, `used`, `section`, `constructor`,
+names, macro-produced declarations (including expansions inside the declarator
+or body, even when existing boundary pinning does not apply), and declarations
+with special root/refusal attributes (`alias`, `ifunc`, `weak`, `weakref`, `used`, `section`, `constructor`,
 `destructor`, `visibility`, asm labels). One excluded declaration excludes its
 whole overload/redeclaration/template/shared-syntax family. Shared declarations
 that introduce a record or enum remain aggregated with that type, preserving
@@ -1520,9 +1522,12 @@ D3f adds no exception to the effect rules.
 `--no-assume=unspelled-functions` restores the previous rule 3 without changing
 other policies. Enabled analyses report `D3f unspelled-functions` among their
 assumptions, even without deletions, and `rule3-unkept: declarations=N bytes=B`.
-These counts cover removed eligible declaration families (overload and
-redeclaration rows counted individually) retained by the old rule-3 fixpoint;
-bytes are their disjoint owned source ranges, excluding surrounding trivia.
+These counts cover source declarations in removed eligible function families
+that the legacy rule-3 fixpoint would have kept. Each written redeclaration
+counts separately, including multiple source declarations owned by one family.
+They do not include those families' transitive non-eligible dependencies (for
+example, a variable used only by a removed function). Bytes are the eligible
+declarations' disjoint owned source ranges, excluding surrounding trivia.
 
 **Keep rules**, to a fixpoint:
 

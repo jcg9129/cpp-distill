@@ -65,7 +65,7 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-8 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-9 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
@@ -436,7 +436,7 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   b.m.judgeInitial["__GNUC__"] = known("15"); b.m.expansions.push_back({0,"X",true,false,true,known("1"),known("2"),false,false,true});
   auto encoded = serializePruningModel(b.m); CHECK(encoded.ok()); auto decoded = parsePruningModel(encoded.value()); CHECK(decoded.ok());
   CHECK_EQ(serializePruningModel(decoded.value()).value(),encoded.value());
-  auto previous = encoded.value(); previous.replace(0,15,"DISTILL-PRUNE-6");
+  auto previous = encoded.value(); previous.replace(0,15,"DISTILL-PRUNE-8");
   auto rejected = parsePruningModel(previous); CHECK(!rejected.ok());
   CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
@@ -447,12 +447,12 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-8 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-9 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-8 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-9 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-8 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-9 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());
@@ -723,11 +723,52 @@ TEST(prune_unspelled_functions_counterfactual_and_family_veto) {
   CHECK(!old.families[unrelated].kept); CHECK(!old.assumptions.contains("D3f"));
   CHECK_EQ(old.rule3UnkeptDeclarations,0u);
 }
+TEST(prune_unspelled_functions_counts_source_declarations_not_dependencies) {
+  Model b;
+  const auto record = b.add("Key","struct Key {};",FamilyKind::record);
+  const auto payload = b.add("payload","int payload = 7;",FamilyKind::variable);
+  const auto helper = b.add("helper","Key helper();\nKey helper(){(void)payload; return {};}");
+  auto& f = b.m.families[helper];
+  f.unspelledFunctionEligible = true; f.associatedTypes = {record};
+  // A model can aggregate redeclarations into one family. Each complete
+  // spelling is counted even though the retention obligation is shared.
+  const auto range = f.ranges.front();
+  const auto split = b.m.text.find('\n',range.begin) + 1;
+  f.ranges = {{range.begin,split},{split,range.end}};
+  f.sourceDeclarationCount = 2;
+  b.add("main","int main(){Key k;}");
+  const auto r = b.run();
+  CHECK(!r.families[helper].kept); CHECK(!r.families[payload].kept);
+  CHECK_EQ(r.rule3UnkeptDeclarations,2u);
+  CHECK_EQ(r.rule3UnkeptBytes,range.end-range.begin);
+  b.m.assumeUnspelledFunctions = false;
+  const auto old = b.run();
+  CHECK(old.families[helper].kept); CHECK(old.families[payload].kept);
+}
+TEST(prune_unspelled_functions_does_not_count_range_fragments) {
+  Model b;
+  const auto record = b.add("Key","struct Key {};",FamilyKind::record);
+  const auto helper = b.add("helper","Key helper(){return {};}");
+  auto& f = b.m.families[helper];
+  f.unspelledFunctionEligible = true; f.associatedTypes = {record};
+  const auto range = f.ranges.front();
+  const auto split = b.m.text.find('{',range.begin);
+  f.ranges = {{range.begin,split},{split,range.end}};
+  b.add("main","int main(){Key k;}");
+  const auto r = b.run();
+  CHECK_EQ(r.rule3UnkeptDeclarations,1u);
+  CHECK_EQ(r.rule3UnkeptBytes,range.end-range.begin);
+}
 TEST(prune_unspelled_functions_worker_identity) {
   Model b; const auto f = b.add("main","int main(){}");
   b.m.families[f].unspelledFunctionEligible = true;
+  b.m.families[f].sourceDeclarationCount = 2;
   const auto assumed = serializePruningModel(b.m).value();
   CHECK(parsePruningModel(assumed).value().families[f].unspelledFunctionEligible);
+  CHECK_EQ(parsePruningModel(assumed).value().families[f].sourceDeclarationCount,2u);
+  b.m.families[f].sourceDeclarationCount = 1000001;
+  CHECK(!serializePruningModel(b.m).ok());
+  b.m.families[f].sourceDeclarationCount = 2;
   b.m.assumeUnspelledFunctions = false;
   const auto optedOut = serializePruningModel(b.m).value();
   CHECK(assumed != optedOut); CHECK(!parsePruningModel(optedOut).value().assumeUnspelledFunctions);

@@ -180,6 +180,8 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
     const auto& f = m.families[i];
     const auto field = "model.families[" + std::to_string(i) + "]";
     if (static_cast<unsigned>(f.kind) > static_cast<unsigned>(FamilyKind::instantiation)) return invalid("invalid family kind",field+".kind");
+    if (f.sourceDeclarationCount > 1000000)
+      return invalid("source declaration count limit",field+".sourceDeclarationCount");
     if (f.memberOf != noFamily && (f.memberOf >= n || f.memberOf == i || f.memberName.empty()))
       return invalid("invalid member owner",field+".memberOf");
     for (std::size_t j = 0; j < f.ranges.size(); ++j) {
@@ -522,7 +524,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     closure(true);
     for (FamilyId i = 0; i < n; ++i)
       if (!actual[i].kept && out.families[i].kept && unspelledEligible[find(i)]) {
-        ++out.rule3UnkeptDeclarations;
+        out.rule3UnkeptDeclarations += m.families[i].sourceDeclarationCount;
         for (auto range : m.families[i].ranges) out.rule3UnkeptBytes += range.end-range.begin;
       }
     out.families = std::move(actual);

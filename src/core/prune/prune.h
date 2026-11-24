@@ -28,6 +28,9 @@ struct PruneFamily {
   // preserving any nonmember names discovered in its text.
   std::set<std::string, std::less<>> names, callableNames, dependentNames;
   std::vector<EditRange> ranges;
+  // Written declarations represented by this row, independent of byte-range
+  // partitioning (e.g. carving member spellings out of an enclosing function).
+  std::size_t sourceDeclarationCount = 1;
   std::vector<FamilyId> edges, associatedTypes;
   std::optional<SourceLocation> original;
   std::string pinned, neverRemoved, root;
