@@ -1,9 +1,14 @@
-From d184aee6e0d1a98fad6af61f6b8a55a6580c9a50 Mon Sep 17 00:00:00 2001
-From: "atl splits (scratch)" <noreply@example.invalid>
-Date: Tue, 24 Nov 2026 17:17:10 +0000
-Subject: [PATCH] Header splits for smaller distilled outputs (S B W M H G L T)
+From 4453689871b049717e95e79d5dab3aaab92d28d8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jos=C3=A9=20Carlos?=
+ <2489735+jcg9129@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 20:25:27 +0000
+Subject: [PATCH 1/2] Header splits so distilled single-file solutions include
+ less (draft)
 
-Prototype from cpp-distill's large-example analysis; scratch copy, not upstream.
+Splits S, B, W, M, H, G, L and T from cpp-distill's large-example analysis:
+narrow headers for code that most programs never use, with the existing
+headers kept as umbrellas so the public API is unchanged. See the PR
+description for reasons, measurements and the known regression in S.
 ---
  cmake/Documentation.cmake                     |    1 +
  docs/convolution.md                           |    4 +
@@ -16013,6 +16018,391 @@ index 0000000..dab3792
 +	identity[1] = C(1);
 +	REQUIRE(composed == identity);
 +	REQUIRE(atl::series_composition(f, g, n) == identity);
++}
+-- 
+2.53.0
+
+
+From 03ae7984a57f8920e44e14fe2dabef4739a9d1f9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jos=C3=A9=20Carlos?=
+ <2489735+jcg9129@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 22:04:12 +0000
+Subject: [PATCH 2/2] Keep mod_int stream operators as hidden friends; move
+ only the wide I/O helpers
+
+Split S made operator<< and operator>> free templates in mod_int_io.hpp, which
+stops cpp-distill from pruning programs that stream a mod_int. The operators are
+hidden friends again and dispatch through I/O traits: native-width output stays
+in mod_int_core.hpp; extraction and uint128 formatting are provided by
+mod_int_io.hpp, which mod_int.hpp still includes.
+---
+ docs/modular-arithmetic.md            | 17 +++++--
+ include/atl/nt/mod_int_core.hpp       | 54 +++++++++++++++++++++-
+ include/atl/nt/mod_int_io.hpp         | 65 +++++++++++----------------
+ scripts/check-header-splits.py        |  9 +++-
+ tests/nt/dynamic_mod_int.cpp          | 22 +++++++++
+ tests/nt/mod_int.cpp                  | 22 +++++++++
+ tests/nt/mod_int_io_include_order.cpp | 32 +++++++++++++
+ tests/nt/narrow_headers.cpp           | 10 +++++
+ 8 files changed, 187 insertions(+), 44 deletions(-)
+ create mode 100644 tests/nt/mod_int_io_include_order.cpp
+
+diff --git a/docs/modular-arithmetic.md b/docs/modular-arithmetic.md
+index 34e0f3f..2ae165f 100644
+--- a/docs/modular-arithmetic.md
++++ b/docs/modular-arithmetic.md
+@@ -16,9 +16,20 @@ supports 128-bit moduli; native and software `atl::uint128` share the same API.
+ 
+ \include modular-arithmetic/residues.cpp
+ 
+-For arithmetic without stream I/O, include `<atl/nt/mod_int_core.hpp>`.
+-`<atl/nt/mod_int_io.hpp>` adds the same insertion and extraction operators;
+-`<atl/nt/mod_int.hpp>` includes both and remains the general entry point.
++For arithmetic and native-width stream insertion, include
++`<atl/nt/mod_int_core.hpp>`. Include `<atl/nt/mod_int_io.hpp>` before extracting
++any static modular integer or inserting a `mod_int` with `atl::uint128` storage.
++Using either operation without the I/O header gives a compile-time diagnostic
++naming the missing header. `<atl/nt/mod_int.hpp>` includes both and remains the
++general entry point. `dynamic_mod_int.hpp` continues to provide its full I/O.
++
++Both static stream operators are hidden friends of `mod_int`. They call internal
++class-template hooks: the core supplies native-width insertion, and the I/O
++header specializes checked extraction and uint128 insertion. The parser and
++wide formatter are absent from the arithmetic include graph. Native insertion
++uses the same definition with either header, including across translation units.
++The I/O header can follow arithmetic instantiation of a `mod_int`, but must
++precede the first stream operation that requires it.
+ 
+ ## Modular values
+ 
+diff --git a/include/atl/nt/mod_int_core.hpp b/include/atl/nt/mod_int_core.hpp
+index 83950a8..663f745 100644
+--- a/include/atl/nt/mod_int_core.hpp
++++ b/include/atl/nt/mod_int_core.hpp
+@@ -1,7 +1,7 @@
+ #pragma once
+ 
+ /** @file
+- * @brief Static modular arithmetic without stream I/O; mod_int.hpp includes the stream extension.
++ * @brief Static modular arithmetic with native-width stream insertion; mod_int.hpp includes full I/O.
+  */
+ 
+ #include <atl/nt/modular.hpp>
+@@ -12,6 +12,32 @@
+ #include <atl/types/traits/integral.hpp>
+ #include <atl/utils/assert.hpp>
+ #include <concepts>
++#include <istream>
++#include <ostream>
++
++namespace atl::detail {
++	// Stream operators stay hidden friends so ADL finds only the matching residue type.
++	// Separate hooks keep native insertion available without the checked parser or wide
++	// formatter. The I/O header specializes input for unsigned words and output for
++	// uint128. Lookup is deferred until a friend is used, so including that header
++	// after instantiating a residue for arithmetic is supported.
++	template<typename T>
++	struct mod_int_stream_output {
++		static std::ostream &write(std::ostream &os, T value) {
++			static_assert(!std::same_as<T, uint128>, "include <atl/nt/mod_int_io.hpp> to stream uint128 modular integers");
++			if constexpr (!std::same_as<T, uint128>) return os << value;
++		}
++	};
++
++	template<typename T>
++	struct mod_int_stream_input {
++		template<typename Mint>
++		static std::istream &read(std::istream &is, Mint &mi) {
++			static_assert(sizeof(Mint) == 0, "include <atl/nt/mod_int_io.hpp> to extract modular integers");
++			return is;
++		}
++	};
++}
+ 
+ namespace atl {
+ 	/**
+@@ -20,6 +46,7 @@ namespace atl {
+ 	 * @complexity O(1) storage; O(1) arithmetic through 64 bits, O(log Mod)
+ 	 * multiplication at 128 bits. Inverse/division use O(log Mod) Euclidean steps,
+ 	 * and power uses O(log exp) modular multiplications.
++	 * @note Stream extraction leaves the destination unchanged on malformed or overflowing input.
+ 	 * @tparam T Unsigned integral residue type, including uint128.
+ 	 * @tparam Mod The modulus of the modular integer (positive).
+ 	 */
+@@ -136,6 +163,31 @@ namespace atl {
+ 			return lhs /= rhs;
+ 		}
+ 
++		/**
++		 * @brief Write the plain representative with integer formatting, including 128-bit residues.
++		 * @pre T is uint128 or its insertion returns an ostream reference.
++		 * @return os, with badbit if writing uint128 fails.
++		 * @note Honors base, showbase, uppercase, locale grouping, width, fill and adjustment; resets width.
++		 * @note Not constexpr (uses stream I/O).
++		 */
++		friend std::ostream &operator<<(std::ostream &os, mod_int const &mi)
++			requires(std::same_as<T, atl::uint128> || requires(std::ostream &s, T r) { { s << r } -> std::convertible_to<std::ostream &>; })
++		{
++			return detail::mod_int_stream_output<T>::write(os, mi.value());
++		}
++
++		/**
++		 * @brief Read an optional sign and a decimal, octal or hexadecimal magnitude, then reduce it.
++		 * @pre The magnitude fits uint128 for 128-bit residues, otherwise uint64 for successful extraction.
++		 * @return is, with failbit on malformed or overflowing input; mi is unchanged on failure.
++		 * @note Honors skipws; a sign must immediately precede the magnitude. Input grouping is unsupported.
++		 *        Valid digits ending at EOF succeed with eofbit only. An unset basefield means decimal.
++		 * @note Not constexpr (uses stream I/O).
++		 */
++		friend std::istream &operator>>(std::istream &is, mod_int &mi) {
++			return detail::mod_int_stream_input<T>::read(is, mi);
++		}
++
+ 		/** @brief Return this residue unchanged. */
+ 		constexpr mod_int operator+() const {
+ 			return *this;
+diff --git a/include/atl/nt/mod_int_io.hpp b/include/atl/nt/mod_int_io.hpp
+index bfa0142..e4cef89 100644
+--- a/include/atl/nt/mod_int_io.hpp
++++ b/include/atl/nt/mod_int_io.hpp
+@@ -1,56 +1,43 @@
+ #pragma once
+ 
+ /** @file
+- * @brief Stream insertion and extraction for static modular integers, including 128-bit residues.
++ * @brief Checked stream extraction and 128-bit insertion for static modular integers.
++ *
++ * The operators are hidden friends in mod_int_core.hpp. These implementation
++ * specializations supply checked input and wide formatting without exposing their
++ * helpers through the arithmetic include graph. Native-width output uses the
++ * core implementation in every translation unit, including when this header is present.
++ * Include this header before extracting any mod_int or inserting a uint128 residue.
+  */
+ 
+ #include <atl/nt/detail/uint128_stream.hpp>
+ #include <atl/nt/mod_int_core.hpp>
+ #include <atl/types/alias.hpp>
+ #include <atl/types/concepts.hpp>
+-#include <concepts>
+ #include <ios>
+ #include <istream>
+ #include <ostream>
+ #include <type_traits>
+ 
+-namespace atl {
+-	/**
+-	 * @brief Write the plain representative with integer formatting, including 128-bit residues.
+-	 * @pre T is uint128 or its insertion returns an ostream reference.
+-	 * @return os, with badbit if writing uint128 fails.
+-	 * @note Honors base, showbase, uppercase, locale grouping, width, fill and adjustment; resets width.
+-	 * @note Not constexpr (uses stream I/O).
+-	 */
+-	template<unsigned_integral T, T Mod>
+-		requires(Mod > 0)
+-	std::ostream &operator<<(std::ostream &os, mod_int<T, Mod> const &mi)
+-		requires(std::same_as<T, atl::uint128> || requires(std::ostream &s, T r) { { s << r } -> std::convertible_to<std::ostream &>; })
+-	{
+-		if constexpr (std::same_as<T, atl::uint128>)
+-			return detail::write_uint128(os, mi.value());
+-		else
+-			return os << mi.value();
+-	}
+-
+-	/**
+-	 * @brief Read an optional sign and a decimal, octal or hexadecimal magnitude, then reduce it.
+-	 * @pre The magnitude fits uint128 for 128-bit residues, otherwise uint64 for successful extraction.
+-	 * @return is, with failbit on malformed or overflowing input; mi is unchanged on failure.
+-	 * @note Honors skipws; a sign must immediately precede the magnitude. Input grouping is unsupported.
+-	 *        Valid digits ending at EOF succeed with eofbit only. An unset basefield means decimal.
+-	 * @note Not constexpr (uses stream I/O).
+-	 */
+-	template<unsigned_integral T, T Mod>
+-		requires(Mod > 0)
+-	std::istream &operator>>(std::istream &is, mod_int<T, Mod> &mi) {
+-		auto const parsed = detail::read_stream_magnitude<std::conditional_t<(sizeof(T) > sizeof(uint64)), uint128, uint64>>(is);
+-		if ((parsed.state & (std::ios_base::failbit | std::ios_base::badbit)) == 0) {
+-			mod_int<T, Mod> const reduced(parsed.value);
+-			mi = parsed.is_negative ? -reduced : reduced;
++namespace atl::detail {
++	template<>
++	struct mod_int_stream_output<uint128> {
++		static std::ostream &write(std::ostream &os, uint128 value) {
++			return write_uint128(os, value);
+ 		}
+-		is.setstate(parsed.state);
+-		return is;
+-	}
++	};
+ 
++	template<unsigned_integral T>
++	struct mod_int_stream_input<T> {
++		template<typename Mint>
++		static std::istream &read(std::istream &is, Mint &mi) {
++			auto const parsed = read_stream_magnitude<std::conditional_t<(sizeof(T) > sizeof(uint64)), uint128, uint64>>(is);
++			if ((parsed.state & (std::ios_base::failbit | std::ios_base::badbit)) == 0) {
++				Mint const reduced(parsed.value);
++				mi = parsed.is_negative ? -reduced : reduced;
++			}
++			is.setstate(parsed.state);
++			return is;
++		}
++	};
+ }
+diff --git a/scripts/check-header-splits.py b/scripts/check-header-splits.py
+index de2c45e..1d4cc12 100644
+--- a/scripts/check-header-splits.py
++++ b/scripts/check-header-splits.py
+@@ -39,6 +39,13 @@ def check(root, forbidden_headers=(), forbidden_names=(), required_names=()):
+ 
+ 
+ def main():
++    core = COMMENTS.sub("", (ROOT / "include/atl/nt/mod_int_core.hpp").read_text())
++    io = COMMENTS.sub("", (ROOT / "include/atl/nt/mod_int_io.hpp").read_text())
++    for operator in ("<<", ">>"):
++        assert re.search(r"friend\s+std::\w+\s*&operator" + re.escape(operator), core), (
++            f"mod_int lost its hidden friend operator{operator}")
++        assert not re.search(r"\boperator\s*" + re.escape(operator), io), (
++            f"mod_int_io.hpp declares a namespace-scope operator{operator}")
+     arithmetic_headers = (
+         "atl/nt/mod_int_io.hpp", "atl/nt/detail/uint128_stream.hpp",
+         "atl/nt/sieve.hpp", "atl/ds/static_vector.hpp",
+@@ -46,7 +53,7 @@ def main():
+         "atl/nt/series_composition_brent_kung.hpp",
+     )
+     arithmetic_names = (
+-        "write_uint128", "read_stream_magnitude", "convolution_uint64",
++        "write_uint128", "read_stream_magnitude", "stream_magnitude", "convolution_uint64",
+         "composition_brent_kung", "composition_block_size",
+     )
+     for folder, files in {
+diff --git a/tests/nt/dynamic_mod_int.cpp b/tests/nt/dynamic_mod_int.cpp
+index 17a4104..2a41cdf 100644
+--- a/tests/nt/dynamic_mod_int.cpp
++++ b/tests/nt/dynamic_mod_int.cpp
+@@ -223,6 +223,28 @@ TEST_CASE("dynamic_mod_int covers modulus boundaries and wide source values", "[
+ TEST_CASE("dynamic_mod_int extraction shares a checked contract at both widths", "[dynamic_mod_int][streams]") {
+ 	auto check = []<typename Mint>() {
+ 		Mint::set_mod(1000000007);
++		// Arbitrarily long digit runs must be consumed even after overflow. Leading
++		// zeroes are valid and must not turn the parser into a bounded token reader.
++		for (auto sign : {"", "+", "-"}) {
++			for (bool overflow : {false, true}) {
++				for (auto ending : {"", "!"}) {
++					std::string const digits = overflow ? std::string(10000, '9') : std::string(10000, '0') + "5";
++					std::istringstream input(std::string(sign) + digits + ending);
++					Mint value(3);
++					auto const flags = input.flags();
++					input >> value;
++					REQUIRE(input.fail() == overflow);
++					REQUIRE(input.eof() == (ending[0] == '\0'));
++					REQUIRE(input.flags() == flags);
++					REQUIRE(value == (overflow ? Mint(3) : sign[0] == '-' ? -Mint(5)
++																		  : Mint(5)));
++					if (ending[0] != '\0') {
++						input.clear();
++						REQUIRE(input.peek() == '!');
++					}
++				}
++			}
++		}
+ 		for (auto text : {"-+5", "--5", "- 5", "+ 5", "", "abc", "+", "-", "18446744073709551616", "-18446744073709551616",
+ 						  "340282366920938463463374607431768211455", "-340282366920938463463374607431768211455",
+ 						  "340282366920938463463374607431768211456", "-340282366920938463463374607431768211456"}) {
+diff --git a/tests/nt/mod_int.cpp b/tests/nt/mod_int.cpp
+index aea819e..916c46d 100644
+--- a/tests/nt/mod_int.cpp
++++ b/tests/nt/mod_int.cpp
+@@ -296,6 +296,28 @@ TEST_CASE("mod_int extraction shares a checked contract at every width", "[modin
+ 	auto check = []<atl::unsigned_integral Word, Word Mod>() {
+ 		using Mint = atl::mod_int<Word, Mod>;
+ 		using Accumulator = std::conditional_t<std::same_as<Word, atl::uint128>, atl::uint128, uint64>;
++		// Arbitrarily long digit runs must be consumed even after overflow. Leading
++		// zeroes are valid and must not turn the parser into a bounded token reader.
++		for (auto sign : {"", "+", "-"}) {
++			for (bool overflow : {false, true}) {
++				for (auto ending : {"", "!"}) {
++					std::string const digits = overflow ? std::string(10000, '9') : std::string(10000, '0') + "5";
++					std::istringstream input(std::string(sign) + digits + ending);
++					Mint value(3);
++					auto const flags = input.flags();
++					input >> value;
++					REQUIRE(input.fail() == overflow);
++					REQUIRE(input.eof() == (ending[0] == '\0'));
++					REQUIRE(input.flags() == flags);
++					REQUIRE(value == (overflow ? Mint(3) : sign[0] == '-' ? -Mint(5)
++																		  : Mint(5)));
++					if (ending[0] != '\0') {
++						input.clear();
++						REQUIRE(input.peek() == '!');
++					}
++				}
++			}
++		}
+ 		for (auto text : {"-+5", "--5", "- 5", "+ 5", "", "abc", "+", "-", "0x"}) {
+ 			Mint value(3);
+ 			std::istringstream input(text);
+diff --git a/tests/nt/mod_int_io_include_order.cpp b/tests/nt/mod_int_io_include_order.cpp
+new file mode 100644
+index 0000000..b1011a7
+--- /dev/null
++++ b/tests/nt/mod_int_io_include_order.cpp
+@@ -0,0 +1,32 @@
++#include <atl/nt/mod_int_core.hpp>
++#include <sstream>
++
++// Instantiate arithmetic before the extension declares its specializations.
++static_assert((atl::mod_int32<101>(7) * 9).value() == 63);
++static_assert((atl::mod_int<atl::uint128, (atl::uint128(1) << 89) - 1>(7) * 9).value() == 63);
++
++// Native insertion must not instantiate a hook that the extension replaces.
++static std::string native_before_io() {
++	std::ostringstream output;
++	output << atl::mod_int32<101>(-5);
++	return output.str();
++}
++
++#include <atl/nt/mod_int_io.hpp>
++#include <catch2/catch.hpp>
++
++TEST_CASE("mod_int I/O can follow arithmetic instantiation", "[modint][streams]") {
++	using Native = atl::mod_int32<101>;
++	using Wide = atl::mod_int<atl::uint128, (atl::uint128(1) << 89) - 1>;
++	REQUIRE(native_before_io() == "96");
++	Native native;
++	Wide wide;
++	std::istringstream input("-5 18446744073709551616");
++	input >> native >> wide;
++	REQUIRE(input.rdstate() == std::ios_base::eofbit);
++	REQUIRE(native == Native(-5));
++	REQUIRE(wide == Wide(atl::uint128(1) << 64));
++	std::ostringstream output;
++	output << native << ' ' << wide;
++	REQUIRE(output.str() == "96 18446744073709551616");
++}
+diff --git a/tests/nt/narrow_headers.cpp b/tests/nt/narrow_headers.cpp
+index dab3792..5d2b930 100644
+--- a/tests/nt/narrow_headers.cpp
++++ b/tests/nt/narrow_headers.cpp
+@@ -2,6 +2,8 @@
+ #include <atl/nt/series_composition_native.hpp>
+ #include <catch2/catch.hpp>
+ #include <cstddef>
++#include <iomanip>
++#include <sstream>
+ #include <vector>
+ 
+ TEST_CASE("native headers: transform paths without optional implementations", "[power_series][series_composition]") {
+@@ -21,3 +23,11 @@ TEST_CASE("native headers: transform paths without optional implementations", "[
+ 	REQUIRE(composed == identity);
+ 	REQUIRE(atl::series_composition(f, g, n) == identity);
+ }
++
++TEST_CASE("mod_int core provides native insertion without the I/O extension", "[modint][streams]") {
++	std::ostringstream output;
++	output << atl::mod_int32<101>(-1) << ' ' << std::hex << std::showbase
++		   << std::setfill('_') << std::setw(8) << std::internal << atl::mod_int64<1000000007>(255);
++	REQUIRE(output.str() == "100 0x____ff");
++	REQUIRE(output.width() == 0);
 +}
 -- 
 2.53.0
