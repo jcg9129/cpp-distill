@@ -1457,10 +1457,17 @@ conditionals. The preceding token must end a family range or close a namespace
 or `extern "C"`/`extern "C++"` block opened at brace depth zero outside every
 family range; a stack tracks these block kinds. After a surviving conditional,
 scope is unproved and later includes stay. Retained non-directive macro
-expansions prevent later trimming only when their replacement definition is
-unknown or unbalanced in `()`, `[]`, `{}` (including digraphs). Definitions come
-from expansion provenance, with output definitions and judge facts as fallbacks;
-nested expansions at the same offset are checked separately. Disable with
+expansions permit later trimming only with known definitions on both sides of
+populated parse/judge provenance. An unknown side stays uncertain; when neither
+side is populated, sequential output definitions or initial judge facts provide
+the fallback. Replacements must balance `()`, `[]`, `{}` (including digraphs)
+and contain no `#`, `##`, `%:` or `%:%:`. Each function-like invocation must
+have a provable source extent, balanced individual arguments split at commas
+outside nested parentheses, and a balanced complete source invocation. Check
+every nested/rescanned expansion at the same offset too. A balanced replacement
+alone cannot certify substituted or discarded arguments. First occurrences
+pass the same certainty, zero-depth and family-boundary checks as deletion
+candidates; ineligible includes do not seed duplicate detection. Disable with
 `--no-assume=idempotent-standard-headers`.
 
 A14 `unobserved-guard-macros` removes provenance-confirmed generated empty

@@ -5,15 +5,16 @@
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <span>
 
 namespace distill {
 namespace {
 template<class T> T take(Result<T> r) { if (!r.ok()) throw r.error(); return std::move(r.value()); }
 bool contains(EditRange a, EditRange b) { return a.begin <= b.begin && b.end <= a.end; }
-bool balancedDelimiters(const std::vector<Token>& tokens, std::size_t begin = 0) {
+bool balancedDelimiters(std::span<const Token> tokens) {
   std::vector<char> stack;
-  for (auto i = begin; i < tokens.size(); ++i) {
-    const auto& v = tokens[i].text;
+  for (const auto& t : tokens) {
+    const auto& v = t.text;
     if (v == "(") stack.push_back(')');
     else if (v == "[" || v == "<:") stack.push_back(']');
     else if (v == "{" || v == "<%") stack.push_back('}');
@@ -112,24 +113,74 @@ struct Input {
     std::map<std::size_t,std::vector<const PruneMacroExpansion*>> expansions;
     for (const auto& e : model.expansions)
       if (!deleted({e.offset,e.offset+1})) expansions[e.offset].push_back(&e);
-    std::map<std::string,bool,std::less<>> definitions, balancedReplacements;
-    auto balancedFact = [&](const MacroFact& fact) -> std::optional<bool> {
+    struct ScopeDefinition { bool safe = false, functionLike = false; };
+    std::map<std::string,ScopeDefinition,std::less<>> definitions;
+    std::map<std::string,bool,std::less<>> safeReplacements;
+    auto safeReplacement = [](std::span<const Token> tokens) {
+      return balancedDelimiters(tokens) && std::none_of(tokens.begin(),tokens.end(),[](const auto& t) {
+        return t.text == "#" || t.text == "##" || t.text == "%:" || t.text == "%:%:";
+      });
+    };
+    auto scopeFact = [&](const MacroFact& fact) -> std::optional<ScopeDefinition> {
       if (fact.state != MacroState::known || !fact.definition) return {};
       const auto& replacement = fact.definition->replacement;
-      if (auto it = balancedReplacements.find(replacement); it != balancedReplacements.end()) return it->second;
+      if (auto it = safeReplacements.find(replacement); it != safeReplacements.end())
+        return ScopeDefinition{it->second,fact.definition->functionLike};
       // A leading # or %: belongs to the replacement, not a directive.
       const auto parsed = scanDirectives("0 " + replacement);
       std::vector<Token> tokens;
       if (parsed.ok()) for (const auto& line : parsed.value().lines)
         tokens.insert(tokens.end(),line.tokens.begin(),line.tokens.end());
-      return balancedReplacements[replacement] = parsed.ok() && balancedDelimiters(tokens);
+      const bool safe = safeReplacements[replacement] = parsed.ok() && safeReplacement(tokens);
+      return ScopeDefinition{safe,fact.definition->functionLike};
     };
-    auto balancedExpansion = [&](const PruneMacroExpansion& e) {
-      const auto parse = balancedFact(e.parse), judge = balancedFact(e.judge);
-      if (parse || judge) return parse.value_or(true) && judge.value_or(true);
-      if (auto it = definitions.find(e.name); it != definitions.end()) return it->second;
+    // Keep source invocation extents across logical lines. Directives and
+    // deleted tokens cannot supply evidence for a surviving invocation.
+    std::vector<Token> sourceTokens;
+    std::set<std::size_t> directiveTokens;
+    for (const auto& l : scan.lines) for (const auto& t : l.tokens) {
+      sourceTokens.push_back(t);
+      if (l.directive) directiveTokens.insert(t.begin);
+    }
+    auto balancedInvocation = [&](const PruneMacroExpansion& e) {
+      auto it = std::lower_bound(sourceTokens.begin(),sourceTokens.end(),e.offset,
+          [](const auto& t,auto offset) { return t.begin < offset; });
+      // Rescanned function-like names need a source spelling too. An alias or
+      // synthesized name at this offset does not prove its consumed extent.
+      if (it == sourceTokens.end() || it->begin != e.offset || it->text != e.name) return false;
+      const auto begin = std::size_t(it-sourceTokens.begin());
+      if (begin+1 == sourceTokens.size() || sourceTokens[begin+1].text != "(") return false;
+      std::size_t depth = 0, argument = begin+2;
+      for (auto i = begin+1; i < sourceTokens.size(); ++i) {
+        const auto& t = sourceTokens[i];
+        if (directiveTokens.contains(t.begin) || deleted({t.begin,t.end})) return false;
+        if (t.text == "(") ++depth;
+        else if (t.text == ")") {
+          if (!--depth)
+            return balancedDelimiters(std::span(sourceTokens).subspan(argument,i-argument)) &&
+                balancedDelimiters(std::span(sourceTokens).subspan(begin,i-begin+1));
+        } else if (t.text == "," && depth == 1) {
+          // Preprocessing arguments split on commas outside parentheses;
+          // braces and brackets do not protect a comma from that split.
+          if (!balancedDelimiters(std::span(sourceTokens).subspan(argument,i-argument))) return false;
+          argument = i+1;
+        }
+      }
+      return false;
+    };
+    auto scopePreservingExpansion = [&](const PruneMacroExpansion& e) {
+      const auto parse = scopeFact(e.parse), judge = scopeFact(e.judge);
+      auto safe = [&](const ScopeDefinition& d) {
+        return d.safe && (!d.functionLike || balancedInvocation(e));
+      };
+      // Expansion facts describe separate parse and judge environments. If
+      // either is populated, require both; a fallback cannot hide an unknown.
+      if (e.parse.state != MacroState::unknown || e.judge.state != MacroState::unknown ||
+          !e.parse.provenance.empty() || !e.judge.provenance.empty())
+        return parse && judge && safe(*parse) && safe(*judge);
+      if (auto it = definitions.find(e.name); it != definitions.end()) return safe(it->second);
       if (auto it = model.judgeInitial.find(e.name); it != model.judgeInitial.end())
-        return balancedFact(it->second).value_or(false);
+        if (const auto fact = scopeFact(it->second)) return safe(*fact);
       return false;
     };
     bool reservedMacroWrite = false, macroPragma = false, survivingConditional = false;
@@ -178,11 +229,19 @@ struct Input {
         if ((d.name == "define" || d.name == "undef") && !d.tokens.empty()) {
           const auto& ts = d.tokens;
           std::size_t body = 1;
-          if (d.name == "define" && ts.size() > 1 && ts[1].text == "(" && ts[0].end == ts[1].begin) {
-            while (body < ts.size() && ts[body].text != ")") ++body;
-            if (body < ts.size()) ++body;
+          bool functionLike = false, parametersClosed = true;
+          if (d.name == "define" && ts.size() > 1 && ts[1].text == "(") {
+            // Adjacency is after phase-2 splicing, not in physical offsets.
+            const auto gap = scanDirectives(std::string_view(model.text).substr(ts[0].end,ts[1].begin-ts[0].end));
+            functionLike = gap.ok() && std::all_of(gap.value().lines.begin(),gap.value().lines.end(),
+                [](const auto& line) { return line.text.empty(); });
           }
-          definitions[ts[0].text] = d.name == "define" && balancedDelimiters(ts,body);
+          if (functionLike) {
+            while (body < ts.size() && ts[body].text != ")") ++body;
+            parametersClosed = body < ts.size();
+            if (parametersClosed) ++body;
+          }
+          definitions[ts[0].text] = {d.name == "define" && parametersClosed && safeReplacement(std::span(ts).subspan(body)),functionLike};
         }
         if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef" ||
             d.name == "elif" || d.name == "elifdef" || d.name == "elifndef")
@@ -195,6 +254,8 @@ struct Input {
             std::none_of(model.families.begin(),model.families.end(),[&](const auto& f) {
               return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin < l.end && l.begin < r.end; });
             })) {
+          // The first occurrence must pass exactly the same scope and family
+          // boundary checks as a removal; an ineligible include never seeds seen.
           const auto& spelling = d.tokens[0].text;
           if (spelling.starts_with('<') && spelling.ends_with('>')) {
             const auto h = std::string_view(spelling).substr(1,spelling.size()-2);
@@ -206,10 +267,11 @@ struct Input {
         }
         continue;
       }
-      // Balanced replacements leave the lexical nesting intact. Check every
-      // expansion, including nested expansions sharing one invocation offset.
+      // Balance alone cannot prove substitution preserves source nesting:
+      // require balanced arguments and consumed invocation tokens too, forbid
+      // stringification/pasting, and check every nested/rescanned expansion.
       for (auto it = expansions.lower_bound(l.begin); it != expansions.end() && it->first < l.end; ++it)
-        for (const auto* e : it->second) if (!balancedExpansion(*e)) uncertain = true;
+        for (const auto* e : it->second) if (!scopePreservingExpansion(*e)) uncertain = true;
       for (const auto& t : l.tokens) if (!deleted({t.begin,t.end})) {
         const auto& v = t.text;
         BlockKind opening = BlockKind::other;

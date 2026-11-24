@@ -526,9 +526,10 @@ TEST(render_pp_namespace_and_linkage_boundaries) {
 }
 TEST(render_pp_balanced_macro_expansions_preserve_scope) {
   for (const std::string replacement : {"do { (void)(x); } while (0)", "(<% int a<:1:>; %>)",
-                                        "# x", "%: x", "\"{)]\"", "", "{", ")", "<%", ":>", "([)]"}) {
+                                        "# x", "%: x", "x ## x", "x %:%: x", "\"{)]\"", "", "{", ")", "<%", ":>", "([)]"}) {
     const bool balanced = replacement != "{" && replacement != ")" && replacement != "<%" &&
-                          replacement != ":>" && replacement != "([)]";
+                          replacement != ":>" && replacement != "([)]" && replacement != "# x" &&
+                          replacement != "%: x" && replacement != "x ## x" && replacement != "x %:%: x";
     for (int provenance = 0; provenance < 6; ++provenance) {
       auto m = source("#include <vector>\n" +
           (provenance == 2 ? "#define CHECK(x) " + replacement + "\n" :
@@ -546,9 +547,110 @@ TEST(render_pp_balanced_macro_expansions_preserve_scope) {
       m.expansions = {e};
       PruningResult r; r.families.resize(1); r.families[0].kept = true;
       const auto out = take(renderSource(m,&r));
-      CHECK_EQ(out.trimming.includeLines,balanced ? 1u : 0u);
+      CHECK_EQ(out.trimming.includeLines,balanced && provenance != 0 && provenance != 1 ? 1u : 0u);
       take(renderingInvariant(m,&r,out.provenance.text));
     }
+  }
+}
+TEST(render_pp_macro_substitution_review_examples_stay) {
+  // These are scope-certification regressions, independent of library include
+  // guards or whether a particular library accepts inclusion inside a namespace.
+  struct Example { std::string definition, name, invocation, tail, replacement; bool variadic = false; };
+  for (const Example example : {
+      Example{"#define TAKE(a,b) a\n", "TAKE", "TAKE(namespace outer {, })\n", "}\n", "a"},
+      Example{"#define TAKE\\\n(a,b) a\n", "TAKE", "TAKE(namespace outer {, })\n", "}\n", "a"},
+      Example{"#define DISCARD(...)\n", "DISCARD", "namespace outer {\nDISCARD(})\n", "}\n", "", true},
+      Example{"#define CAT(a,b) a ## b\n", "CAT", "namespace outer CAT(<, %)\n", "CAT(%, >)\n", "a ## b"},
+      Example{"#define CAT(a,b) a %:%: b\n", "CAT", "namespace outer CAT(<, %)\n", "CAT(%, >)\n", "a %:%: b"}}) {
+    for (bool firstInside : {false,true}) for (bool outputDefinition : {false,true}) {
+      auto m = source(example.definition + (firstInside ? "" : "#include <vector>\n") + example.invocation +
+          "namespace marker { int keep = 0; }\n#include <vector> // inside outer\n" + example.tail +
+          "namespace after { int keep = 0; }\n#include <vector> // after outer\n"
+          "int main() { return outer::marker::keep; }\n");
+      PruneMacroExpansion e; e.name = example.name;
+      e.offset = m.text.find(example.name + "(",example.definition.size());
+      if (!outputDefinition) {
+        Macro macro; macro.functionLike = true; macro.variadic = example.variadic;
+        macro.parameters = example.variadic ? std::vector<std::string>{} : std::vector<std::string>{"a","b"};
+        macro.replacement = example.replacement;
+        e.parse = e.judge = {MacroState::known,macro,{FactOrigin::source}};
+      }
+      m.expansions = {e};
+      if (example.name == "CAT") { e.offset = m.text.find("CAT(%, >)"); m.expansions.push_back(e); }
+      PruningResult r;
+      const auto out = take(renderSource(m,&r));
+      CHECK_EQ(out.trimming.includeLines,0u);
+      CHECK(out.provenance.text.find("// inside outer") != std::string::npos);
+      CHECK(out.provenance.text.find("// after outer") != std::string::npos);
+      take(renderingInvariant(m,&r,out.provenance.text));
+    }
+  }
+}
+TEST(render_pp_function_macro_source_arguments_and_extent) {
+  for (const std::string invocation : {
+      "CHECK((1,2), <% int x<:1:>; %>)", "CHECK\n(\n(1,2),\n<% int x<:1:>; %>\n)", "CHECK()",
+      "CHECK({,})", "CHECK(<%,%>)", "CHECK([,])", "CHECK((], [))", "CHECK(}", "CHECK", "ALIAS(1,2)",
+      "CHECK(\n#define VALUE 1\n1,2)"}) {
+    const bool safe = invocation.starts_with("CHECK((1,2)") || invocation.starts_with("CHECK\n") || invocation == "CHECK()";
+    auto m = source("#include <vector>\n" + invocation +
+        "\nnamespace marker { int keep; }\n#include <vector> // candidate\n");
+    PruneMacroExpansion e; e.name = "CHECK"; e.offset = m.text.find(invocation);
+    Macro macro; macro.functionLike = true; macro.variadic = true; macro.replacement = "";
+    e.parse = e.judge = {MacroState::known,macro,{}}; m.expansions = {e};
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,safe ? 1u : 0u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_nested_expansions_all_need_scope_proof) {
+  for (int barrier = 0; barrier < 4; ++barrier) for (bool nestedFirst : {false,true}) {
+    auto m = source("#include <vector>\nOUTER(1)\nnamespace marker { int keep; }\n#include <vector>\n");
+    PruneMacroExpansion outer; outer.name = "OUTER"; outer.offset = m.text.find("OUTER");
+    Macro macro; macro.functionLike = true; macro.parameters = {"x"}; macro.replacement = "x";
+    outer.parse = outer.judge = {MacroState::known,macro,{}};
+    auto nested = outer; nested.name = "INNER";
+    if (barrier == 0) nested.parse.definition->replacement = "# x";
+    if (barrier == 1) nested.parse.definition->replacement = "x ## x";
+    if (barrier == 2) nested.judge = {};
+    // barrier 3 has a balanced function-like replacement but no provable
+    // INNER source invocation at OUTER's offset.
+    m.expansions = nestedFirst ? std::vector{nested,outer} : std::vector{outer,nested};
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,0u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_unknown_environment_cannot_use_known_side_or_fallback) {
+  for (bool unknownJudge : {false,true}) for (auto state : {MacroState::unknown,MacroState::definedUnknown,MacroState::undefined}) {
+    auto m = source("#define OPEN\n#include <vector>\nOPEN\n"
+        "namespace marker { int keep; }\n#include <vector>\n");
+    Macro macro; macro.replacement = "";
+    const MacroFact known{MacroState::known,macro,{FactOrigin::source}};
+    PruneMacroExpansion e; e.name = "OPEN"; e.offset = m.text.find("\nOPEN\n")+1;
+    e.parse = e.judge = known;
+    (unknownJudge ? e.judge : e.parse) = {state,{}, {}};
+    m.judgeInitial["OPEN"] = known; m.expansions = {e};
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,0u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_ineligible_first_include_does_not_seed_seen) {
+  for (const std::string prefix : {"namespace outer {\n#include <vector> // ineligible\n}\n",
+                                  "int partial =\n#include <vector> // ineligible\n0;\n"}) {
+    auto m = source(prefix + "int boundary;\n#include <vector> // first eligible\n#include <vector> // drop\n");
+    PruneFamily f; const auto begin = m.text.find("int boundary;");
+    f.ranges = {{begin,begin+13}}; m.families = {f};
+    PruningResult r; r.families.resize(1); r.families[0].kept = true;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,1u);
+    CHECK(out.provenance.text.find("// ineligible") != std::string::npos);
+    CHECK(out.provenance.text.find("// first eligible") != std::string::npos);
+    CHECK(out.provenance.text.find("// drop") == std::string::npos);
+    take(renderingInvariant(m,&r,out.provenance.text));
   }
 }
 TEST(render_pp_macro_unknown_nested_and_conditional_barriers) {
@@ -559,7 +661,7 @@ TEST(render_pp_macro_unknown_nested_and_conditional_barriers) {
     f.ranges = {{start,m.text.find("\n",start)}}; m.families = {f};
     PruneMacroExpansion e; e.offset = m.text.find("CHECK(1)"); e.name = "CHECK";
     Macro macro; macro.replacement = "(1)";
-    e.parse = {MacroState::known,macro,{}};
+    e.parse = e.judge = {MacroState::known,macro,{}};
     m.expansions = {e};
     if (barrier == 0) m.expansions[0].parse = {}; // Unknown definition.
     if (barrier == 1) { // Nested expansion at the same invocation offset.
@@ -568,6 +670,7 @@ TEST(render_pp_macro_unknown_nested_and_conditional_barriers) {
     if (barrier == 2) { e.judge = e.parse; e.judge.definition->replacement = ")"; m.expansions = {e}; }
     if (barrier == 3) { // An object-like definition in the judge profile is sufficient.
       m.expansions[0].parse = {};
+      m.expansions[0].judge = {};
       m.judgeInitial["CHECK"] = {MacroState::known,macro,{}};
       m.judgeInitial["CHECK"].definition->functionLike = false;
     }

@@ -1839,11 +1839,23 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   Both occurrences must be outside namespaces, linkage blocks (including
   `extern "C++"`), declarations and surviving conditionals. A surviving
   conditional prevents proving the scope of later includes. A retained
-  non-directive macro expansion does so only when its replacement is unknown
-  or has unbalanced `()`, `[]` or `{}` delimiters (including digraphs). Check
-  worker expansion definitions, with output definitions and initial judge
-  facts as fallbacks; known parse and judge replacements must both balance.
-  Nested expansions sharing an invocation offset are checked individually.
+  non-directive macro expansion preserves this scope evidence only when its
+  definition is known in both populated worker parse/judge facts; an unknown
+  side is uncertain and cannot be rescued by a fallback. When neither fact is
+  populated, use the sequential output definition or initial judge fact.
+  Every replacement must balance `()`, `[]` and `{}` (including digraphs),
+  and contain none of `#`, `##`, `%:` or `%:%:`: stringification and pasting
+  cannot certify source nesting. For each function-like expansion, determine
+  its invocation extent from source tokens, possibly across logical lines.
+  Split arguments at commas outside nested parentheses and require each
+  argument, and the entire name-through-closing-`)` source span, to balance
+  all three delimiter kinds. A missing or unprovable extent is uncertain.
+  Balanced replacement text alone cannot prove that substituted or discarded
+  arguments preserve nesting. Apply every check to all nested/rescanned
+  expansions, including those sharing an invocation offset. Uncertainty
+  persists for later includes. Record a first occurrence only after the same
+  certainty, zero-depth and family-boundary checks required for deletion;
+  an ineligible include neither disappears nor seeds duplicate detection.
   `--no-assume=idempotent-standard-headers` disables this policy.
   Under A14 remove a provenance-confirmed generated empty
   `#define DISTILL_ONCE_<hash>` only when its name is the sole surviving
