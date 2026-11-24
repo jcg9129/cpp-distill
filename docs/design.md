@@ -1492,16 +1492,25 @@ eligible non-member function family merely because its signature or template
 arguments name a kept user record or enum. Every declaration in the aggregated
 family must be a user namespace-scope function or function template. Hidden
 friends, members, local declarations, operators (including conversions and
-literal operators), deduction guides, `main`, C linkage (including `static`
-functions declared inside an innermost `extern "C"`), explicit/partial
-specializations and explicit instantiations are excluded. So are A6 ADL-listed
-names, macro-produced declarations (including expansions inside the declarator
-or body, even when existing boundary pinning does not apply), and declarations
-with special root/refusal attributes (`alias`, `ifunc`, `weak`, `weakref`, `used`, `section`, `constructor`,
-`destructor`, `visibility`, asm labels). One excluded declaration excludes its
-whole overload/redeclaration/template/shared-syntax family. Shared declarations
-that introduce a record or enum remain aggregated with that type, preserving
-both entities when either survives, including `struct R* helper();`.
+literal operators), deduction guides, `main`, names with C language linkage,
+and functions written directly inside an `extern "C"` block (including `static`
+functions; the innermost linkage specification governs) are excluded. A function
+whose type gets C linkage only through an `extern "C"` typedef is not excluded:
+Clang and GCC do not model function-type language linkage, and the function is
+still only reachable by its name. Explicit/partial specializations and explicit
+instantiations are excluded too. So are A6 ADL-listed names, macro-produced
+declarations, and declarations with special root/refusal attributes (`alias`,
+`ifunc`, `weak`, `weakref`, `used`, `section`, `constructor`, `destructor`,
+`visibility`, asm labels). The macro veto covers expansions anywhere
+in the declaration before the body (return type, declarator, parameters and
+default arguments, template head, trailing requires-clause, `noexcept`, and
+trailing return type), even when existing boundary pinning does not apply.
+For `= delete`, it stops at the suffix. Expansions confined to the body do not
+veto D3f eligibility; ordinary macro pinning and name retention still apply.
+One excluded declaration excludes its whole overload/redeclaration/template/shared-syntax
+family. Shared declarations that introduce a record or enum remain aggregated
+with that type, preserving both entities when either survives, including
+`struct R* helper();`.
 
 Roots/pins, rule 2's names in kept raw text (including macro bodies/arguments),
 rule 4's AST edges, rule 5's dependent names (including pasted calls), and rule

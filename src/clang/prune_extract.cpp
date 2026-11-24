@@ -47,9 +47,12 @@ bool unspelledFunctionEligible(const FunctionDecl* f) {
       f->isMain() || f->getLanguageLinkage() == CLanguageLinkage ||
       f->getTemplateSpecializationKind() != TSK_Undeclared ||
       f->getBeginLoc().isMacroID() || f->getLocation().isMacroID() || f->getEndLoc().isMacroID()) return false;
-  // Internal-linkage names have NoLanguageLinkage, but a static function in
-  // a C linkage specification still has C function type. The innermost
-  // specification governs, including an extern "C++" nested in extern "C".
+  // Exclude names with C language linkage (above) and functions written directly
+  // inside an extern "C" block, including static names with NoLanguageLinkage.
+  // The innermost specification governs, including nested extern "C++".
+  // C linkage acquired only by the function type through an extern "C" typedef
+  // does not exclude a function: Clang and GCC do not model function-type
+  // language linkage, and such a function is still only reachable by its name.
   for (auto* context = f->getLexicalDeclContext(); context; context = context->getParent())
     if (const auto* linkage = dyn_cast<LinkageSpecDecl>(context)) {
       if (linkage->getLanguage() == LinkageSpecLanguageIDs::C) return false;
