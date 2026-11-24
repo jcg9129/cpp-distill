@@ -1,0 +1,3 @@
+output-absent | #define DISTILL_ONCE_
+report | guard-defines-removed: lines=1 bytes=38
+report | pruning assumption: A14 unobserved-guard-macros

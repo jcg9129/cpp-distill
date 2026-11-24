@@ -1,0 +1,11 @@
+prune=yes
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+api=yes
+no-assume=idempotent-standard-headers,unobserved-guard-macros
+count.2=#include <vector>
+contains.guard=#define DISTILL_ONCE_
+report=idempotent-includes-removed: lines=0 bytes=0
+report.1=guard-defines-removed: lines=0 bytes=0

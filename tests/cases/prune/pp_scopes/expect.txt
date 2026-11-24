@@ -1,0 +1,3 @@
+output-count #include <vector> | 4
+output-count #include <type_traits> | 2
+report | idempotent-includes-removed: lines=0 bytes=0

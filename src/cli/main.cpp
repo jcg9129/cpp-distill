@@ -142,6 +142,8 @@ int run(const std::vector<std::string>& args) {
   options.assumeLibrarySpelledMembers = parsed.assumeLibrarySpelledMembers;
   options.assumeLibraryMacroValues = parsed.assumeLibraryMacroValues;
   options.assumeUnspelledFunctions = parsed.assumeUnspelledFunctions;
+  options.assumeIdempotentStandardHeaders = parsed.assumeIdempotentStandardHeaders;
+  options.assumeUnobservedGuardMacros = parsed.assumeUnobservedGuardMacros;
   options.noLineMarkers = parsed.noLineMarkers;
   options.compactWhitespace = parsed.compactWhitespace;
   options.samples = take(collectRunSamples(parsed.verifyRun,cwd));

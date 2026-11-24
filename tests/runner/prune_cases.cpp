@@ -17,9 +17,11 @@ std::string read(const std::filesystem::path& p) { std::ifstream f(p,std::ios::b
 std::string trim(std::string s) { auto a = s.find_first_not_of(" \t\r"); if (a == s.npos) return {}; return s.substr(a,s.find_last_not_of(" \t\r")-a+1); }
 }
 int main(int argc, char** argv) {
-  if (argc != 2 && !(argc == 4 && std::string_view(argv[2]) == "--filter")) return 1;
+  if (argc != 2 && !(argc == 4 && (std::string_view(argv[2]) == "--filter" || std::string_view(argv[2]) == "--baseline"))) return 1;
   try {
     const auto cwd = std::filesystem::current_path();
+    if (argc == 4 && std::string_view(argv[2]) == "--baseline" && !std::filesystem::is_directory(argv[3]))
+      throw Error{"baseline snapshot directory is missing"};
     TemporaryDirectory work(".prune-cases-",cwd);
     auto command = take(parseCompileCommand({"g++","-std=gnu++20","empty.cpp"},work.path));
     { std::ofstream f(work.path / "empty.cpp"); }
@@ -33,7 +35,10 @@ int main(int argc, char** argv) {
     std::sort(cases.begin(),cases.end()); std::size_t count = 0, failed = 0;
     for (const auto& expectation : cases) {
       const auto path = expectation.parent_path();
-      if (argc == 4 && pathToUtf8(path.filename()).find(argv[3]) == std::string::npos) continue;
+      if (argc == 4 && std::string_view(argv[2]) == "--filter" && pathToUtf8(path.filename()).find(argv[3]) == std::string::npos) continue;
+      const bool baseline = argc == 4 && std::string_view(argv[2]) == "--baseline";
+      const auto saved = baseline ? std::filesystem::path(argv[3]) / path.filename() / expectation.filename() : std::filesystem::path{};
+      if (baseline && !std::filesystem::exists(saved)) continue;
       PruningModel model; PruningResult retained; bool caseFailed = false; std::string workerDiagnostics;
       auto fail = [&](const std::string& why) {
         std::cerr << "FAIL " << path.filename() << "/" << expectation.filename() << ": " << why << '\n'; caseFailed = true;
@@ -74,6 +79,9 @@ int main(int argc, char** argv) {
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
         model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
         model.assumeUnspelledFunctions = cli.assumeUnspelledFunctions;
+        model.assumeIdempotentStandardHeaders = cli.assumeIdempotentStandardHeaders;
+        model.assumeUnobservedGuardMacros = cli.assumeUnobservedGuardMacros;
+        if (baseline) { model.assumeIdempotentStandardHeaders = false; model.assumeUnobservedGuardMacros = false; }
         if (*feature || name == "ordinary_builtins") {
           model.dialect = "gnu++23";
           for (auto& arg : model.parseArgv) if (arg == "-std=gnu++20") arg = "-std=gnu++23";
@@ -91,6 +99,14 @@ int main(int argc, char** argv) {
           return r;
         };
         model = take(extractPruning(model,options)); retained = take(computeRetention(model));
+        std::string pruned;
+        if (retained.disabledReasons.empty()) {
+          auto rendered = take(renderSource(model,&retained));
+          pruned = rendered.provenance.text; retained.trimming = rendered.trimming;
+          take(staticNameInvariant(model,retained,pruned));
+          take(renderingInvariant(model,&retained,pruned));
+        }
+        if (baseline && read(saved) != (retained.disabledReasons.empty() ? pruned : model.text)) fail("opt-outs differ from pre-change corpus bytes");
         std::vector<FamilyId> groups(model.families.size());
         for (FamilyId id = 0; id < groups.size(); ++id) groups[id] = id;
         auto group = [&](FamilyId id) { while (groups[id] != id) id = groups[id]; return id; };
@@ -101,7 +117,15 @@ int main(int argc, char** argv) {
           const auto bar = line.find('|'); if (bar == line.npos) { fail("invalid expectation: " + line); continue; }
           auto assertion = trim(line.substr(0,bar)), reason = trim(line.substr(bar+1)); bool matched = false;
           if (assertion == "args" || assertion == "target") continue;
-          if (assertion == "report-absent") {
+          if (assertion.starts_with("output-count ")) {
+            const auto text = assertion.substr(13); std::size_t n = 0, at = 0;
+            while ((at = pruned.find(text,at)) != pruned.npos) { ++n; at += text.size(); }
+            matched = std::to_string(n) == reason;
+          } else if (assertion == "output") {
+            matched = pruned.find(reason) != pruned.npos;
+          } else if (assertion == "output-absent") {
+            matched = pruned.find(reason) == pruned.npos;
+          } else if (assertion == "report-absent") {
             matched = take(renderPruningReport(model,retained)).find(reason) == std::string::npos;
           } else if (assertion == "report") {
             matched = take(renderPruningReport(model,retained)).find(reason) != std::string::npos;
@@ -166,12 +190,6 @@ int main(int argc, char** argv) {
         // A11 exclusions and expected refusals retain the original-program
         // oracle; refusals have no rendered artifact to validate.
         if (std::filesystem::exists(path / "stdout.txt")) {
-          std::string pruned;
-          if (!disabled) {
-            pruned = take(renderSource(model,&retained)).provenance.text;
-            take(staticNameInvariant(model,retained,pruned));
-            take(renderingInvariant(model,&retained,pruned));
-          }
           const auto expected = read(path / "stdout.txt");
           for (const auto* compiler : {"g++","clang++"}) {
             if (!resolveExecutable(compiler,work.path).ok()) {
@@ -210,6 +228,7 @@ int main(int argc, char** argv) {
         std::cout << "PASS " << path.filename() << "/" << expectation.filename() << ": kept=" << retained.keptBytes << " removed=" << retained.removedBytes << '\n'; ++count;
       }
     }
+    if (argc == 4 && std::string_view(argv[2]) == "--baseline" && !count) throw Error{"no baseline snapshots compared"};
     std::cout << count << " extraction cases passed, " << failed << " failed\n"; return failed ? 1 : 0;
   } catch (const Error& e) { std::cerr << e.message << '\n'; return 1; }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

@@ -168,6 +168,8 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
         model.value().assumeInstantiationEffects != in.assumeInstantiationEffects ||
         model.value().assumeLibrarySpelledMembers != in.assumeLibrarySpelledMembers ||
         model.value().assumeUnspelledFunctions != in.assumeUnspelledFunctions ||
+        model.value().assumeIdempotentStandardHeaders != in.assumeIdempotentStandardHeaders ||
+        model.value().assumeUnobservedGuardMacros != in.assumeUnobservedGuardMacros ||
         !std::all_of(in.disabledReasons.begin(),in.disabledReasons.end(),[&](const auto& reason) {
           return std::find(model.value().disabledReasons.begin(),model.value().disabledReasons.end(),reason) != model.value().disabledReasons.end();
         }))

@@ -1,0 +1,3 @@
+output-count #include <cassert> | 2
+output-count #include <assert.h> | 2
+report | idempotent-includes-removed: lines=0 bytes=0

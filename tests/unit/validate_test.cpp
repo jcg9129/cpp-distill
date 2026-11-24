@@ -380,3 +380,17 @@ TEST(validate_unspelled_functions_option) {
   CHECK(!parseDistillOptions({"--no-assume=unspelled-functions","--judge-check","cses","out.txt"}).ok());
   CHECK(distillHelp().find("unspelled-functions (D3f)") != std::string::npos);
 }
+
+TEST(validate_pp_trimming_options) {
+  for (const auto* name : {"idempotent-standard-headers","unobserved-guard-macros"}) {
+    const auto flags = std::string(name) + ',' + name;
+    for (const auto& args : {std::vector<std::string>{"--no-assume="+flags,"main.cpp"},
+                            std::vector<std::string>{"--no-assume",name,"main.cpp"}}) {
+      const auto r = parseDistillOptions(args); CHECK(r.ok());
+      CHECK(r.value().assumeIdempotentStandardHeaders == (std::string_view(name) != "idempotent-standard-headers"));
+      CHECK(r.value().assumeUnobservedGuardMacros == (std::string_view(name) != "unobserved-guard-macros"));
+    }
+    CHECK(!parseDistillOptions({"--no-assume="+std::string(name),"--judge-probe","cses"}).ok());
+    CHECK(distillHelp().find(name) != std::string::npos);
+  }
+}

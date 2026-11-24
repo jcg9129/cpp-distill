@@ -27,6 +27,12 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     out << "pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)\n";
   if (m.assumeUnspelledFunctions && r.disabledReasons.empty())
     out << "rule3-unkept: declarations=" << r.rule3UnkeptDeclarations << " bytes=" << r.rule3UnkeptBytes << '\n';
+  out << "pruning policy" << (m.assumeIdempotentStandardHeaders ? ": " : " disabled: ")
+      << "idempotent-standard-headers" << (m.assumeIdempotentStandardHeaders ? "" : " (--no-assume=idempotent-standard-headers)") << '\n';
+  if (!m.assumeUnobservedGuardMacros)
+    out << "pruning assumption disabled: A14 unobserved-guard-macros (--no-assume=unobserved-guard-macros)\n";
+  out << "idempotent-includes-removed: lines=" << r.trimming.includeLines << " bytes=" << r.trimming.includeBytes << '\n';
+  out << "guard-defines-removed: lines=" << r.trimming.guardLines << " bytes=" << r.trimming.guardBytes << '\n';
   for (const auto& a : r.assumptions) out << "pruning assumption: " << assumptionLabel(a) << '\n';
   out << "extension coverage:\n" << embeddedExtensionCoverage();
   for (FamilyId id = 0; id < m.families.size(); ++id) {

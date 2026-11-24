@@ -783,3 +783,58 @@ remain under ignored `.checks/atl-six/`.
 The downloaded SDK archive and extraction were deleted after validation.
 A post-deletion CLI pruning/build/run smoke check also passes. Changes remain
 uncommitted on `unspelled-functions`; nothing was pushed.
+
+## Pruned preprocessor trimming (2026-11-24)
+
+Added two independent pruned-renderer rules after declaration and empty-shell
+pruning, before marker regeneration, the static name/rendering invariants and
+exact-byte build/sample checks. Raw and flat rendering are unchanged.
+
+`idempotent-standard-headers` keeps the first top-level standard C/C++ angle
+include and drops later identical spellings. It excludes `cassert`/`assert.h`,
+GNU extensions and other non-standard/user headers, linkage blocks, namespaces,
+declarations and surviving conditionals. Surviving conditionals and retained
+non-directive macro expansions conservatively prevent later scope proofs.
+`unobserved-guard-macros` (A14) drops only provenance-confirmed generated empty
+once-guard defines whose name has no other surviving identifier, including
+conditional operands, undefines and macro replacements; worker-observed pasted
+expansions also count as uses. Generated defines in
+surviving conditionals remain to protect conditional position observations.
+The input identifier collision check covers worker input; A14 covers judge-only
+library/compiler headers. Markers preserve observed positions; marker omission
+still uses the existing position-observation gate.
+
+Both `--no-assume` switches travel through CLI/options, pipeline and immutable
+worker/renderer model identity (protocol **10**). Reports name the policy/A14,
+their opt-outs, and `idempotent-includes-removed: lines=N bytes=B` /
+`guard-defines-removed: lines=N bytes=B`, with source accounting separate from
+family ownership. README, core guide, CLI help and design are updated.
+
+New prune/pipeline fixtures compile and run with the existing harnesses, covering
+assertion re-enablement after NDEBUG, standard-header spelling/scope exclusions,
+non-standard headers, observed line numbers and generated guard observers.
+A separately built pre-change worker/renderer and both new opt-outs produce
+**113/113 byte-identical original prune-corpus outputs**, including expected
+refusals. The test runner's `--baseline <directory>` mode compares saved bytes;
+raw/flat equality and independent CLI modes have separate regression checks.
+
+Built with the SHA256SUMS-verified LLVM **23.1.5** Linux ARM64 SDK
+(`5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de`),
+Clang 22.1.8 and LLD, `-O1 -DNDEBUG`, `-j2`, six-GiB virtual-memory caps and
+hard build/test timeouts. The requested
+`docs/reviews/2026-11-24-caide-gap-analysis.md` is absent from this checkout and
+its base `origin/main`; implementation follows the supplied rules and design.
+
+Validation: **109/109 CTest entries pass** in the final full run (`-j2`,
+120-second test caps), including **122 extraction cases**, and all **409 Python
+tooling tests pass**, including 200 library tests. The new pasted-guard runtime
+case verifies that a surviving synthesized macro use keeps its define. The
+updated pipeline unit subset also passes, including raw/flat byte equality and
+the observed-`__LINE__` marker gate.
+
+The downloaded SDK archive/extraction were deleted after validation; acquisition
+checksums and test logs remain under ignored `.checks/`. A post-deletion CLI
+pruning/build/run smoke check passes with the default markers, removes one
+include and one generated guard define, and preserves stdout `7 5` (including
+the original line number). Changes remain uncommitted on `pp-trim`; nothing
+was pushed.

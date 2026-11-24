@@ -547,6 +547,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     out.assumptions.insert("A7");
     if (m.assumeUnspelledFunctions) out.assumptions.insert("D3f");
     if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
+    if (m.assumeUnobservedGuardMacros) out.assumptions.insert("A14");
     if (out.memberDisabledReasons.empty()) out.assumptions.insert("A12");
   }
   return out;

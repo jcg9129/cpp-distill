@@ -8,6 +8,7 @@ struct RenderedSource {
   // All physical offsets/ranges in this provenance refer to the rendered text.
   // Removed occurrences disappear; retained ranges can split around markers.
   PruningModel provenance;
+  TrimmingStats trimming;
   std::vector<CopiedSpan> copied;
   std::optional<std::size_t> mapOffset(std::size_t) const;
 };

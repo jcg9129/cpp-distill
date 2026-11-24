@@ -1,0 +1,9 @@
+output-count #include <vector> | 1
+output-count #include <type_traits> | 1
+output | // first vector
+output | // first traits
+output-absent | // later vector
+output-absent | // later traits
+output | #include <cstdio>
+output | #include <stdio.h>
+report | idempotent-includes-removed: lines=2 bytes=

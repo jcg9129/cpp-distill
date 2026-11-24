@@ -1,0 +1,3 @@
+output-absent | #define DISTILL_ONCE_
+output | #line 3
+report | guard-defines-removed: lines=1 bytes=38

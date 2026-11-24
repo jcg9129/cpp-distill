@@ -1,0 +1,2 @@
+output-count #include <cstddef> | 1
+report | idempotent-includes-removed: lines=1 bytes=19

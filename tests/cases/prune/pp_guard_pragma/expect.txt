@@ -1,0 +1,2 @@
+output | #define DISTILL_ONCE_0123456789abcdef
+report | guard-defines-removed: lines=0 bytes=0

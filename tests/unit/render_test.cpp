@@ -455,3 +455,319 @@ TEST(render_compact_continuations_byte_exact) {
     CHECK(unmarkedInvariant(input,compact).ok());
   }
 }
+
+TEST(render_pp_include_scope_spelling_and_trivia) {
+  const std::string text =
+      "#include <vector> // first\n#include <vector> // drop\n"
+      "#include <cassert>\n#define NDEBUG\n#include <cassert>\n"
+      "#include <cstdio>\n#include <stdio.h>\n"
+      "#include <bits/stdc++.h>\n#include <bits/stdc++.h>\n"
+      "#include <intrin.h>\n#include <intrin.h>\n"
+      "#include \"user.h\"\n#include \"user.h\"\n"
+      "extern \"C++\" {\n#include <vector>\n}\n"
+      "namespace N {\n#include <vector>\n}\n"
+      "int v =\n#include <vector>\n0;\n"
+      "#if UNKNOWN\n#include <vector>\n#endif\n";
+  auto m = source(text); PruningResult r;
+  const auto out = take(renderSource(m,&r));
+  take(renderingInvariant(m,&r,out.provenance.text));
+  CHECK_EQ(out.trimming.includeLines,1u);
+  CHECK_EQ(out.trimming.includeBytes,std::string("#include <vector> // drop\n").size());
+  CHECK(out.provenance.text.find("// first") != std::string::npos);
+  CHECK(out.provenance.text.find("// drop") == std::string::npos);
+  m.assumeIdempotentStandardHeaders = false;
+  const auto opted = take(renderSource(m,&r));
+  CHECK_EQ(opted.trimming.includeLines,0u);
+  CHECK(opted.provenance.text.find("// drop") != std::string::npos);
+  CHECK_EQ(take(renderSource(m)).trimming.includeLines,0u);
+}
+TEST(render_pp_first_eligible_include_stays) {
+  auto m = source("extern \"C++\" {\n#include <vector>\n}\nint boundary;\n#include <vector> // first global\n#include <vector> // later global\n");
+  PruneFamily f; const auto begin = m.text.find("int boundary;");
+  f.ranges = {{begin,begin+13}}; m.families.push_back(f);
+  PruningResult r; r.families.resize(1); r.families[0].kept = true;
+  const auto out = take(renderSource(m,&r));
+  take(renderingInvariant(m,&r,out.provenance.text));
+  CHECK_EQ(out.trimming.includeLines,1u);
+  CHECK(out.provenance.text.find("// first global") != std::string::npos);
+  CHECK(out.provenance.text.find("// later global") == std::string::npos);
+}
+TEST(render_pp_include_macro_scope_uncertainty) {
+  auto m = source("#include <vector>\nOPEN;\n#include <vector>\n");
+  PruneMacroExpansion e; e.offset = m.text.find("OPEN"); e.name = "OPEN";
+  m.expansions.push_back(e);
+  PruningResult r; CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+}
+TEST(render_pp_namespace_and_linkage_boundaries) {
+  for (const std::string block : {
+      "namespace a { int live; }", "namespace { int live; }",
+      "inline namespace a { int live; }", "namespace a::b { int live; }",
+      "namespace a::inline b { int live; }", "namespace a { namespace b { int live; } }",
+      "extern \"C\" { int live; }", "extern \"C++\" { int live; }",
+      "namespace a <% int live; %>", "extern \"C++\" <% int live; %>",
+      "namespace a::b {}", "extern \"C++\" {}"}) {
+    auto m = source("#include <vector>\n" + block + "\n#include <vector> // drop\n");
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,1u);
+    CHECK(out.provenance.text.find("// drop") == std::string::npos);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+  // Family-owned openings and initializer closes cannot certify a shell.
+  for (const std::string block : {
+      "alignas(8) int x{}", "auto x = [] { struct S { int live; }; }",
+      "extern \"C++\" { int live; }"}) {
+    auto m = source("#include <vector>\n" + block + "\n#include <vector>\n;\n");
+    const auto opening = m.text.find('{');
+    PruneFamily f; f.ranges = {{opening,opening+1}}; m.families = {f};
+    PruningResult r; r.families.resize(1); r.families[0].kept = true;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+  }
+}
+TEST(render_pp_balanced_macro_expansions_preserve_scope) {
+  for (const std::string replacement : {"do { (void)(x); } while (0)", "(<% int a<:1:>; %>)",
+                                        "# x", "%: x", "x ## x", "x %:%: x", "\"{)]\"", "", "{", ")", "<%", ":>", "([)]"}) {
+    const bool balanced = replacement != "{" && replacement != ")" && replacement != "<%" &&
+                          replacement != ":>" && replacement != "([)]" && replacement != "# x" &&
+                          replacement != "%: x" && replacement != "x ## x" && replacement != "x %:%: x";
+    for (int provenance = 0; provenance < 6; ++provenance) {
+      auto m = source("#include <vector>\n" +
+          (provenance == 2 ? "#define CHECK(x) " + replacement + "\n" :
+           provenance == 5 ? "#define CHECK " + replacement + "\n" : std::string{}) +
+          "int live(){ CHECK(1); return 0; }\n#include <vector>\n");
+      PruneFamily f; const auto start = m.text.find("int live");
+      f.ranges = {{start,m.text.find("\n#include",start)}}; m.families = {f};
+      PruneMacroExpansion e; e.offset = m.text.find("CHECK(1)"); e.name = "CHECK";
+      Macro macro; macro.functionLike = true; macro.parameters = {"x"}; macro.replacement = replacement;
+      MacroFact fact{MacroState::known,macro,{}};
+      if (provenance == 0) e.parse = fact;
+      if (provenance == 1) e.judge = fact;
+      if (provenance == 3) m.judgeInitial["CHECK"] = fact;
+      if (provenance == 4) { e.parse = fact; e.judge = fact; }
+      m.expansions = {e};
+      PruningResult r; r.families.resize(1); r.families[0].kept = true;
+      const auto out = take(renderSource(m,&r));
+      CHECK_EQ(out.trimming.includeLines,balanced && provenance != 0 && provenance != 1 ? 1u : 0u);
+      take(renderingInvariant(m,&r,out.provenance.text));
+    }
+  }
+}
+TEST(render_pp_macro_substitution_review_examples_stay) {
+  // These are scope-certification regressions, independent of library include
+  // guards or whether a particular library accepts inclusion inside a namespace.
+  struct Example { std::string definition, name, invocation, tail, replacement; bool variadic = false; };
+  for (const Example example : {
+      Example{"#define TAKE(a,b) a\n", "TAKE", "TAKE(namespace outer {, })\n", "}\n", "a"},
+      Example{"#define TAKE\\\n(a,b) a\n", "TAKE", "TAKE(namespace outer {, })\n", "}\n", "a"},
+      Example{"#define DISCARD(...)\n", "DISCARD", "namespace outer {\nDISCARD(})\n", "}\n", "", true},
+      Example{"#define CAT(a,b) a ## b\n", "CAT", "namespace outer CAT(<, %)\n", "CAT(%, >)\n", "a ## b"},
+      Example{"#define CAT(a,b) a %:%: b\n", "CAT", "namespace outer CAT(<, %)\n", "CAT(%, >)\n", "a %:%: b"}}) {
+    for (bool firstInside : {false,true}) for (bool outputDefinition : {false,true}) {
+      auto m = source(example.definition + (firstInside ? "" : "#include <vector>\n") + example.invocation +
+          "namespace marker { int keep = 0; }\n#include <vector> // inside outer\n" + example.tail +
+          "namespace after { int keep = 0; }\n#include <vector> // after outer\n"
+          "int main() { return outer::marker::keep; }\n");
+      PruneMacroExpansion e; e.name = example.name;
+      e.offset = m.text.find(example.name + "(",example.definition.size());
+      if (!outputDefinition) {
+        Macro macro; macro.functionLike = true; macro.variadic = example.variadic;
+        macro.parameters = example.variadic ? std::vector<std::string>{} : std::vector<std::string>{"a","b"};
+        macro.replacement = example.replacement;
+        e.parse = e.judge = {MacroState::known,macro,{FactOrigin::source}};
+      }
+      m.expansions = {e};
+      if (example.name == "CAT") { e.offset = m.text.find("CAT(%, >)"); m.expansions.push_back(e); }
+      PruningResult r;
+      const auto out = take(renderSource(m,&r));
+      CHECK_EQ(out.trimming.includeLines,0u);
+      CHECK(out.provenance.text.find("// inside outer") != std::string::npos);
+      CHECK(out.provenance.text.find("// after outer") != std::string::npos);
+      take(renderingInvariant(m,&r,out.provenance.text));
+    }
+  }
+}
+TEST(render_pp_function_macro_source_arguments_and_extent) {
+  for (const std::string invocation : {
+      "CHECK((1,2), <% int x<:1:>; %>)", "CHECK\n(\n(1,2),\n<% int x<:1:>; %>\n)", "CHECK()",
+      "CHECK({,})", "CHECK(<%,%>)", "CHECK([,])", "CHECK((], [))", "CHECK(}", "CHECK", "ALIAS(1,2)",
+      "CHECK(\n#define VALUE 1\n1,2)"}) {
+    const bool safe = invocation.starts_with("CHECK((1,2)") || invocation.starts_with("CHECK\n") || invocation == "CHECK()";
+    auto m = source("#include <vector>\n" + invocation +
+        "\nnamespace marker { int keep; }\n#include <vector> // candidate\n");
+    PruneMacroExpansion e; e.name = "CHECK"; e.offset = m.text.find(invocation);
+    Macro macro; macro.functionLike = true; macro.variadic = true; macro.replacement = "";
+    e.parse = e.judge = {MacroState::known,macro,{}}; m.expansions = {e};
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,safe ? 1u : 0u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_nested_expansions_all_need_scope_proof) {
+  for (int barrier = 0; barrier < 4; ++barrier) for (bool nestedFirst : {false,true}) {
+    auto m = source("#include <vector>\nOUTER(1)\nnamespace marker { int keep; }\n#include <vector>\n");
+    PruneMacroExpansion outer; outer.name = "OUTER"; outer.offset = m.text.find("OUTER");
+    Macro macro; macro.functionLike = true; macro.parameters = {"x"}; macro.replacement = "x";
+    outer.parse = outer.judge = {MacroState::known,macro,{}};
+    auto nested = outer; nested.name = "INNER";
+    if (barrier == 0) nested.parse.definition->replacement = "# x";
+    if (barrier == 1) nested.parse.definition->replacement = "x ## x";
+    if (barrier == 2) nested.judge = {};
+    // barrier 3 has a balanced function-like replacement but no provable
+    // INNER source invocation at OUTER's offset.
+    m.expansions = nestedFirst ? std::vector{nested,outer} : std::vector{outer,nested};
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,0u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_unknown_environment_cannot_use_known_side_or_fallback) {
+  for (bool unknownJudge : {false,true}) for (auto state : {MacroState::unknown,MacroState::definedUnknown,MacroState::undefined}) {
+    auto m = source("#define OPEN\n#include <vector>\nOPEN\n"
+        "namespace marker { int keep; }\n#include <vector>\n");
+    Macro macro; macro.replacement = "";
+    const MacroFact known{MacroState::known,macro,{FactOrigin::source}};
+    PruneMacroExpansion e; e.name = "OPEN"; e.offset = m.text.find("\nOPEN\n")+1;
+    e.parse = e.judge = known;
+    (unknownJudge ? e.judge : e.parse) = {state,{}, {}};
+    m.judgeInitial["OPEN"] = known; m.expansions = {e};
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,0u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_ineligible_first_include_does_not_seed_seen) {
+  for (const std::string prefix : {"namespace outer {\n#include <vector> // ineligible\n}\n",
+                                  "int partial =\n#include <vector> // ineligible\n0;\n"}) {
+    auto m = source(prefix + "int boundary;\n#include <vector> // first eligible\n#include <vector> // drop\n");
+    PruneFamily f; const auto begin = m.text.find("int boundary;");
+    f.ranges = {{begin,begin+13}}; m.families = {f};
+    PruningResult r; r.families.resize(1); r.families[0].kept = true;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,1u);
+    CHECK(out.provenance.text.find("// ineligible") != std::string::npos);
+    CHECK(out.provenance.text.find("// first eligible") != std::string::npos);
+    CHECK(out.provenance.text.find("// drop") == std::string::npos);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_macro_unknown_nested_and_conditional_barriers) {
+  for (int barrier = 0; barrier < 5; ++barrier) {
+    auto m = source("#include <vector>\nint live(){ CHECK(1); return 0; }\n" +
+        std::string(barrier == 4 ? "#if 1\n#endif\n" : "") + "#include <vector>\n");
+    PruneFamily f; const auto start = m.text.find("int live");
+    f.ranges = {{start,m.text.find("\n",start)}}; m.families = {f};
+    PruneMacroExpansion e; e.offset = m.text.find("CHECK(1)"); e.name = "CHECK";
+    Macro macro; macro.replacement = "(1)";
+    e.parse = e.judge = {MacroState::known,macro,{}};
+    m.expansions = {e};
+    if (barrier == 0) m.expansions[0].parse = {}; // Unknown definition.
+    if (barrier == 1) { // Nested expansion at the same invocation offset.
+      e.name = "OPEN"; e.parse.definition->replacement = "{"; m.expansions.push_back(e);
+    }
+    if (barrier == 2) { e.judge = e.parse; e.judge.definition->replacement = ")"; m.expansions = {e}; }
+    if (barrier == 3) { // An object-like definition in the judge profile is sufficient.
+      m.expansions[0].parse = {};
+      m.expansions[0].judge = {};
+      m.judgeInitial["CHECK"] = {MacroState::known,macro,{}};
+      m.judgeInitial["CHECK"].definition->functionLike = false;
+    }
+    PruningResult r; r.families.resize(1); r.families[0].kept = true;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,barrier == 3 ? 1u : 0u);
+  }
+}
+TEST(render_pp_guard_provenance_and_observers) {
+  const std::string name = "DISTILL_ONCE_0123456789abcdef";
+  for (const std::string& use : std::vector<std::string>{"", "#ifdef " + name + "\n#endif\n", "#if defined(" + name + ")\n#endif\n",
+                               "#undef " + name + "\n", "#define OTHER " + name + "\n", "int " + name + ";\n"}) {
+    auto m = source("#line 2 \"a.cpp\"\n#define " + name + "\n#line 4 \"a.cpp\"\n" + use + "int main(){}\n");
+    m.lineMap[0].reset(); m.lineMap[1].reset(); m.lineMap[2].reset();
+    PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    take(renderingInvariant(m,&r,out.provenance.text));
+    CHECK_EQ(out.trimming.guardLines,use.empty() ? 1u : 0u);
+    CHECK_EQ(out.trimming.guardBytes,use.empty() ? 38u : 0u);
+    m.assumeUnobservedGuardMacros = false;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.guardLines,0u);
+    m.assumeUnobservedGuardMacros = true; m.lineMap[1] = SourceLocation{"a.cpp",2};
+    CHECK_EQ(take(renderSource(m,&r)).trimming.guardLines,0u);
+    CHECK_EQ(take(renderSource(m)).trimming.guardLines,0u);
+  }
+}
+TEST(render_pp_guard_observer_removed_with_family) {
+  const std::string name = "DISTILL_ONCE_0123456789abcdef";
+  auto m = source("#line 2 \"a.cpp\"\n#define " + name + "\n#line 4 \"a.cpp\"\nint dead(){return " + name + ";}\nint main(){}\n");
+  m.lineMap[0].reset(); m.lineMap[1].reset(); m.lineMap[2].reset();
+  const auto start = m.text.find("int dead");
+  const auto out = render(m,{{start,m.text.find("int main")}});
+  CHECK_EQ(out.trimming.guardLines,1u);
+}
+
+TEST(render_pp_requires_authoritative_family_boundary) {
+  for (const std::string declaration : {"alignas(8) int x{};", "template<class T> void f() {}",
+                                       "auto lambda = []() {};", "[[deprecated(\"x\")]] int x{};",
+                                       "template<class T> constexpr bool value = requires(T t) { t(); };"}) {
+    auto m = source("#include <cstddef>\n" + declaration + "\n#include <cstddef>\n");
+    PruningResult r;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+    PruneFamily f; const auto begin = m.text.find(declaration);
+    f.ranges = {{begin,begin+declaration.size()}}; m.families.push_back(f);
+    r.families.resize(1); r.families[0].kept = true;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,1u);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}
+TEST(render_pp_artifact_wide_macro_barriers) {
+  for (const auto* barrier : {"#define __request\n", "#undef _Request\n", "#define request__detail\n",
+                            "#pragma push_macro(\"request\")\n", "#pragma pop_macro(\"request\")\n",
+                            "#define SAVE _Pragma(\"pack(1)\")\n"}) {
+    auto m = source(std::string("#include <cstddef>\n#include <cstddef>\n") + barrier);
+    PruningResult r;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.includeLines,0u);
+  }
+  // A removed ordinary use of _Pragma does not disable the surviving artifact.
+  auto m = source("#include <cstddef>\n#include <cstddef>\nvoid dead(){_Pragma(\"pack(1)\")}\n");
+  CHECK_EQ(render(m,{{m.text.find("void dead"),m.text.size()}}).trimming.includeLines,1u);
+}
+TEST(render_pp_guard_conditional_and_pragma_barriers) {
+  for (const auto* barrier : {"#if OTHER\n#endif\n", "#ifdef OTHER\n#endif\n", "#ifndef OTHER\n#endif\n",
+                            "#if 0\n#elif OTHER\n#endif\n", "#if 0\n#elifdef OTHER\n#endif\n",
+                            "#if 0\n#elifndef OTHER\n#endif\n", "#pragma push_macro(\"DISTILL_ONCE_0123456789abcdef\")\n",
+                            "#pragma pop_macro(\"DISTILL_ONCE_0123456789abcdef\")\n", "#define SAVE _Pragma(\"pack(1)\")\n"}) {
+    auto m = source(std::string("#line 1 \"a.cpp\"\n#define DISTILL_ONCE_0123456789abcdef\n") + barrier);
+    m.lineMap[0].reset(); m.lineMap[1].reset();
+    PruningResult r;
+    CHECK_EQ(take(renderSource(m,&r)).trimming.guardLines,0u);
+  }
+}
+TEST(render_pp_trimming_cannot_exempt_invalid_prior_directive_deletion) {
+  auto m = source("#line 1 \"a.cpp\"\n#define DISTILL_ONCE_0123456789abcdef\nint main(){}\n");
+  m.lineMap[0].reset(); m.lineMap[1].reset();
+  const auto begin = m.text.find("#define"), end = m.text.find("int main");
+  for (const auto range : {EditRange{begin,end}, EditRange{begin,begin+1}, EditRange{end-1,end}}) {
+    PruneFamily f; f.ranges = {range}; m.families = {f};
+    PruningResult r; r.families.resize(1);
+    const auto out = renderSource(m,&r);
+    CHECK(!out.ok());
+    if (!out.ok()) CHECK(out.error().message.find("deletion touches source directive #define") != std::string::npos);
+  }
+}
+TEST(render_pp_partial_header_review_examples_stay) {
+  for (const std::string text : {
+      "#define __need_size_t\n#include <stddef.h>\n#include <stddef.h>\n"
+      "int main(){ptrdiff_t n = 0; return n;}\n",
+      "#define __need_size_t\n#pragma push_macro(\"__need_size_t\")\n#include <stddef.h>\n"
+      "#pragma pop_macro(\"__need_size_t\")\n#include <stddef.h>\n"
+      "#ifdef __need_size_t\nint main(){return 1;}\n#else\nint main(){return 0;}\n#endif\n"}) {
+    auto m = source(text); PruningResult r;
+    const auto out = take(renderSource(m,&r));
+    CHECK_EQ(out.trimming.includeLines,0u);
+    const auto first = out.provenance.text.find("#include <stddef.h>");
+    CHECK(first != std::string::npos);
+    CHECK(out.provenance.text.find("#include <stddef.h>",first+1) != std::string::npos);
+    take(renderingInvariant(m,&r,out.provenance.text));
+  }
+}

@@ -1,18 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "core/render/render.h"
+#include "core/names/names.h"
 #include "core/validate/preprocess.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <span>
 
 namespace distill {
 namespace {
 template<class T> T take(Result<T> r) { if (!r.ok()) throw r.error(); return std::move(r.value()); }
 bool contains(EditRange a, EditRange b) { return a.begin <= b.begin && b.end <= a.end; }
+bool balancedDelimiters(std::span<const Token> tokens) {
+  std::vector<char> stack;
+  for (const auto& t : tokens) {
+    const auto& v = t.text;
+    if (v == "(") stack.push_back(')');
+    else if (v == "[" || v == "<:") stack.push_back(']');
+    else if (v == "{" || v == "<%") stack.push_back('}');
+    else if (v == ")" || v == "]" || v == ":>" || v == "}" || v == "%>") {
+      const char close = v == ":>" ? ']' : v == "%>" ? '}' : v.front();
+      if (stack.empty() || stack.back() != close) return false;
+      stack.pop_back();
+    }
+  }
+  return stack.empty();
+}
 struct Input {
   const PruningModel& model;
   ScanResult scan;
-  std::vector<EditRange> deletions, markers;
+  std::vector<EditRange> deletions, markers, trimmedDirectives;
+  TrimmingStats trimming;
   std::vector<SourceLocation> locations;
   std::map<std::size_t, SourceLocation> markerAt; // Parsed generated markers by begin offset.
   Input(const PruningModel& m, const PruningResult* r) : model(m), scan(take(scanDirectives(m.text))) {
@@ -26,6 +44,12 @@ struct Input {
     joinDeletions();
     if (r) removeEmptyShells();
     joinDeletions();
+    // Validate declaration/shell ownership before trimming can exempt directives.
+    for (const auto& l : scan.lines)
+      if (l.directive && !generatedMarker(l) && !touching({l.begin,l.end}).empty())
+        throw Error{"deletion touches source directive #" + l.directive->name + " at line " + std::to_string(l.firstLine)};
+    if (r) trimPreprocessor();
+    joinDeletions();
     std::map<std::size_t, std::string_view> directives; // Other directives by physical start.
     for (const auto& l : scan.lines) {
       const bool generated = generatedMarker(l);
@@ -33,7 +57,8 @@ struct Input {
       else if (l.directive) directives[l.begin] = l.directive->name;
       for (const auto& t : l.tokens) for (auto d : touching({t.begin,t.end}))
         if (!contains(d,{t.begin,t.end})) throw Error{"deletion splits token '" + t.text + "' at byte " + std::to_string(t.begin)};
-      if (l.directive && !generated && !touching({l.begin,l.end}).empty())
+      if (l.directive && !generated && !touching({l.begin,l.end}).empty() &&
+          std::find(trimmedDirectives.begin(),trimmedDirectives.end(),EditRange{l.begin,l.end}) == trimmedDirectives.end())
         throw Error{"deletion touches source directive #" + l.directive->name + " at line " + std::to_string(l.firstLine)};
     }
     for (auto c : scan.comments) for (auto d : touching({c.begin,c.end}))
@@ -74,6 +99,237 @@ struct Input {
       else joined.push_back(d);
     }
     deletions = std::move(joined);
+  }
+  void trimPreprocessor() {
+    if (!model.assumeIdempotentStandardHeaders && !model.assumeUnobservedGuardMacros) return;
+    // Plan whole logical-line deletions in immutable flat coordinates, after
+    // declaration/shell deletion. Never apply this to raw or flat rendering.
+    auto drop = [&](const LogicalLine& l, bool include) {
+      trimmedDirectives.push_back({l.begin,l.end});
+      const auto lines = l.lastLine-l.firstLine+1, bytes = l.end-l.begin;
+      if (include) { trimming.includeLines += lines; trimming.includeBytes += bytes; }
+      else { trimming.guardLines += lines; trimming.guardBytes += bytes; }
+    };
+    std::map<std::size_t,std::vector<const PruneMacroExpansion*>> expansions;
+    for (const auto& e : model.expansions)
+      if (!deleted({e.offset,e.offset+1})) expansions[e.offset].push_back(&e);
+    struct ScopeDefinition { bool safe = false, functionLike = false; };
+    std::map<std::string,ScopeDefinition,std::less<>> definitions;
+    std::map<std::string,bool,std::less<>> safeReplacements;
+    auto safeReplacement = [](std::span<const Token> tokens) {
+      return balancedDelimiters(tokens) && std::none_of(tokens.begin(),tokens.end(),[](const auto& t) {
+        return t.text == "#" || t.text == "##" || t.text == "%:" || t.text == "%:%:";
+      });
+    };
+    auto scopeFact = [&](const MacroFact& fact) -> std::optional<ScopeDefinition> {
+      if (fact.state != MacroState::known || !fact.definition) return {};
+      const auto& replacement = fact.definition->replacement;
+      if (auto it = safeReplacements.find(replacement); it != safeReplacements.end())
+        return ScopeDefinition{it->second,fact.definition->functionLike};
+      // A leading # or %: belongs to the replacement, not a directive.
+      const auto parsed = scanDirectives("0 " + replacement);
+      std::vector<Token> tokens;
+      if (parsed.ok()) for (const auto& line : parsed.value().lines)
+        tokens.insert(tokens.end(),line.tokens.begin(),line.tokens.end());
+      const bool safe = safeReplacements[replacement] = parsed.ok() && safeReplacement(tokens);
+      return ScopeDefinition{safe,fact.definition->functionLike};
+    };
+    // Keep source invocation extents across logical lines. Directives and
+    // deleted tokens cannot supply evidence for a surviving invocation.
+    std::vector<Token> sourceTokens;
+    std::set<std::size_t> directiveTokens;
+    for (const auto& l : scan.lines) for (const auto& t : l.tokens) {
+      sourceTokens.push_back(t);
+      if (l.directive) directiveTokens.insert(t.begin);
+    }
+    auto balancedInvocation = [&](const PruneMacroExpansion& e) {
+      auto it = std::lower_bound(sourceTokens.begin(),sourceTokens.end(),e.offset,
+          [](const auto& t,auto offset) { return t.begin < offset; });
+      // Rescanned function-like names need a source spelling too. An alias or
+      // synthesized name at this offset does not prove its consumed extent.
+      if (it == sourceTokens.end() || it->begin != e.offset || it->text != e.name) return false;
+      const auto begin = std::size_t(it-sourceTokens.begin());
+      if (begin+1 == sourceTokens.size() || sourceTokens[begin+1].text != "(") return false;
+      std::size_t depth = 0, argument = begin+2;
+      for (auto i = begin+1; i < sourceTokens.size(); ++i) {
+        const auto& t = sourceTokens[i];
+        if (directiveTokens.contains(t.begin) || deleted({t.begin,t.end})) return false;
+        if (t.text == "(") ++depth;
+        else if (t.text == ")") {
+          if (!--depth)
+            return balancedDelimiters(std::span(sourceTokens).subspan(argument,i-argument)) &&
+                balancedDelimiters(std::span(sourceTokens).subspan(begin,i-begin+1));
+        } else if (t.text == "," && depth == 1) {
+          // Preprocessing arguments split on commas outside parentheses;
+          // braces and brackets do not protect a comma from that split.
+          if (!balancedDelimiters(std::span(sourceTokens).subspan(argument,i-argument))) return false;
+          argument = i+1;
+        }
+      }
+      return false;
+    };
+    auto scopePreservingExpansion = [&](const PruneMacroExpansion& e) {
+      const auto parse = scopeFact(e.parse), judge = scopeFact(e.judge);
+      auto safe = [&](const ScopeDefinition& d) {
+        return d.safe && (!d.functionLike || balancedInvocation(e));
+      };
+      // Expansion facts describe separate parse and judge environments. If
+      // either is populated, require both; a fallback cannot hide an unknown.
+      if (e.parse.state != MacroState::unknown || e.judge.state != MacroState::unknown ||
+          !e.parse.provenance.empty() || !e.judge.provenance.empty())
+        return parse && judge && safe(*parse) && safe(*judge);
+      if (auto it = definitions.find(e.name); it != definitions.end()) return safe(it->second);
+      if (auto it = model.judgeInitial.find(e.name); it != model.judgeInitial.end())
+        if (const auto fact = scopeFact(it->second)) return safe(*fact);
+      return false;
+    };
+    bool reservedMacroWrite = false, macroPragma = false, survivingConditional = false;
+    for (const auto& l : scan.lines) {
+      if (l.directive) {
+        const auto& d = *l.directive;
+        survivingConditional |= d.name == "if" || d.name == "ifdef" || d.name == "ifndef" ||
+            d.name == "elif" || d.name == "elifdef" || d.name == "elifndef";
+        if ((d.name == "define" || d.name == "undef") && !d.tokens.empty()) {
+          const auto& name = d.tokens.front().text;
+          reservedMacroWrite |= isReserved(name);
+        }
+        macroPragma |= d.name == "pragma" && !d.tokens.empty() &&
+            (d.tokens.front().text == "push_macro" || d.tokens.front().text == "pop_macro");
+      }
+      for (const auto& t : l.tokens)
+        if (!deleted({t.begin,t.end}) && t.kind == TokenKind::identifier && t.text == "_Pragma") macroPragma = true;
+    }
+    std::set<std::string> seen;
+    std::size_t braces = 0, parens = 0, brackets = 0;
+    bool uncertain = false;
+    const Token* previous = nullptr;
+    enum class BlockKind { other, namespaceBlock, linkageBlock };
+    std::vector<BlockKind> blocks; // One entry per surviving brace depth.
+    enum class Header { none, namespaceName, namespaceTail, nestedName, externLanguage, linkageBrace };
+    Header header = Header::none;
+    bool previousShellClose = false;
+    auto outsideFamilies = [&](const Token& t) {
+      return std::none_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+        return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin < t.end && t.begin < r.end; });
+      });
+    };
+    // Ranges may own trailing whitespace. Since no surviving ordinary token
+    // intervenes, this must be the range's final surviving token.
+    auto familyBoundary = [&](std::size_t begin) {
+      return !previous || previousShellClose || std::any_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+        return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) {
+          return r.begin <= previous->begin && previous->end <= r.end && r.end <= begin;
+        });
+      });
+    };
+    for (const auto& l : scan.lines) {
+      if (generatedMarker(l)) continue;
+      if (l.directive) {
+        const auto& d = *l.directive;
+        if ((d.name == "define" || d.name == "undef") && !d.tokens.empty()) {
+          const auto& ts = d.tokens;
+          std::size_t body = 1;
+          bool functionLike = false, parametersClosed = true;
+          if (d.name == "define" && ts.size() > 1 && ts[1].text == "(") {
+            // Adjacency is after phase-2 splicing, not in physical offsets.
+            const auto gap = scanDirectives(std::string_view(model.text).substr(ts[0].end,ts[1].begin-ts[0].end));
+            functionLike = gap.ok() && std::all_of(gap.value().lines.begin(),gap.value().lines.end(),
+                [](const auto& line) { return line.text.empty(); });
+          }
+          if (functionLike) {
+            while (body < ts.size() && ts[body].text != ")") ++body;
+            parametersClosed = body < ts.size();
+            if (parametersClosed) ++body;
+          }
+          definitions[ts[0].text] = {d.name == "define" && parametersClosed && safeReplacement(std::span(ts).subspan(body)),functionLike};
+        }
+        if (d.name == "if" || d.name == "ifdef" || d.name == "ifndef" ||
+            d.name == "elif" || d.name == "elifdef" || d.name == "elifndef")
+          // Alternatives may open different scopes. Never infer scope after
+          // a surviving conditional from just the worker's active parse.
+          uncertain = true;
+        if (model.assumeIdempotentStandardHeaders && !reservedMacroWrite && !macroPragma && !uncertain &&
+            !braces && !parens && !brackets && d.name == "include" &&
+            d.tokens.size() == 1 && d.tokens[0].kind == TokenKind::header && familyBoundary(l.begin) &&
+            std::none_of(model.families.begin(),model.families.end(),[&](const auto& f) {
+              return std::any_of(f.ranges.begin(),f.ranges.end(),[&](auto r) { return r.begin < l.end && l.begin < r.end; });
+            })) {
+          // The first occurrence must pass exactly the same scope and family
+          // boundary checks as a removal; an ineligible include never seeds seen.
+          const auto& spelling = d.tokens[0].text;
+          if (spelling.starts_with('<') && spelling.ends_with('>')) {
+            const auto h = std::string_view(spelling).substr(1,spelling.size()-2);
+            // C .h headers can implement partial-inclusion protocols. A1 also
+            // lists extensions; only simple C++ library names qualify here.
+            if (h != "cassert" && !h.ends_with(".h") && h.find('/') == h.npos && isStandardHeader(h) &&
+                !seen.insert(spelling).second) drop(l,true);
+          }
+        }
+        continue;
+      }
+      // Balance alone cannot prove substitution preserves source nesting:
+      // require balanced arguments and consumed invocation tokens too, forbid
+      // stringification/pasting, and check every nested/rescanned expansion.
+      for (auto it = expansions.lower_bound(l.begin); it != expansions.end() && it->first < l.end; ++it)
+        for (const auto* e : it->second) if (!scopePreservingExpansion(*e)) uncertain = true;
+      for (const auto& t : l.tokens) if (!deleted({t.begin,t.end})) {
+        const auto& v = t.text;
+        BlockKind opening = BlockKind::other;
+        // Recognize the namespace/linkage grammar as tokens arrive. Only an
+        // opening at depth zero outside declaration ownership certifies a close.
+        if (!braces && !parens && !brackets &&
+            (header != Header::none || v == "namespace" || v == "extern") && outsideFamilies(t)) {
+          const auto pending = header;
+          header = Header::none;
+          if (pending == Header::namespaceName && (v == "{" || v == "<%")) opening = BlockKind::namespaceBlock;
+          else if ((pending == Header::namespaceName || pending == Header::nestedName) && t.kind == TokenKind::identifier && v != "inline") header = Header::namespaceTail;
+          else if (pending == Header::namespaceTail && v == "::") header = Header::nestedName;
+          else if (pending == Header::nestedName && v == "inline") header = Header::nestedName;
+          else if (pending == Header::namespaceTail && (v == "{" || v == "<%")) opening = BlockKind::namespaceBlock;
+          else if (pending == Header::externLanguage && (v == "\"C\"" || v == "\"C++\"")) header = Header::linkageBrace;
+          else if (pending == Header::linkageBrace && (v == "{" || v == "<%")) opening = BlockKind::linkageBlock;
+          else if (v == "namespace" && (!previous || previous->text != "using")) header = Header::namespaceName;
+          else if (v == "extern") header = Header::externLanguage;
+        } else header = Header::none;
+        previousShellClose = false;
+        // Nesting is an extra veto, never evidence of a declaration boundary.
+        if (v == "(") ++parens;
+        else if (v == ")" && parens) --parens;
+        else if (v == "[" || v == "<:") ++brackets;
+        else if ((v == "]" || v == ":>") && brackets) --brackets;
+        else if (v == "{" || v == "<%") { ++braces; blocks.push_back(opening); }
+        else if ((v == "}" || v == "%>") && braces) {
+          --braces;
+          previousShellClose = !braces && blocks.back() != BlockKind::other;
+          blocks.pop_back();
+        }
+        previous = &t;
+      }
+    }
+    // Count every surviving identifier, including all directive operands and
+    // macro replacements. Pragma strings are excluded artifact-wide above.
+    if (model.assumeUnobservedGuardMacros && !survivingConditional && !macroPragma) {
+      constexpr std::string_view guardPrefix = "DISTILL_ONCE_";
+      std::map<std::string,std::size_t,std::less<>> uses;
+      for (const auto& l : scan.lines)
+        if (std::find(trimmedDirectives.begin(),trimmedDirectives.end(),EditRange{l.begin,l.end}) == trimmedDirectives.end())
+          for (const auto& t : l.tokens) if (t.kind == TokenKind::identifier && t.text.starts_with(guardPrefix) && !deleted({t.begin,t.end})) ++uses[t.text];
+      // Token pasting can observe a guard without spelling its complete name
+      // in the source. Keep observed surviving expansions as well.
+      for (const auto& e : model.expansions)
+        if (e.name.starts_with(guardPrefix) && !deleted({e.offset,e.offset+1})) ++uses[e.name];
+      for (const auto& l : scan.lines) if (l.directive) {
+        const auto& d = *l.directive;
+        if (d.name == "define" && d.tokens.size() == 1) {
+          const auto& name = d.tokens[0].text;
+          const bool generated = l.lastLine <= model.lineMap.size() &&
+              std::all_of(model.lineMap.begin()+l.firstLine-1,model.lineMap.begin()+l.lastLine,[](const auto& at) { return !at; });
+          if (generated && name.starts_with(guardPrefix) && name.size() == guardPrefix.size()+16 &&
+              name.find_first_not_of("0123456789abcdef",guardPrefix.size()) == name.npos && uses[name] == 1) drop(l,false);
+        }
+      }
+    }
+    deletions.insert(deletions.end(),trimmedDirectives.begin(),trimmedDirectives.end());
   }
   void removeEmptyShells() {
     // Shells do not participate in retention. Ignore comments/literals as
@@ -296,7 +552,7 @@ struct InvariantToken {
 };
 std::vector<InvariantToken> intended(const Input& in) {
   std::vector<InvariantToken> out;
-  for (const auto& l : in.scan.lines) if (!in.marker(l)) {
+  for (const auto& l : in.scan.lines) if (!in.marker(l) && !in.deleted({l.begin,l.end})) {
     // A directive's internal physical lines can contract when its comments
     // become spaces. Its logical start and complete token sequence must stay.
     const auto at = in.locations.at(l.firstLine-1);
@@ -318,7 +574,7 @@ std::optional<std::size_t> RenderedSource::mapOffset(std::size_t p) const {
 Result<RenderedSource> renderSource(const PruningModel& m, const PruningResult* retention, bool strip) {
   try {
     Input in(m,retention);
-    RenderedSource out; out.provenance = m;
+    RenderedSource out; out.provenance = m; out.trimming = in.trimming;
     auto& p = out.provenance;
     p.text.clear(); p.lineMap.clear(); p.generatedMarkers.clear(); p.sourceDirectives.clear();
     p.keepOffsets.clear(); p.annotations.clear(); p.expansions.clear();
