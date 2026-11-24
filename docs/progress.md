@@ -685,3 +685,10 @@ and `-j2`, with hard build/test timeouts. GCC compilation exceeded the container
 memory limit before switching the host compiler. The downloaded SDK was deleted
 after verification; the CLI and Clang regression also run after its deletion.
 The branch remains uncommitted on the latest `origin/main`.
+
+## A13 unreferenced-overloads: shelved (2026-11-24)
+
+Per-declaration rule-1 pruning (PR #113) was closed unmerged. Review fixes cut
+the atl gain from −1.81% to −0.26% nlm (guides only, 11.5 KB). Five review rounds
+kept finding failed-check holes. Details and numbers:
+`docs/reviews/2026-11-23-unreferenced-overloads.md`. D3e rule 1 is unchanged.
