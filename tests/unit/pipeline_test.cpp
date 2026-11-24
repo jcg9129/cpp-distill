@@ -33,6 +33,9 @@ struct Fixture {
       if (spec.argv.size() == 3 && spec.argv[1] == "--internal-prune") {
         auto m = take(parsePruningModel(test::read(pathFromUtf8(spec.argv[2]))));
         if (m.shortenNames) m.libraryMemberNamesComputed = fault != "shortenNames-library";
+        CHECK_EQ(m.assumeIdempotentStandardHeaders,options.assumeIdempotentStandardHeaders);
+        CHECK_EQ(m.assumeUnobservedGuardMacros,options.assumeUnobservedGuardMacros);
+        if (built.contains("compact")) CHECK_EQ(m.text,built.at("compact"));
         if (fault == "uint64") {
           // Model the real compiler-builtin expansion behind UINT64_C. This
           // must reach retention's predefined-macro judge-fact comparison.
@@ -536,4 +539,25 @@ TEST(pipeline_shortenNames_implied_flags_report_and_checked_fallbacks) {
   const auto r = f.run(); CHECK_EQ(r.bytes,f.built.at("compact"));
   CHECK(r.bytes.find("longLocal") != r.bytes.npos); CHECK(!r.assumptions.contains("A15"));
   CHECK(r.shortenNames.find("A15 library-spelled-names disabled") != r.shortenNames.npos);
+}
+
+TEST(pipeline_shortening_runs_after_trimming_and_compaction) {
+  for (unsigned disabled = 0; disabled < 8; ++disabled) {
+    Fixture f("#include <vector>\n#include \"once.h\"\n#include <vector>\nint main(){int longLocal=5;return longLocal-5;}\n");
+    f.temp.write("once.h","#pragma once\n");
+    f.options.shortenNames = true;
+    f.options.assumeIdempotentStandardHeaders = !(disabled & 1);
+    f.options.assumeUnobservedGuardMacros = !(disabled & 2);
+    f.options.assumeLibrarySpelledNames = !(disabled & 4);
+    const auto r = f.run();
+    CHECK_EQ(r.artifact,"pruned"); CHECK_EQ(r.compactWhitespace,"compacted");
+    CHECK_EQ(r.runtime,"compared 1 samples");
+    CHECK_EQ(r.retention->trimming.includeLines,(disabled & 1) ? 0u : 1u);
+    CHECK_EQ(r.retention->trimming.guardLines,(disabled & 2) ? 0u : 1u);
+    CHECK_EQ(r.bytes.find("#define DISTILL_ONCE_") != r.bytes.npos,bool(disabled & 2));
+    CHECK_EQ(r.bytes.find("longLocal") != r.bytes.npos,bool(disabled & 4));
+    CHECK_EQ(r.assumptions.contains("A14"),!(disabled & 2));
+    CHECK_EQ(r.assumptions.contains("A15"),!(disabled & 4));
+    CHECK_EQ(r.bytes,f.built.at((disabled & 4) ? "compact" : "shortened"));
+  }
 }

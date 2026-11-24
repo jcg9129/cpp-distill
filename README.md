@@ -335,7 +335,8 @@ Identifiers up to four characters and words containing digits (`uint32`,
 characters; `Graph` stays readable as `Graph`. The dictionary lives in
 [`data/names/abbreviations.txt`](data/names/abbreviations.txt). Collisions lengthen
 word prefixes, then try a digit suffix. Keywords and literal encoding/raw prefixes
-are never allocated. The compact line layout is preserved. Name-observing builtins
+are never allocated. Shortening runs after preprocessor trimming, on the checked compact artifact;
+the compact line layout is preserved. Name-observing builtins
 and any surviving conditional directives refuse shortening, since inactive macro
 arguments have no expansion-based exclusion audit.
 A15 assumes the library spelling inventory covers names the judge may use;

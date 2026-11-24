@@ -65,11 +65,15 @@ TEST(prune_without_instantiation_effects_identity_and_report) {
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-12 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-13 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
-  CHECK(!parsePruningModel("DISTILL-PRUNE-11 ").ok());
+  for (const auto version : {"10", "11", "12"}) {
+    auto previous = assumed;
+    previous.replace(0,16,std::string("DISTILL-PRUNE-") + version);
+    CHECK(!parsePruningModel(previous).ok());
+  }
   const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
   CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
   CHECK_EQ(r.policy,"D3e, without instantiation-effects");
@@ -442,18 +446,18 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
   CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
-  CHECK(!parsePruningModel("DISTILL-PRUNE-12").ok());
+  CHECK(!parsePruningModel("DISTILL-PRUNE-13").ok());
   b.m.families[0].edges = {100}; CHECK(!computeRetention(b.m).ok()); b.m.families[0].edges.clear();
   b.m.families[1].ranges = b.m.families[0].ranges; CHECK(!computeRetention(b.m).ok());
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-12 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-13 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-12 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-13 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-12 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-13 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

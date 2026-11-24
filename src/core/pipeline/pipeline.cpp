@@ -277,6 +277,8 @@ struct Pipeline {
       input.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
       input.assumeInstantiationEffects = options.assumeInstantiationEffects;
       input.assumeUnspelledFunctions = options.assumeUnspelledFunctions;
+      input.assumeIdempotentStandardHeaders = options.assumeIdempotentStandardHeaders;
+      input.assumeUnobservedGuardMacros = options.assumeUnobservedGuardMacros;
       PruneWorkerOptions worker; worker.executable = options.pruningWorker; worker.temporaryRoot = work.path;
       worker.timeout = options.stepTimeout; worker.deadline = deadline;
       worker.runner = [this](const ProcessSpec& spec) -> Result<ProcessResult> {

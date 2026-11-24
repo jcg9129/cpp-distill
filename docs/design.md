@@ -218,7 +218,7 @@ Distill options (before the compiler name):
 | `--no-assume=<name>` | disable a switchable assumption or policy while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
-| `--shorten-names` | opt-in readable identifier shortening after checked compaction; implies `--strip-comments --no-line-markers --compact-whitespace`; A15 controls renaming independently (§4.8) |
+| `--shorten-names` | opt-in readable identifier shortening after preprocessor trimming and checked compaction; implies `--strip-comments --no-line-markers --compact-whitespace`; A15 controls renaming independently (§4.8) |
 | `--compact-whitespace` | opt-in line-edge/empty-line trimming; implies `--no-line-markers` and uses its source-position proof, including columns; otherwise unchanged with a reported reason (§4.8) |
 | `--strict` | exit 3 unless the written file is `pruned` with verification `target` |
 | `-v` | progress on stderr |
@@ -1716,9 +1716,10 @@ sources and refusal gates still apply. This mode needs A1–A7 and A9 where
 applicable, plus A12 when member pruning is enabled, but does not need A11. Reports say
 `policy: D3e, without instantiation-effects`, explicitly record that the flag
 disabled `A11 instantiation-effects`, and omit it from relied-on assumptions.
-The setting is part of serialized worker protocol version 8 and checked as
+The setting is part of serialized worker protocol version 13 and checked as
 immutable input on return. There is no pruning-result cache; the serialized
-model and policy identity distinguish A11, A12, A15, shorten-names and D3f flag combinations.
+model and policy identity distinguish A11, A12, A14, A15, shorten-names,
+idempotent-standard-headers and D3f flag combinations.
 
 **Static invariant:** rule 2 on the final rendered text: no removed family's
 indexed name appears as an identifier token. For member units this additional
@@ -1923,7 +1924,7 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   annotations/provenance are consumed before this final transformation.
 - **Readable shortening** (`--shorten-names`, opt-in): implies `--strip-comments`,
   `--no-line-markers` and `--compact-whitespace`. Only a checked compact pruned
-  artifact that passed the position-observation gate is eligible; refusal keeps
+  artifact, after preprocessor trimming and the position-observation gate, is eligible; refusal keeps
   the checked artifact and reports `shorten-names: kept: <why>`.
   Identifiers are substituted simultaneously by spelling across code and ordinary
   user macro replacements. The compact layout stays exact: existing statement
@@ -1981,7 +1982,8 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   `shorten-names: renamed=N spellings saved=B bytes`; refusal reports
   `shorten-names: kept: <why>`. A15 is reported only when spellings change.
   `--no-assume=library-spelled-names` retains names and the compact layout.
-  Worker identity includes the shorten-names/A15 switches.
+  Worker protocol 13 includes the shorten-names/A15 switches and both trimming
+  switches, including the second extraction of the exact compact artifact.
 - `--strip-comments` (D3-1-10) is part of rendering every artifact (`raw`,
   `flat`, `pruned`) and keeps token spellings, directive boundaries and
   logical lines: a comment outside a directive becomes one space, or its

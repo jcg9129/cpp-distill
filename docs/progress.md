@@ -38,6 +38,7 @@ Design: [`design.md`](design.md) (approved v8). Reviews of each design round:
 | Pruning soundness D3d-5…7 | done (#104, 2026-11-20): instantiation-effect closure; A11 `instantiation-effects`; `--no-assume=instantiation-effects` |
 | Member pruning D3e | done (#105, #106, 2026-11-20): unused member functions under A12 `library-spelled-members` (worker headers + scanned-build inventory); `--no-assume=library-spelled-members` |
 | Compact output and prefetch | implemented 2026-11-22: implicit `__builtin_prefetch` allow-list entry; opt-in `--compact-whitespace` implies marker omission under the existing position/column proof; lexical, preprocessing, build and sample checks; ATL `compact` measurement variant |
+| Pruned trimming and readable shortening | integrated 2026-11-24: repeated standard include removal, A14 generated guard removal, opt-in A15 `--shorten-names` after checked compaction; independent opt-outs and protocol 13 |
 | Call-based member retention | started 2026-11-20: analysis only (see current state) |
 
 ## Current state (2026-11-20)
@@ -805,7 +806,8 @@ library/compiler headers. Markers preserve observed positions; marker omission
 still uses the existing position-observation gate.
 
 Both `--no-assume` switches travel through CLI/options, pipeline and immutable
-worker/renderer model identity (protocol **10**). Reports name the policy/A14,
+worker/renderer model identity (originally protocol **10**; combined protocol
+**13** below). Reports name the policy/A14,
 their opt-outs, and `idempotent-includes-removed: lines=N bytes=B` /
 `guard-defines-removed: lines=N bytes=B`, with source accounting separate from
 family ownership. README, core guide, CLI help and design are updated.
@@ -838,3 +840,56 @@ pruning/build/run smoke check passes with the default markers, removes one
 include and one generated guard define, and preserves stdout `7 5` (including
 the original line number). Changes remain uncommitted on `pp-trim`; nothing
 was pushed.
+
+## Readable shortening rebased onto preprocessor trimming (2026-11-24)
+
+Rebased all five commits present on `origin/minify` (`3c016f6`, based on
+`2256cfe`) onto `origin/main` (`8d61c9c`, #129), preserving their separate
+history. The supplied task expected seven commits; a fresh anonymous fetch
+confirmed five. Work is isolated to the current worktree's branch because the
+local `minify` branch is checked out in another worktree.
+
+CLI help, usage errors and `--no-assume` lists retain both trimming switches
+and `library-spelled-names`. A14 remains `unobserved-guard-macros`; A15 is
+`library-spelled-names`. All options travel through CLI, pipeline and immutable
+worker identity. The combined protocol is **13**, rejecting both main's 10 and
+the shortening branch's 12. Both extraction passes receive the trimming opt-outs.
+
+The pipeline renders declaration and preprocessor deletions, records include/
+guard removal counts, checks the pruned artifact, omits markers under the
+position gate, checks compact whitespace, then audits and shortens the exact
+compact artifact. Failed shortening retains those checked compact bytes.
+Reports retain both trimming counters and the shortening result/assumption.
+The ATL sweep still exposes both `compact` and `short` variants.
+
+Both branches' renderer, worker identity, position-observation, fallback and
+CLI tests remain. New pipeline and real-CLI coverage exercises all eight
+combinations of the two trimming opt-outs and A15, checking independent bytes,
+assumptions, counters and sample execution. The pipeline fixture also checks
+that worker flags match the requested options and the second audit sees the
+exact compact artifact. Protocol tests reject complete old-version models.
+
+Validation uses the SHA256SUMS-verified LLVM **23.1.5** Linux ARM64 SDK
+(`5ca712f18c710592a8fa89758246a6b6cbdbd16c1fbd5f12c7f5bcdf35fe06de`),
+Clang **22.1.8** and LLD, `-O1 -DNDEBUG`, `-j2`, a six-GiB virtual-memory cap,
+and hard configure/build/test deadlines. All **432 Python tests** pass,
+including 200 library tooling tests and both spelling-analysis suites, with
+at most two suites running concurrently. The real-CLI option matrix passes;
+its positive fixture uses a minimal standard header so the host's library
+assertion defaults do not trigger unrelated source/name-observation refusals.
+Existing assertion/refusal fixtures retain the conservative gates.
+
+The final full CTest run passes **109/109** entries with `--timeout 400 -j2`
+(482.82 seconds). A one-example ATL-format sweep passes all five variants
+(`plain`, `strip`, `nlm`, `compact`, `short`), all pruned with matching standalone
+sample output; compact is 77 bytes and short is 73 bytes. This is a sweep
+harness smoke check, not a new full-corpus size measurement.
+
+The downloaded SDK/archive/extraction were deleted. A post-deletion real-CLI
+check still removes one duplicate include and one generated guard, shortens
+one identifier, passes sample comparison, and compiles/runs standalone.
+Checksums and build/test/sweep logs remain under ignored `.checks/`.
+
+Rebased commits, oldest first: `4e80b47`, `3430fd6`, `e1bf1b8`, `4e4c782`,
+`4f32eac`. The final protocol/plumbing, integration tests and documentation
+corrections remain uncommitted in this worktree; nothing was pushed.

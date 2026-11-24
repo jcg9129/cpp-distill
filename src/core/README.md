@@ -1477,7 +1477,7 @@ expansion, including a name synthesized by token pasting. The input-wide collisi
 covers worker input; A14 covers judge-only library/compiler headers. Generated
 defines in surviving conditionals stay to protect conditional position uses.
 Disable with `--no-assume=unobserved-guard-macros`. Both flags are immutable
-worker/renderer identity in protocol 10 and independent of A11/A12/A9/D3f.
+worker/renderer identity in protocol 13 and independent of A11/A12/A9/D3f/A15.
 Reports list their enabled/disabled state and unique source-byte/physical-line
 counts as `idempotent-includes-removed: lines=N bytes=B` and
 `guard-defines-removed: lines=N bytes=B`.
@@ -1490,8 +1490,8 @@ this on the original prune corpus, including expected refusals.
 
 ## Readable identifier shortening
 
-`--shorten-names` opts into A15 `library-spelled-names` after checked pruning and
-compaction. It implies `--strip-comments --no-line-markers --compact-whitespace`.
+`--shorten-names` opts into A15 `library-spelled-names` after checked pruning,
+preprocessor trimming and compaction. It implies `--strip-comments --no-line-markers --compact-whitespace`.
 The renderer in `render/shorten_names.cpp` retains the compact line layout and
 replaces identifier tokens simultaneously, using the embedded dictionary in
 `data/names/abbreviations.txt`, case-aware word splitting, vowel dropping and a
@@ -1511,5 +1511,5 @@ and configured sample runs must pass before the candidate replaces the checked
 compact bytes. Failures report `shorten-names: kept: <why>`; success reports
 `shorten-names: renamed=N spellings saved=B bytes`. A15 appears only if a spelling
 changes. `--no-assume=library-spelled-names` retains every name while the implied
-compact layout still applies. The version-12 worker protocol rejects older models and carries the option and
-exclusion/refusal facts; no whitespace-minimization invocation extents are needed.
+compact layout still applies. The version-13 worker protocol rejects older models
+and carries the option and exclusion/refusal facts; no whitespace-minimization invocation extents are needed.
