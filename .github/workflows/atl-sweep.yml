@@ -18,6 +18,11 @@ on:
         type: string
         default: cses
         required: true
+      examples:
+        description: "Space-separated example names to sweep, as in summary.tsv, e.g. top-tree-basic; empty = all"
+        type: string
+        default: ''
+        required: false
   pull_request:
     paths:
       - .github/workflows/atl-sweep.yml
@@ -88,6 +93,8 @@ jobs:
           git -C out/atl-sweep/atl checkout --detach FETCH_HEAD
           git -C out/atl-sweep/atl rev-parse HEAD
       - name: Measure and verify all four variants
+        env:
+          SWEEP_EXAMPLES: ${{ inputs.examples }}
         shell: bash
         run: bash ci/atl-sweep/sweep.sh out/atl-sweep/atl "$DISTILL" out/atl-sweep/results "$JUDGE"
       - name: Upload sweep summary, reports and diagnostics
@@ -99,4 +106,5 @@ jobs:
             out/atl-sweep/results/summary.tsv
             out/atl-sweep/results/**/*.rep
             out/atl-sweep/results/**/*.log
+            out/atl-sweep/results/**/*.cpp
           if-no-files-found: warn
