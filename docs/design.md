@@ -285,7 +285,11 @@ compaction. Without runtime samples it can also overlap the baseline build
 with raw preparation and its
 build, reserving a slot for the baseline. Every child retains its timeout and
 output cap; batches share the enclosing phase deadline. Results and report
-records are consumed in serial order, including failure precedence. Later
+records are consumed in serial order, including failure precedence. Each record
+retains the actual launch specification, including its deadline-clipped timeout;
+a process that never launches has no record. Runner exceptions become result
+errors before baseline rollback. Speculative progress callbacks are buffered
+until the baseline succeeds and discarded if it fails. Later
 artifact builds remain verification gates for their successors by default;
 `--verify=final` changes only the rendering gates described below. Commands with
 unmodelled flags stay serial because those flags may introduce shared side
@@ -296,8 +300,18 @@ has no consumer in that case: `execute` returns immediately for empty samples,
 and only sample comparisons read its saved runs. Skipping removes the separate
 original-build gate; raw preprocessing comparison and raw's full compile/link
 check remain mandatory. The default `--baseline=build` retains the original
-behavior. Reports include `option jobs=N`, `option baseline=build|skip`, and
-an explicit skipped-baseline option line when applicable.
+behavior. To preserve original validation for context-dependent assembly and
+file inputs, `skip` is refused when the source or any inlined file contains
+`asm`, `__asm` or `__asm__` identifiers, even in inactive branches. The original
+preprocessed text is also checked for assembly, including macro expansions
+and system headers. Modules (`-fmodules`), unmodelled compiler flags and
+external library options (`-L`, custom `-l`) are refused
+because they may read files relative to cwd. Modelled include search options
+remain supported; command options already rejected by the parser, such as
+`-include`, remain rejected. These restrictions also apply with `--verify=final`.
+Reports omit scheduling metadata (`--jobs`) and default check selections;
+`skip` adds `option baseline=skip` and an explicit skipped-baseline option line.
+Default reports retain their existing format, including explicit `build`/`all`.
 
 `--verify=all` (default) retains the existing sequential rendering checks.
 `--verify=final` keeps every raw, flat and pruned check, including builds,
@@ -319,7 +333,7 @@ selected flat configuration and judge flags as `all`.
 This does not permit bypassing flat's build: a pruned program can link after
 deleting a dead function even when flat cannot link. It works with `--jobs`
 and `--baseline=skip` (the latter still excludes runtime samples). Reports
-include `option verify=all|final` and exactly one
+include `option verify=final` only for the non-default mode and exactly one
 `verify: <stage> build skipped (--verify=final)` line per deferred stage
 (`unmarked`, `compact`), even if a later failure causes it to be checked on
 step-back. Deferred stages have no passed check record unless subsequently

@@ -50,7 +50,7 @@ struct SystemInclude {
   std::optional<std::filesystem::path> directory;
   bool compilerSystem = false;
 };
-struct InlineFlags { bool counter = false, pushMacro = false, popMacro = false, pragmaOperator = false; };
+struct InlineFlags { bool counter = false, pushMacro = false, popMacro = false, pragmaOperator = false, assembly = false; };
 struct InlineResult {
   std::set<std::string> assumptions;
   std::string text;

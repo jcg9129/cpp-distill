@@ -118,6 +118,35 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         for name in ['library.h', 'sample.in', 'report.txt', 'submit.cpp']:
             (root / name).unlink()
         (root / 'main.cpp').write_bytes(saved)
+    with case('baseline skip refuses cwd-dependent assembly without publishing'):
+        saved = (root / 'main.cpp').read_bytes()
+        assembly = 'asm(".pushsection .rodata\\n.incbin \\\"raw.cpp\\\"\\n.popsection");\n'
+        (root / 'payload.h').write_text(assembly)
+        for source in [assembly + 'int main(){return 0;}\n',
+                       '#include "payload.h"\nint main(){return 0;}\n']:
+            (root / 'main.cpp').write_text(source)
+            for jobs in [1, 4]:
+                result = subprocess.run([binary, '--no-prune', '--baseline=skip', '--verify=final',
+                                         '--jobs=' + str(jobs), '-o', 'submit.cpp',
+                                         'g++', '-std=gnu++20', 'main.cpp'],
+                                        cwd=root, capture_output=True, text=True, timeout=120)
+                check(result.returncode == 1 and not result.stdout, result)
+                check('--baseline=skip cannot be used with assembly' in result.stderr, result.stderr)
+                check(not (root / 'submit.cpp').exists(), list(root.iterdir()))
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'payload.h').unlink()
+    with case('verbose link failure preserves serial progress'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('extern int missing();\nint main(){return missing();}\n')
+        for jobs in [1, 2, 4]:
+            result = subprocess.run([binary, '-v', '--no-prune', '--jobs=' + str(jobs),
+                                     'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 1 and not result.stdout, result)
+            progress = [line for line in result.stderr.splitlines() if line.startswith('distill: ')]
+            check(progress == ['distill: probe local compiler', 'distill: baseline build',
+                               'distill: nothing written, runtime not requested'], progress)
+        (root / 'main.cpp').write_bytes(saved)
     with case('final verification preserves passing rendering bytes and reports skipped builds'):
         saved = (root / 'main.cpp').read_bytes()
         sources = [
@@ -137,7 +166,8 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                     check(result.returncode == 0, result.stderr)
                     outputs.append(result.stdout)
                     report = (root / 'report.txt').read_text()
-                    check('option verify=' + mode + '\n' in report, report)
+                    check(('option verify=final\n' in report) == (mode == 'final'), report)
+                    check('option verify=all\n' not in report and 'option jobs=' not in report, report)
                     stage = 'pruned with shortened names' if rendering == '--shorten-names' else 'pruned with compact whitespace'
                     check(stage + ': passed\n' in report, report)
                     if mode == 'final':
@@ -163,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(result.returncode == 0, result.stderr)
             report = (root / 'report.txt').read_text()
             stable = re.sub(r'\.distill-(work|probe|prune)-[0-9]+-[0-9]+', r'.distill-\1-TEMP', report)
-            stable = '\n'.join(line for line in stable.splitlines() if not line.startswith('option jobs='))
+            check('option jobs=' not in report and 'option baseline=' not in report, report)
             if reference is None:
                 reference = (result.stdout, stable)
             else:

@@ -57,6 +57,7 @@ struct Engine {
       identifiers.insert(token.text);
       if (token.text == "__COUNTER__") result.flags.counter = true;
       if (token.text == "_Pragma") result.flags.pragmaOperator = true;
+      if (token.text == "asm" || token.text == "__asm" || token.text == "__asm__") result.flags.assembly = true;
       if (token.text == "push_macro" || token.text == "pop_macro") macroStackName = true;
       for (std::string_view forbidden : {"__INCLUDE_LEVEL__", "__BASE_FILE__", "__builtin_COLUMN", "__builtin_source_location", "source_location"})
         if (token.text == forbidden) fail(n, token.line, "unsupported identifier: " + token.text);

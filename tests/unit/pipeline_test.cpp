@@ -10,6 +10,7 @@
 #include <regex>
 #include <sstream>
 #include <condition_variable>
+#include <thread>
 
 using namespace distill;
 namespace {
@@ -42,6 +43,13 @@ struct Fixture {
         ~Observation() { if (fixture.observeProcess) fixture.observeProcess(spec,false); }
       } observation{*this,spec};
       if (observeProcess) observeProcess(spec,true);
+      if (std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) {
+            return pathFromUtf8(arg).filename() == "baseline.exe";
+          })) {
+        if (fault == "baseline-throw-error") throw Error{"failure"};
+        if (fault == "baseline-throw-standard") throw std::runtime_error("failure");
+        if (fault == "baseline-throw-unknown") throw 42;
+      }
       if (spec.argv.size() == 3 && spec.argv[1] == "--internal-prune") {
         auto m = take(parsePruningModel(test::read(pathFromUtf8(spec.argv[2]))));
         if (m.shortenNames) m.libraryMemberNamesComputed = fault != "shortenNames-library";
@@ -668,7 +676,6 @@ std::string stableReport(const std::string& report) {
   std::istringstream input(report); std::string line, output;
   const std::regex temporary(R"(\.distill-(work|probe|prune)-[0-9]+-[0-9]+)");
   while (std::getline(input,line)) {
-    if (line.starts_with("option jobs=")) continue;
     output += std::regex_replace(line,temporary,".distill-$1-TEMP") + '\n';
   }
   return output;
@@ -678,12 +685,16 @@ TEST(pipeline_jobs_output_reports_and_fallbacks_match_serial) {
   for (const auto* fault : {"", "disabled", "compact-build", "compact-tokens", "shortenNames-build", "shortenNames-stdout", "flat-stdout", "raw-stdout", "raw-preprocess", "flat-preprocess", "unmarked-preprocess", "compact-preprocess", "probe-search", "probe-macros", "probe-timeout"}) {
     Fixture f("// comment\nint unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
     f.options.shortenNames = true;
+    std::vector<std::string> progress;
+    f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
     auto serial = f.run(fault);
+    const auto serialProgress = std::exchange(progress,{});
     f.options.jobs = 4;
     auto parallel = f.run(fault);
     CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.artifact,serial.artifact);
     CHECK_EQ(parallel.exitCode,serial.exitCode); CHECK_EQ(parallel.runtime,serial.runtime);
     CHECK(stableReport(parallel.report) == stableReport(serial.report));
+    CHECK_EQ(progress,serialProgress);
   }
 }
 TEST(pipeline_baseline_skip_only_without_runtime_samples) {
@@ -701,17 +712,185 @@ TEST(pipeline_baseline_skip_only_without_runtime_samples) {
   const auto refused = f.run(); CHECK_EQ(refused.exitCode,1); CHECK(refused.bytes.empty()); CHECK(refused.processes.empty());
 }
 
+TEST(pipeline_baseline_skip_refuses_assembly_and_file_reading_options) {
+  const std::string assembly = "(\".pushsection .rodata\\n.incbin \\\"raw.cpp\\\"\\n.popsection\");\n";
+  for (const auto& keyword : {"asm", "__asm", "__asm__", "__a\\\nsm__"}) {
+    for (const bool header : {false,true}) {
+      Fixture f(header ? "#include \"payload.h\"\nint main(){return 0;}\n" :
+                         keyword + assembly + "int main(){return 0;}\n");
+      f.temp.write("payload.h",keyword + assembly);
+      f.options.samples.clear(); f.options.noPrune = true;
+      const auto original = f.run();
+      CHECK_EQ(original.exitCode,1); CHECK(original.bytes.empty());
+      CHECK(original.diagnostic.find("baseline failed:") != original.diagnostic.npos);
+      CHECK(!std::filesystem::exists(f.temp.path/"raw.cpp"));
+      f.options.skipBaseline = true;
+      for (const unsigned jobs : {1u,4u}) {
+        f.options.jobs = jobs; f.options.verifyFinal = jobs == 4;
+        const auto refused = f.run(); CHECK_EQ(refused.exitCode,1); CHECK(refused.bytes.empty());
+        CHECK(refused.diagnostic.find("--baseline=skip cannot be used with assembly") != refused.diagnostic.npos);
+        CHECK(std::none_of(refused.processes.begin(),refused.processes.end(),[](const auto& p) {
+          return p.step == "baseline build" || p.step == "raw checks";
+        }));
+      }
+    }
+  }
+  // Macro expansion can construct the keyword without spelling it in a file.
+  for (const bool commandMacro : {false,true}) {
+    Fixture f(commandMacro ? "ASSEMBLY" + assembly + "int main(){return 0;}\n" :
+        "#define CAT(a,b) a##b\nCAT(a,sm)" + assembly + "int main(){return 0;}\n");
+    if (commandMacro)
+      f.command = take(parseCompileCommand({pathToUtf8(f.gcc),"-DASSEMBLY=__asm__","main.cpp"},f.temp.path));
+    f.options.samples.clear(); f.options.noPrune = true; f.options.skipBaseline = true; f.options.jobs = 4;
+    const auto refused = f.run(); CHECK_EQ(refused.exitCode,1); CHECK(refused.bytes.empty());
+    CHECK(refused.diagnostic.find("--baseline=skip cannot be used with assembly") != refused.diagnostic.npos);
+    if (refused.keptWork) std::filesystem::remove_all(*refused.keptWork);
+  }
+  for (const auto* flag : {"-fprofile-use=raw.cpp", "-fmodule-mapper=raw.cpp", "-fmodules", "-fwrapv", "-L.", "-l:raw.cpp"}) {
+    Fixture f("int main(){return 0;}\n");
+    f.command = take(parseCompileCommand({pathToUtf8(f.gcc),flag,"main.cpp"},f.temp.path));
+    f.options.samples.clear(); f.options.skipBaseline = true; f.options.verifyFinal = true;
+    const auto refused = f.run(); CHECK_EQ(refused.exitCode,1); CHECK(refused.bytes.empty());
+    CHECK(refused.processes.empty());
+    CHECK(refused.diagnostic.find("--baseline=skip cannot be used with option " + std::string(flag)) != refused.diagnostic.npos);
+  }
+}
+
+TEST(pipeline_baseline_skip_accepts_includes_and_assembly_in_comments_or_literals) {
+  Fixture f("#include \"payload.h\"\n// asm __asm __asm__\n"
+            "const char* text = R\"(asm(\".incbin raw.cpp\"))\";\nint main(){return answer;}\n");
+  std::filesystem::create_directory(f.temp.path/"include");
+  f.temp.write("include/payload.h","constexpr int answer = 0;\n");
+  f.command = take(parseCompileCommand({pathToUtf8(f.gcc),"-Iinclude","main.cpp"},f.temp.path));
+  f.options.samples.clear(); f.options.noPrune = true;
+  const auto original = f.run(); CHECK_EQ(original.exitCode,0);
+  f.options.skipBaseline = true; f.options.verifyFinal = true; f.options.jobs = 4;
+  const auto skipped = f.run(); CHECK_EQ(skipped.exitCode,0); CHECK_EQ(skipped.bytes,original.bytes);
+}
+
+TEST(pipeline_jobs_baseline_exceptions_roll_back_results_and_progress) {
+  for (const auto* fault : {"baseline-throw-error", "baseline-throw-standard", "baseline-throw-unknown"}) {
+    Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.noPrune = true;
+    std::vector<std::string> progress;
+    f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
+    const auto serial = f.run(fault); CHECK_EQ(serial.exitCode,1);
+    CHECK(serial.diagnostic.starts_with("baseline failed: "));
+    const auto serialProgress = std::exchange(progress,{});
+    for (const unsigned jobs : {2u,4u}) {
+      f.options.jobs = jobs;
+      std::mutex mutex; std::condition_variable ready; bool rawLaunched = false;
+      f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
+        if (!entering) return;
+        const auto output = std::find(spec.argv.begin(),spec.argv.end(),"-o");
+        if (output == spec.argv.end() || output + 1 == spec.argv.end()) return;
+        const auto name = pathFromUtf8(*(output + 1)).filename();
+        std::unique_lock lock(mutex);
+        if (name == "raw.exe") { rawLaunched = true; ready.notify_all(); }
+        if (name == "baseline.exe") ready.wait_for(lock,std::chrono::seconds(3),[&] { return rawLaunched; });
+      };
+      const auto parallel = f.run(fault); CHECK(rawLaunched);
+      CHECK_EQ(parallel.exitCode,1); CHECK(parallel.bytes.empty()); CHECK(!parallel.keptWork);
+      CHECK_EQ(parallel.checks.size(),1u); CHECK_EQ(parallel.checks.front().artifact,"baseline");
+      CHECK(parallel.checks.front().status != "passed");
+      CHECK_EQ(stableReport(parallel.report),stableReport(serial.report));
+      CHECK_EQ(progress,serialProgress); progress.clear();
+      CHECK(std::none_of(parallel.processes.begin(),parallel.processes.end(),[](const auto& p) {
+        return p.step == "raw checks";
+      }));
+    }
+  }
+}
+
+TEST(pipeline_jobs_link_failure_drops_speculative_verbose_progress) {
+  Fixture f("extern int missing();\nint main(){return missing();}\n");
+  f.options.samples.clear(); f.options.noPrune = true; f.options.verifyFinal = true;
+  std::vector<std::string> progress;
+  f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
+  const auto serial = f.run(); CHECK_EQ(serial.exitCode,1);
+  const auto serialProgress = std::exchange(progress,{});
+  CHECK_EQ(serialProgress,(std::vector<std::string>{"probe local compiler","baseline build"}));
+  for (const unsigned jobs : {2u,4u}) {
+    f.options.jobs = jobs;
+    const auto parallel = f.run(); CHECK_EQ(parallel.exitCode,1); CHECK(!parallel.keptWork);
+    CHECK_EQ(progress,serialProgress); progress.clear();
+    CHECK_EQ(parallel.checks.size(),1u); CHECK(parallel.checks.front().status != "passed");
+  }
+}
+
+TEST(pipeline_jobs_records_retain_effective_launch_specs) {
+  Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.noPrune = true;
+  f.options.skipBaseline = true; f.options.jobs = 4; f.options.verifyFinal = true;
+  std::vector<ProcessSpec> launched; std::mutex mutex;
+  f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
+    if (!entering) return;
+    std::lock_guard lock(mutex); launched.push_back(spec);
+  };
+  const auto result = f.run(); CHECK_EQ(result.exitCode,0);
+  CHECK_EQ(result.processes.size(),launched.size());
+  unsigned preprocesses = 0, probes = 0;
+  for (const auto& record : result.processes) {
+    const auto actual = std::find_if(launched.begin(),launched.end(),[&](const auto& spec) {
+      return record.spec.argv == spec.argv && record.spec.cwd == spec.cwd;
+    });
+    CHECK(actual != launched.end()); if (actual == launched.end()) continue;
+    CHECK_EQ(record.spec.timeout,actual->timeout);
+    CHECK_EQ(record.spec.maxOutputBytes,actual->maxOutputBytes);
+    CHECK_EQ(record.spec.stdinFile,actual->stdinFile);
+    CHECK_EQ(record.spec.memoryLimitBytes,actual->memoryLimitBytes);
+    CHECK(record.spec.timeout < f.options.stepTimeout);
+    if (record.step == "probe local compiler") ++probes;
+    if (record.spec.maxOutputBytes == f.options.maxPreprocessOutput) ++preprocesses;
+    // The same raw preprocessing argv recurs in later phases. Match each
+    // invocation once so those independent deadlines are compared correctly.
+    launched.erase(actual);
+  }
+  CHECK(launched.empty()); CHECK(probes >= 3); CHECK_EQ(preprocesses,4u);
+}
+
+TEST(pipeline_jobs_expired_batch_has_no_launch_records) {
+  for (const unsigned jobs : {1u,4u}) {
+    Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.jobs = jobs;
+    f.options.stepTimeout = std::chrono::milliseconds(5);
+    f.options.progress = [&](std::string_view) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); };
+    unsigned launched = 0;
+    f.observeProcess = [&](const ProcessSpec&, bool entering) { if (entering) ++launched; };
+    const auto result = f.run(); CHECK_EQ(result.exitCode,1);
+    CHECK(result.diagnostic.find("step deadline exceeded") != result.diagnostic.npos);
+    CHECK_EQ(launched,0u); CHECK(result.processes.empty());
+  }
+}
+
+TEST(pipeline_default_reports_omit_scheduling_and_default_check_metadata) {
+  Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.noPrune = true;
+  const auto defaults = f.run(); CHECK_EQ(defaults.exitCode,0); CHECK(defaults.optionLines.empty());
+  CHECK(defaults.report.find("option jobs=") == defaults.report.npos);
+  CHECK(defaults.report.find("option baseline=") == defaults.report.npos);
+  CHECK(defaults.report.find("option verify=") == defaults.report.npos);
+  f.options.jobs = 4;
+  const auto parallel = f.run(); CHECK(parallel.optionLines.empty());
+  CHECK_EQ(stableReport(parallel.report),stableReport(defaults.report));
+  f.options.verifyFinal = true;
+  const auto final = f.run(); CHECK_EQ(final.optionLines,(std::vector<std::string>{"verify=final"}));
+  f.options.skipBaseline = true;
+  const auto skipped = f.run();
+  CHECK_EQ(skipped.optionLines,(std::vector<std::string>{"baseline=skip","verify=final","baseline check: skipped (no runtime samples)"}));
+}
+
 TEST(pipeline_jobs_baseline_raw_builds_and_failure_precedence) {
   for (const auto* fault : {"", "baseline-build", "both-build", "disabled", "compact-build", "shortenNames-build"}) {
     Fixture f("// comment\nint unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
     f.options.samples.clear(); f.options.shortenNames = true;
+    std::vector<std::string> progress;
+    f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
     const auto serial = f.run(fault);
+    const auto serialProgress = std::exchange(progress,{});
     for (const unsigned jobs : {2u,4u}) {
       f.options.jobs = jobs;
       const auto parallel = f.run(fault);
       CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.artifact,serial.artifact);
       CHECK_EQ(parallel.exitCode,serial.exitCode);
       CHECK(stableReport(parallel.report) == stableReport(serial.report));
+      CHECK_EQ(progress,serialProgress); progress.clear();
       if (std::string_view(fault).ends_with("build") && std::string_view(fault) != "compact-build" && std::string_view(fault) != "shortenNames-build") {
         CHECK_EQ(parallel.exitCode,1); CHECK(!parallel.keptWork);
         CHECK(parallel.report.find("baseline failed:") != parallel.report.npos);
@@ -863,7 +1042,7 @@ TEST(pipeline_verify_final_matches_all_when_renderings_pass) {
     CHECK_EQ(final.shortenNames,all.shortenNames);
     CHECK_EQ(final.bytes,f.built.at(shorten ? "shortened" : "compact"));
     CHECK_EQ(buildStages(final),(std::vector<std::string>{"baseline","raw","original-flat","flat","pruned",shorten ? "shortened" : "compact"}));
-    CHECK(all.report.find("option verify=all\n") != all.report.npos);
+    CHECK(all.report.find("option verify=") == all.report.npos);
     CHECK(all.report.find("verify: ") == all.report.npos);
     CHECK(final.report.find("option verify=final\n") != final.report.npos);
     CHECK(final.report.find("verify: unmarked build skipped (--verify=final)\n") != final.report.npos);

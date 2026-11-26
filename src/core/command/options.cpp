@@ -148,6 +148,7 @@ std::string distillHelp() {
       "                     implies --strip-comments --no-line-markers --compact-whitespace\n"
       "  --jobs=N, -j N     concurrent independent compiler processes (default 1)\n"
       "  --baseline=build|skip build the original (default build); skip requires no samples\n"
+      "                     and no assembly, modules, unmodelled flags or external library options\n"
       "  --verify=all|final check all renderings (default all), or only the last,\n"
       "                     checking earlier renderings on failure; raw/flat/pruned unchanged\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
