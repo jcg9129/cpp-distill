@@ -2,6 +2,7 @@
 """Real-binary CLI surface checks; run only in the SDK job."""
 from pathlib import Path
 import os
+import re
 import shutil
 from contextlib import contextmanager
 import subprocess
@@ -52,6 +53,14 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--keep', 'unknown_function', 'g++', '-std=gnu++20', 'main.cpp'], 1, '--keep unknown_function: no indexed declaration'),
         (['--keep'], 1, 'missing value for --keep'),
         (['--verify-run'], 1, 'missing value for --verify-run'),
+        (['--jobs'], 1, 'missing value for --jobs'),
+        (['--jobs=0', 'main.cpp'], 1, '--jobs requires a positive integer'),
+        (['--jobs=-2', 'main.cpp'], 1, '--jobs requires a positive integer'),
+        (['--jobs=2x', 'main.cpp'], 1, '--jobs requires a positive integer'),
+        (['--baseline=syntax', 'main.cpp'], 1, '--baseline requires build or skip'),
+        (['--baseline=skip', '--verify-run', 'main.cpp', 'main.cpp'], 1, 'cannot be combined with --verify-run'),
+        (['--jobs=4', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
+        (['-j', '2', '--baseline=skip', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--verify-run', 'missing.in', 'main.cpp'], 1, 'not a sample file or directory'),
         (['--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--no-prune', 'g++', '-c', 'main.cpp'], 1, 'rejected option'),
@@ -105,6 +114,32 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         for name in ['library.h', 'sample.in', 'report.txt', 'submit.cpp']:
             (root / name).unlink()
         (root / 'main.cpp').write_bytes(saved)
+    with case('jobs preserve bytes and report order; baseline skip retains full artifact checks'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n')
+        reference = None
+        for flags in [['--jobs=1'], ['--jobs=4'], ['-j', '2']]:
+            result = subprocess.run([binary, '--shorten-names', *flags, '--report', 'report.txt',
+                                     'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, timeout=120)
+            check(result.returncode == 0, result.stderr)
+            report = (root / 'report.txt').read_text()
+            stable = re.sub(r'\.distill-(work|probe|prune)-[0-9]+-[0-9]+', r'.distill-\1-TEMP', report)
+            stable = '\n'.join(line for line in stable.splitlines() if not line.startswith('option jobs='))
+            if reference is None:
+                reference = (result.stdout, stable)
+            else:
+                check((result.stdout, stable) == reference, 'output or ordered report differs with ' + repr(flags))
+        skipped = subprocess.run([binary, '--shorten-names', '--jobs=4', '--baseline=skip',
+                                  '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
+                                 cwd=root, capture_output=True, timeout=120)
+        report = (root / 'report.txt').read_text()
+        check(skipped.returncode == 0 and skipped.stdout == reference[0], skipped.stderr)
+        check('process baseline build ' not in report and 'baseline: passed' not in report, report)
+        check('option baseline check: skipped (no runtime samples)' in report, report)
+        check('raw: passed' in report and 'pruned with shortened names: passed' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
     with case('instantiation-effects flag reaches the worker and modes do not mix'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('template<class T> struct Effect { friend int supplied(T); };\n'

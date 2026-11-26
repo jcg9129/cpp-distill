@@ -2,10 +2,12 @@
 #include "core/command/options.h"
 #include "core/path.h"
 #include "distill_build_version.h"
+#include <charconv>
 
 namespace distill {
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   CliOptions o;
+  bool speedOptionSpecified = false;
   for (std::size_t i = 0; i < args.size(); ++i) {
     const auto& a = args[i];
     if (a == "--help") { o.help = true; return o; }
@@ -34,6 +36,27 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
         begin = end+1;
       }
     }
+    else if (a == "--jobs" || a == "-j" || a.starts_with("--jobs=")) {
+      speedOptionSpecified = true;
+      std::string value;
+      if (a == "--jobs" || a == "-j") {
+        if (++i == args.size()) return Error{"missing value for " + a};
+        value = args[i];
+      } else value = a.substr(7);
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(), o.jobs);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || o.jobs == 0)
+        return Error{"--jobs requires a positive integer"};
+    }
+    else if (a == "--baseline" || a.starts_with("--baseline=")) {
+      speedOptionSpecified = true;
+      std::string value;
+      if (a == "--baseline") {
+        if (++i == args.size()) return Error{"missing value for --baseline"};
+        value = args[i];
+      } else value = a.substr(11);
+      if (value != "build" && value != "skip") return Error{"--baseline requires build or skip"};
+      o.skipBaseline = value == "skip";
+    }
     else if (a == "--strict") o.strict = true;
     else if (a == "-v") o.verbose = true;
     else if (a == "--strip-comments") o.stripComments = true;
@@ -59,7 +82,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || o.mergeOnly || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        speedOptionSpecified || o.noPrune || o.mergeOnly || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
@@ -78,6 +101,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
              !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros) conflict = "--no-assume";
     if (conflict) return Error{std::string("--merge-only cannot be combined with ") + conflict};
   }
+  if (o.skipBaseline && !o.verifyRun.empty()) return Error{"--baseline=skip cannot be combined with --verify-run"};
   if (o.part || o.record) return Error{"--part/--record require a judge diagnostic command"};
   if (o.compile.empty() && o.judge == "list") return o;
   if (o.compile.empty()) return Error{"missing compile command or source file"};
@@ -112,6 +136,8 @@ std::string distillHelp() {
       "                     implies --no-line-markers (else unchanged; report says why)\n"
       "  --shorten-names    readably shorten identifiers in a checked pruned artifact;\n"
       "                     implies --strip-comments --no-line-markers --compact-whitespace\n"
+      "  --jobs=N, -j N     concurrent independent compiler processes (default 1)\n"
+      "  --baseline=build|skip build the original (default build); skip requires no samples\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"

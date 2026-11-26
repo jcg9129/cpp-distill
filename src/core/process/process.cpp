@@ -3,6 +3,9 @@
 #include "core/path.h"
 #include <cstdlib>
 #include <cstdint>
+#include <algorithm>
+#include <atomic>
+#include <future>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -102,6 +105,27 @@ Result<std::filesystem::path> resolveExecutable(const std::filesystem::path& exe
                                                const std::filesystem::path& cwd) {
   try { return resolve(executable, cwd); }
   catch (const std::exception& e) { return Error{std::string("executable lookup: ") + e.what()}; }
+}
+std::vector<Result<ProcessResult>> runProcessBatch(const std::vector<ProcessSpec>& specs,
+                                                  unsigned jobs, ProcessRunner runner) {
+  std::vector<Result<ProcessResult>> results(specs.size(), Error{"process not started"});
+  std::atomic<std::size_t> next{0};
+  auto work = [&] {
+    for (;;) {
+      const auto i = next.fetch_add(1);
+      if (i >= specs.size()) return;
+      try { results[i] = runner(specs[i]); }
+      catch (const Error& e) { results[i] = e; }
+      catch (const std::exception& e) { results[i] = Error{e.what()}; }
+      catch (...) { results[i] = Error{"process runner threw an unknown exception"}; }
+    }
+  };
+  std::vector<std::future<void>> workers;
+  const auto count = std::min<std::size_t>(std::max(1u, jobs), specs.size());
+  for (std::size_t i = 1; i < count; ++i) workers.push_back(std::async(std::launch::async, work));
+  work();
+  for (auto& worker : workers) worker.get();
+  return results;
 }
 Result<ProcessResult> runProcess(const ProcessSpec& spec) {
   try {

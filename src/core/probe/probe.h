@@ -35,6 +35,10 @@ struct ProbeOptions {
   ProcessRunner runner = runProcess;
   std::chrono::milliseconds timeout{30000};
   std::size_t maxOutputBytes = 4 * 1024 * 1024;
+  // Optional prefetch of independent initial probes. Results retain input
+  // order; consumption is separate so parse failures preserve serial traces.
+  ProcessBatchRunner batchRunner = {};
+  std::function<void(const ProcessSpec&)> batchConsumed = {};
 };
 struct ProbeResult {
   SearchLists searchLists;

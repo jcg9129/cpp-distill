@@ -112,6 +112,8 @@ must include the target's C/C++ standard headers and libraries.
 | `--shorten-names` | Opt-in readable identifier shortening of a checked pruned artifact; implies `--strip-comments --no-line-markers --compact-whitespace`. Keeps the compact line layout and uses A15 `library-spelled-names`; `--no-assume=library-spelled-names` keeps names unchanged. Observable names, position observations or failed checks keep the checked artifact, with the reason in the report. |
 | `--compact-whitespace` | Opt-in trimming of leading horizontal whitespace, trailing whitespace and empty lines; implies `--no-line-markers` and requires its proof that source positions (including columns) are unobserved. Preserves literal/comment contents and spliced logical lines. If refused, output stays unchanged and the report says `whitespace kept: <why>`. |
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
+| `--jobs=N`, `-j N` | Run independent compiler invocations concurrently, at most N at a time (default 1). Options precede the compiler; compiler arguments are left intact. |
+| `--baseline=build\|skip` | Build the original by default; `skip` omits that build when no runtime samples are requested. Cannot be combined with `--verify-run`; every emitted artifact still passes a full build. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
 | `-v` | Show progress on stderr. |
 | `--help` | Show help. |

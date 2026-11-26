@@ -153,7 +153,7 @@ Result<ProbeResult> probe(const std::filesystem::path& compiler, const CompileCo
     configured.insert(configured.end(), arg.spelling.begin(), arg.spelling.end());
   }
   for (const auto& define : options.defines) configured.push_back("-D" + define);
-  auto execute = [&](std::vector<std::string> argv, const std::vector<std::string>& flags) -> Result<ProcessResult> {
+  auto specification = [&](std::vector<std::string> argv, const std::vector<std::string>& flags) {
     argv.insert(argv.begin(), pathToUtf8(compiler));
     argv.insert(argv.end(), flags.begin(), flags.end());
     ProcessSpec spec;
@@ -161,12 +161,17 @@ Result<ProbeResult> probe(const std::filesystem::path& compiler, const CompileCo
     spec.cwd = command.cwd;
     spec.timeout = options.timeout;
     spec.maxOutputBytes = options.maxOutputBytes;
-    auto run = options.runner(spec);
+    return spec;
+  };
+  auto checked = [](Result<ProcessResult> run) -> Result<ProcessResult> {
     if (!run.ok()) return run.error();
     if (run.value().timedOut || run.value().exitCode != 0 || run.value().signal)
       return Error{"compiler probe failed: " + run.value().stderrText};
     if (run.value().stdoutTruncated || run.value().stderrTruncated) return Error{"compiler probe output exceeded limit"};
     return run;
+  };
+  auto execute = [&](std::vector<std::string> argv, const std::vector<std::string>& flags) {
+    return checked(options.runner(specification(std::move(argv),flags)));
   };
   std::vector<std::string> searchFlags;
   // SearchLists describes only system paths; buildIncludeSearch inserts user paths.
@@ -176,15 +181,26 @@ Result<ProbeResult> probe(const std::filesystem::path& compiler, const CompileCo
     searchFlags.insert(searchFlags.end(), arg.spelling.begin(), arg.spelling.end());
   }
   for (const auto& define : options.defines) searchFlags.push_back("-D" + define);
-  auto verbose = execute({"-xc++", "-E", "-v", pathToUtf8(input), "-o", pathToUtf8(temp.path / "empty.i")}, searchFlags);
+  const std::vector<ProcessSpec> initialSpecs{
+      specification({"-xc++", "-E", "-v", pathToUtf8(input), "-o", pathToUtf8(temp.path / "empty.i")}, searchFlags),
+      specification({"-dumpmachine"}, target),
+      specification({"-xc++", "-dM", "-E", pathToUtf8(input)}, configured)};
+  std::vector<Result<ProcessResult>> initial;
+  if (options.batchRunner) initial = options.batchRunner(initialSpecs);
+  auto initialResult = [&](std::size_t i) {
+    if (!options.batchRunner) return checked(options.runner(initialSpecs[i]));
+    if (options.batchConsumed) options.batchConsumed(initialSpecs[i]);
+    return checked(std::move(initial[i]));
+  };
+  auto verbose = initialResult(0);
   if (!verbose.ok()) return verbose.error();
   auto lists = parseSearchLists(verbose.value().stderrText);
   if (!lists.ok()) return lists.error();
-  auto machine = execute({"-dumpmachine"}, target);
+  auto machine = initialResult(1);
   if (!machine.ok()) return machine.error();
   const std::string triple(trim(machine.value().stdoutText));
   if (triple.empty() || triple.find_first_of(" \t\r\n") != std::string::npos) return Error{"invalid compiler target triple"};
-  auto predefined = execute({"-xc++", "-dM", "-E", pathToUtf8(input)}, configured);
+  auto predefined = initialResult(2);
   if (!predefined.ok()) return predefined.error();
   auto table = parseMacros(predefined.value().stdoutText);
   if (!table.ok()) return table.error();

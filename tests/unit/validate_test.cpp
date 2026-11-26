@@ -424,3 +424,30 @@ TEST(validate_pp_trimming_options) {
     CHECK(distillHelp().find(name) != std::string::npos);
   }
 }
+
+TEST(validate_speed_options_and_compiler_boundary) {
+  const auto defaults = parseDistillOptions({"main.cpp"});
+  CHECK_EQ(defaults.value().jobs,1u); CHECK(!defaults.value().skipBaseline);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--jobs=4","--baseline=skip","main.cpp"},
+      {"--jobs","4","--baseline","skip","main.cpp"},
+      {"-j","4","--baseline=skip","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok());
+    CHECK_EQ(r.value().jobs,4u); CHECK(r.value().skipBaseline);
+  }
+  CHECK(!parseDistillOptions({"-j4","main.cpp"}).ok());
+  const auto compiler = parseDistillOptions({"g++","--jobs=4","--baseline=skip","-j","4","main.cpp"});
+  CHECK_EQ(compiler.value().jobs,1u); CHECK(!compiler.value().skipBaseline);
+  CHECK_EQ(compiler.value().compile,(std::vector<std::string>{"g++","--jobs=4","--baseline=skip","-j","4","main.cpp"}));
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--jobs"}, {"--jobs=0","main.cpp"}, {"--jobs=-1","main.cpp"},
+      {"--jobs=+2","main.cpp"}, {"--jobs=1.5","main.cpp"}, {"--jobs=4x","main.cpp"},
+      {"--jobs=","main.cpp"}, {"--jobs=99999999999999999999","main.cpp"},
+      {"--baseline"}, {"--baseline=","main.cpp"}, {"--baseline=syntax","main.cpp"},
+      {"--baseline=skip","--verify-run","sample.in","main.cpp"},
+      {"--jobs=4","--judge-probe","cses"}, {"--jobs=1","--judge-probe","cses"},
+      {"--baseline=build","--judge-probe","cses"}, {"--baseline=skip","--judge-check","cses","result.txt"}})
+    CHECK(!parseDistillOptions(args).ok());
+  CHECK(distillHelp().find("--jobs=N") != std::string::npos);
+  CHECK(distillHelp().find("--baseline=build|skip") != std::string::npos);
+}

@@ -10,7 +10,7 @@ target_compile_definitions(distill_unit_tests PRIVATE
   DISTILL_EXPECTED_VERSION="${DISTILL_VERSION}"
   DISTILL_EXPECTED_COMMIT="${DISTILL_COMMIT}"
   DISTILL_EXPECTED_LLVM_REVISION="${DISTILL_LLVM_REVISION}")
-target_compile_definitions(distill_unit_tests PRIVATE DISTILL_EXTENSION_DATA="${PROJECT_SOURCE_DIR}/data/extensions" DISTILL_PROFILE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/profile" DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
+target_compile_definitions(distill_unit_tests PRIVATE DISTILL_PIPELINE_CASES="${PROJECT_SOURCE_DIR}/tests/cases/pipeline" DISTILL_EXTENSION_DATA="${PROJECT_SOURCE_DIR}/data/extensions" DISTILL_PROFILE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/profile" DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
 add_dependencies(distill_unit_tests distill_test_helper)
 add_test(NAME unit COMMAND distill_unit_tests)
 # Full probe/pipeline units and readable shortening regressions on bounded hosts.

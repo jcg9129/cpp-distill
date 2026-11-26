@@ -11,6 +11,12 @@ struct DistillOptions {
   bool assumeLibrarySpelledNames = true;
   // Implies comment stripping, marker omission and checked compaction.
   bool shortenNames = false;
+  // Independent compiler invocations only; custom ProcessRunners must be safe
+  // to call concurrently when jobs > 1. Reports retain serial order.
+  unsigned jobs = 1;
+  // The baseline executable is used only for sample comparisons. Raw still
+  // passes its preprocessing and full build checks. Rejected with samples.
+  bool skipBaseline = false;
   bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   // Opt-in: omit generated #line markers from a pruned result when the parse
@@ -43,6 +49,7 @@ struct PipelineResult {
   int exitCode = 1;
   std::string artifact, verification = "local", runtime = "not requested", bytes;
   std::string diagnostic, resultLine, report;
+  std::vector<std::string> optionLines;
   // With noLineMarkers: "omitted" or "kept: <first reason>"; empty otherwise.
   std::string lineMarkers;
   // With compactWhitespace: "compacted" or "kept: <first reason>".

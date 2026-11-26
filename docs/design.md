@@ -213,6 +213,8 @@ Distill options (before the compiler name):
 | `--judge <name\|file>` | judge profile (§4.3) |
 | `--keep <name>` | extra root; in source: `// distill: keep` before a declaration |
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
+| `--jobs=N`, `-j N` | Run independent compiler invocations concurrently, at most N at a time (default 1). Options precede the compiler; compiler arguments are left intact. |
+| `--baseline=build\|skip` | Build the original by default; `skip` omits that build when no runtime samples are requested. Cannot be combined with `--verify-run`; every emitted artifact still passes a full build. |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | keep every declaration, but still resolve preprocessor conditionals for the judge and remove inactive `#if` branches (result `flat`); use `--merge-only` to keep everything |
 | `--merge-only` | inline local headers only (result `raw`), keeping every conditional and line of code; keep baseline and raw checks, skip resolution, pruning and later renderings |
@@ -275,6 +277,25 @@ drained concurrently, output capped and children reaped. A step that hits a
 limit fails its artifact; a deadline never promotes an unchecked artifact.
 
 ## 4. Components
+
+With `--jobs=N` (default 1), the pipeline batches independent initial compiler
+probes and the preprocessing pairs for raw, flat, marker omission and
+compaction. Without runtime samples it can also overlap the baseline build
+with raw preparation and its
+build, reserving a slot for the baseline. Every child retains its timeout and
+output cap; batches share the enclosing phase deadline. Results and report
+records are consumed in serial order, including failure precedence. Later
+artifact builds remain verification gates for their successors. Commands with
+unmodelled flags stay serial because those flags may introduce shared side
+effects.
+
+`--baseline=skip` is valid only without `--verify-run`. The baseline executable
+has no consumer in that case: `execute` returns immediately for empty samples,
+and only sample comparisons read its saved runs. Skipping removes the separate
+original-build gate; raw preprocessing comparison and raw's full compile/link
+check remain mandatory. The default `--baseline=build` retains the original
+behavior. Reports include `option jobs=N`, `option baseline=build|skip`, and
+an explicit skipped-baseline option line when applicable.
 
 ### 4.1 Command model
 

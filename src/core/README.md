@@ -553,6 +553,40 @@ back to checked raw/flat, while a raw difference exits 1, publishes no source,
 and keeps the work directory. Strict returns 3 unless selected bytes are
 pruned/target.
 
+`--jobs=N` / `-j N` opts into bounded compiler concurrency (default 1).
+The parser consumes them only before the compiler/source token; a compiler's
+own `-j` or `--jobs` arguments are unchanged. Initial search/triple/macro probes
+run as a batch; their results are consumed in original order so an earlier
+parse or process failure still wins. Original/raw, raw/flat, marker omission
+and compaction `-E` pairs also run concurrently. Prefetched results are consumed by the original comparison
+expressions, retaining their process order and failure precedence. Without
+samples, the baseline build overlaps raw preparation and its build; it reserves one slot from the same N-process budget. Baseline
+failure still takes precedence over any speculative raw failure. Speculative
+results that the serial pipeline would not reach do not enter its report.
+Other artifact builds retain their current dependency gates. Each process
+retains its own timeout and output cap and its phase's deadline.
+Commands with unmodelled flags stay serial: those flags can request shared
+side-effect files or compiler plugins that make invocations dependent.
+Custom `ProcessRunner` callbacks must support concurrent calls with jobs > 1.
+
+`--baseline=skip` is accepted only without samples. The baseline executable is
+only read by `execute`, which returns immediately when `samples` is empty;
+its cached results are only used for runtime comparison. Skipping deliberately
+omits the separate original-build gate. The original/raw preprocessing check
+and raw compile/link check remain, and every emitted artifact is still built.
+Reports record both selected options with `option ...` lines, and explicitly
+mark the baseline check skipped. Default `--baseline=build` is unchanged.
+
+Final-only verification requires a contract decision before implementation.
+A passing final build does not prove the earlier stages would pass: a judge
+macro can introduce an undefined reference in an unused function, causing flat
+to fail linking, while pruning that function produces a valid executable.
+Today's pipeline emits raw in that case. See the real-GCC regression
+`pipeline_flat_link_failure_can_have_a_successfully_built_pruned_successor`.
+Preserving that exact fallback requires the earlier link check even when the
+final artifact passes. Replaying earlier stages only after final failure
+cannot preserve the specified behavior in this case.
+
 The CLI exposes this API with repeatable `--verify-run <path>` before the
 compiler. A regular file (any suffix) is one stdin sample; a directory contributes
 its immediate regular `*.in` files in filename order. It does not recurse.

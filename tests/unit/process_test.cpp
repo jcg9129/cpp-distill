@@ -2,6 +2,11 @@
 #include "support.h"
 #include "core/process/process.h"
 #include <future>
+#include <algorithm>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #ifdef _WIN32
 #include <cstdint>
 #include <sstream>
@@ -226,4 +231,42 @@ TEST(process_memory_limit_smoke) {
   auto process = spec({"exit", "0"});
   process.memoryLimitBytes = 256 * 1024 * 1024;
   CHECK_EQ(run(process).exitCode, 0);
+}
+
+TEST(process_batch_bounded_concurrent_order_and_errors) {
+  // Synchronize the first wave instead of relying on timing to prove overlap.
+  for (const unsigned jobs : {1u,2u,4u}) {
+    std::mutex mutex; std::condition_variable ready;
+    unsigned active = 0, peak = 0, arrived = 0;
+    std::vector<ProcessSpec> specs(9);
+    for (std::size_t i = 0; i < specs.size(); ++i) specs[i].argv = {std::to_string(i)};
+    auto results = runProcessBatch(specs,jobs,[&](const ProcessSpec& input) -> Result<ProcessResult> {
+      const auto index = std::stoul(input.argv[0]);
+      {
+        std::unique_lock lock(mutex);
+        ++active; peak = std::max(peak,active);
+        ++arrived; ready.notify_all();
+        if (index < jobs) ready.wait_for(lock,2s,[&] { return arrived >= jobs; });
+      }
+      std::this_thread::sleep_for(2ms);
+      { std::lock_guard lock(mutex); --active; }
+      if (index == 3) return Error{"ordered failure"};
+      if (index == 5) throw std::runtime_error("runner failure");
+      ProcessResult r; r.exitCode = static_cast<int>(index); return r;
+    });
+    CHECK_EQ(peak,jobs); CHECK_EQ(results.size(),specs.size()); CHECK_EQ(active,0u);
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+      if (i == 3) CHECK_EQ(results[i].error().message,"ordered failure");
+      else if (i == 5) CHECK_EQ(results[i].error().message,"runner failure");
+      else CHECK_EQ(results[i].value().exitCode,static_cast<int>(i));
+    }
+  }
+}
+TEST(process_batch_preserves_each_process_limits) {
+  auto timeout = spec({"sleep","100000"}); timeout.timeout = 100ms;
+  auto flood = spec({"flood","8192"}); flood.maxOutputBytes = 32;
+  const auto results = runProcessBatch({timeout,flood,spec({"exit","7"})},2);
+  CHECK(results[0].ok()); CHECK(results[0].value().timedOut);
+  CHECK_EQ(results[1].value().stdoutText.size(),32u); CHECK(results[1].value().stdoutTruncated);
+  CHECK_EQ(results[2].value().exitCode,7);
 }
