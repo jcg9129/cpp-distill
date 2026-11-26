@@ -21,6 +21,7 @@ macOS one) and asks for real GCC; a Clang named explicitly is accepted and noted
 - [Pruning](#pruning): `--no-prune`, `--merge-only`, `--keep`, `--no-assume`
 - [Size and layout](#size-and-layout): `--strip-comments`, `--no-line-markers`, `--compact-whitespace`, `--shorten-names`
 - [Checking](#checking): `--verify-run`, `--strict`
+- [Speed](#speed): `--verify`, `--jobs`, `--baseline`
 - [Information](#information): `--help`, `--version`
 - [Exit codes](#exit-codes)
 
@@ -286,6 +287,66 @@ skipped and the report says `skipped: can't run target binaries here`.
 Exit with status 3 (the source is still written) unless the result is `pruned`
 with `target` verification. Use it in scripts and editor integrations that should
 notice a fallback.
+
+## Speed
+
+A run takes several seconds to half a minute, mostly in the C++ compiler: distill
+builds the original program, the raw file, and every artifact and rendering it
+might emit, each with the judge's flags, and preprocesses most of them twice for
+comparison. These options make a run faster. They don't change what distill
+checks about the file it writes. The defaults keep the full sequence.
+
+### `--verify=all|final`
+
+With the default `all`, every rendering stage is built and checked. With
+`final`:
+- the raw, flat and pruned artifacts are checked exactly as with `all`,
+  including comment stripping, which is part of those artifacts;
+- line-marker removal and whitespace compaction skip their build, run and
+  preprocessing comparison when another requested rendering follows them
+  (for example `--shorten-names`). Their source-position proofs and token
+  invariants still run;
+- the last requested rendering gets the full check. If it fails or is refused,
+  distill checks the skipped renderings in reverse order until one passes, and
+  otherwise writes the checked pruned artifact.
+
+Every written file has passed a full judge-flag build and all checks of its
+stage. When all stages pass, the output is byte-identical to `all`.
+
+The one accepted difference: if an intermediate rendering would fail but a
+later one passes, `final` writes the later, checked rendering, where `all` would
+stop at an earlier one.
+
+The report says `option verify=final`, with one line per skipped stage:
+`verify: <stage> build skipped (--verify=final)`, where the stage is `unmarked`
+or `compact`. It works with `--verify-run`.
+
+### `--jobs=N`, `-j N`
+
+Run independent compiler and preprocessor invocations concurrently, at most N
+at a time (default 1). Output, report contents and order, exit status and
+diagnostics are the same as with one job; only the wall time changes. Commands
+with compiler flags distill doesn't model stay serial, because such flags can
+share files or load plugins. Each parallel job is a full compiler, so limit N to
+what the machine's memory allows.
+
+### `--baseline=build|skip`
+
+By default distill first builds your original program, in its own directory.
+`skip` omits that build. The raw file's preprocessing comparison and full build
+still run, so a compile error in the original is still caught, as a raw
+failure. The baseline executable is only needed to compare sample runs, so
+`skip` is rejected together with `--verify-run`.
+
+`skip` is also refused for inputs whose build may depend on the working
+directory or on external files:
+- assembly in the source, an inlined file or a system header;
+- modules (`-fmodules`);
+- compiler flags distill doesn't model;
+- external library options such as `-L` or a custom `-l`.
+
+For those, distill keeps building the original where it is. The report says
+`option baseline=skip`.
 
 ## Information
 
