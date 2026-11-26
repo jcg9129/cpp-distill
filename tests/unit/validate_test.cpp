@@ -129,6 +129,17 @@ TEST(validate_no_assume_names) {
     auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(!r.value().assumeInstantiationEffects);
     CHECK(!r.value().noPrune);
   }
+  CHECK(parseDistillOptions({"main.cpp"}).value().assumeLibraryReachableClasses);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--no-assume=library-reachable-classes","main.cpp"},
+      {"--no-assume","library-reachable-classes","main.cpp"},
+      {"--no-assume=library-reachable-classes,library-reachable-classes","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok());
+    CHECK(!r.value().assumeLibraryReachableClasses); CHECK(r.value().assumeLibrarySpelledMembers);
+    CHECK(r.value().assumeInstantiationEffects); CHECK(!r.value().noPrune);
+  }
+  CHECK(!parseDistillOptions({"--no-assume=library-reachable-classes","--judge-probe","cses"}).ok());
+  CHECK(distillHelp().find("library-reachable-classes (A16)") != std::string::npos);
   CHECK(parseDistillOptions({"main.cpp"}).value().assumeLibrarySpelledMembers);
   for (const auto& args : std::vector<std::vector<std::string>>{
       {"--no-assume=library-spelled-members","main.cpp"},

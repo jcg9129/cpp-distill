@@ -14,15 +14,16 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (a == "--no-assume" || a.starts_with("--no-assume=")) {
       std::string names;
       if (a == "--no-assume") {
-        if (++i == args.size()) return Error{"missing value for --no-assume; switchable names: instantiation-effects, library-spelled-members, library-macro-values, unspelled-functions, library-spelled-names, idempotent-standard-headers, unobserved-guard-macros"};
+        if (++i == args.size()) return Error{"missing value for --no-assume; switchable names: instantiation-effects, library-spelled-members, library-macro-values, library-reachable-classes, unspelled-functions, library-spelled-names, idempotent-standard-headers, unobserved-guard-macros"};
         names = args[i];
       } else names = a.substr(12);
       for (std::size_t begin = 0;;) {
         const auto end = names.find(',',begin);
         const auto name = names.substr(begin,end == names.npos ? end : end-begin);
-        if (name != "instantiation-effects" && name != "library-spelled-members" && name != "library-macro-values" && name != "unspelled-functions" && name != "library-spelled-names" && name != "idempotent-standard-headers" && name != "unobserved-guard-macros")
-          return Error{"unknown --no-assume name: " + name + "; switchable names: instantiation-effects, library-spelled-members, library-macro-values, unspelled-functions, library-spelled-names, idempotent-standard-headers, unobserved-guard-macros"};
+        if (name != "instantiation-effects" && name != "library-spelled-members" && name != "library-reachable-classes" && name != "library-macro-values" && name != "unspelled-functions" && name != "library-spelled-names" && name != "idempotent-standard-headers" && name != "unobserved-guard-macros")
+          return Error{"unknown --no-assume name: " + name + "; switchable names: instantiation-effects, library-spelled-members, library-macro-values, library-reachable-classes, unspelled-functions, library-spelled-names, idempotent-standard-headers, unobserved-guard-macros"};
         if (name == "instantiation-effects") o.assumeInstantiationEffects = false;
+        else if (name == "library-reachable-classes") o.assumeLibraryReachableClasses = false;
         else if (name == "library-spelled-members") o.assumeLibrarySpelledMembers = false;
         else if (name == "library-macro-values") o.assumeLibraryMacroValues = false;
         else if (name == "unspelled-functions") o.assumeUnspelledFunctions = false;
@@ -58,7 +59,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        o.noPrune || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryReachableClasses || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
@@ -83,7 +84,7 @@ std::string distillHelp() {
       "  --report <file>    validation, conditional and pruning report\n"
       "  --no-prune         inline and resolve only\n"
       "  --no-assume=<name> disable an assumption or policy (repeatable, comma lists accepted)\n"
-      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-spelled-names (A15), library-macro-values (A9 standard macros), unspelled-functions (D3f), idempotent-standard-headers (policy), unobserved-guard-macros (A14)\n"
+      "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-reachable-classes (A16), library-spelled-names (A15), library-macro-values (A9 standard macros), unspelled-functions (D3f), idempotent-standard-headers (policy), unobserved-guard-macros (A14)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
       "  --strip-comments   remove comments during checked rendering\n"
       "  --no-line-markers  omit #line markers from a pruned result when no user code\n"

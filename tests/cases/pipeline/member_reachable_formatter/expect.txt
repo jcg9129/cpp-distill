@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+milestone=A16
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+requires=formatter
+contains=auto parse
+contains.1=auto format
+report=rule4-library-reachable class "std::formatter"

@@ -14,7 +14,7 @@ struct CliOptions {
   bool noPrune = false, stripComments = false, noLineMarkers = false, compactWhitespace = false;
   bool assumeLibrarySpelledNames = true;
   bool shortenNames = false;
-  bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
+  bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryReachableClasses = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   std::vector<std::string> compile, keep, verifyRun;
 };

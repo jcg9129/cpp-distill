@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+milestone=A16
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+no-assume=library-reachable-classes
+contains=int push()
+contains.1=int find()
+contains.2=int init()
+report=pruning assumption disabled: A16 library-reachable-classes

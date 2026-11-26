@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+milestone=A16
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+contains=int init()
+contains.1=int* begin()
+contains.2=int* end()
+report=range-for range

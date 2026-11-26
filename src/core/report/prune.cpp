@@ -2,6 +2,7 @@
 #include "core/report/prune.h"
 #include "core/names/adl.h"
 #include "core/library/library.h"
+#include <algorithm>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
@@ -23,6 +24,10 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     out << "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
   if (!m.assumeLibrarySpelledMembers)
     out << "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
+  if (!m.assumeLibraryReachableClasses)
+    out << "pruning assumption disabled: A16 library-reachable-classes (--no-assume=library-reachable-classes)\n";
+  else if (!m.libraryReachabilityComputed)
+    out << "rule4-library-reachable unavailable: " << (m.libraryReachabilityFailure.empty() ? "worker analysis unavailable" : m.libraryReachabilityFailure) << "; using full rule 4\n";
   if (!m.assumeUnspelledFunctions)
     out << "pruning assumption disabled: D3f unspelled-functions (--no-assume=unspelled-functions)\n";
   if (m.assumeUnspelledFunctions && r.disabledReasons.empty())
@@ -51,7 +56,7 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
   std::map<std::pair<FamilyId,std::string>,std::vector<FamilyId>> units;
   for (FamilyId id = 0; id < m.families.size(); ++id) if (m.families[id].memberOf != noFamily)
     units[{find(id),m.families[id].memberName}].push_back(id);
-  std::size_t keptUnits = 0, removedUnits = 0;
+  std::size_t keptUnits = 0, removedUnits = 0, waivedUnits = 0, waivedBytes = 0;
   for (const auto& [key,ids] : units) {
     (void)key;
     const auto id = ids.front(); const auto& f = m.families[id]; const auto& kept = r.families[id];
@@ -65,8 +70,27 @@ Result<std::string> renderPruningReport(const PruningModel& m, const PruningResu
     else if (kept.kept && (reason.starts_with("AST:") || reason.starts_with("dependent name:"))) reason = "D3e rule 6: " + reason;
     std::size_t bytes = 0;
     for (auto part : ids) for (auto range : m.families[part].ranges) bytes += range.end-range.begin;
+    const auto scanned = embeddedLibraryData().memberNames;
+    const bool librarySpelling = m.libraryMemberNames.contains(f.memberName) ||
+        std::binary_search(scanned.begin(),scanned.end(),f.memberName);
+    if (!kept.kept && f.memberBlocker.empty() && r.families[f.memberOf].kept && !libraryRule4Applies(m,f) && librarySpelling) {
+      ++waivedUnits; waivedBytes += bytes;
+    }
     out << "member unit " << id << ' ' << std::quoted(f.label) << ' ' << std::quoted(f.memberName)
         << ": " << (kept.kept ? "blocked: " : "removed: ") << reason << "; bytes=" << bytes << '\n';
+  }
+  if (m.assumeLibraryReachableClasses && m.libraryReachabilityComputed) {
+    std::size_t reachable = 0, unreachable = 0, listed = 0;
+    for (const auto& c : m.libraryClasses) if (c.user) {
+      if (c.reason.empty()) ++unreachable;
+      else {
+        ++reachable;
+        if (listed++ < 100) out << "rule4-library-reachable class " << std::quoted(c.label) << ": " << c.reason << '\n';
+      }
+    }
+    out << "rule4-library-reachable: classes=" << reachable << " unreachable=" << unreachable
+        << " waived-units=" << waivedUnits << " bytes=" << waivedBytes << '\n';
+    if (listed > 100) out << "rule4-library-reachable: " << listed-100 << " further classes omitted\n";
   }
   out << "member units kept=" << keptUnits << " removed=" << removedUnits << '\n';
   out << "unique family bytes kept=" << r.keptBytes << " removed=" << r.removedBytes << '\n';

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+milestone=A16
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+contains=void push_back
+contains.1=int& back
+contains.2=void insert
+report=rule4-library-reachable class "Container"

@@ -169,6 +169,7 @@ Result<PruningModel> extractPruning(const PruningModel& in, const PruneWorkerOpt
         model.value().assumeLibrarySpelledNames != in.assumeLibrarySpelledNames ||
         model.value().assumeInstantiationEffects != in.assumeInstantiationEffects ||
         model.value().assumeLibrarySpelledMembers != in.assumeLibrarySpelledMembers ||
+        model.value().assumeLibraryReachableClasses != in.assumeLibraryReachableClasses ||
         model.value().assumeUnspelledFunctions != in.assumeUnspelledFunctions ||
         model.value().assumeIdempotentStandardHeaders != in.assumeIdempotentStandardHeaders ||
         model.value().assumeUnobservedGuardMacros != in.assumeUnobservedGuardMacros ||

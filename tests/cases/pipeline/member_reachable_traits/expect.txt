@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+milestone=A16
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+contains=static const char* find
+contains.1=static void assign
+contains.2=static char* copy
+report=rule4-library-reachable class "MyTraits"

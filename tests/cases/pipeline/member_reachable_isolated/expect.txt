@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+prune=yes
+milestone=A16
+artifact=pruned
+verification=local
+exit=0
+configuration=local
+absent=int push()
+absent.1=int find()
+absent.2=int init()
+report=rule4-library-reachable: classes=0 unreachable=1 waived-units=3
+report.1=A16 library-reachable-classes

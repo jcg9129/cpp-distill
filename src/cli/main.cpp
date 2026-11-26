@@ -142,6 +142,7 @@ int run(const std::vector<std::string>& args) {
   options.assumeLibrarySpelledNames = parsed.assumeLibrarySpelledNames;
   options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;
   options.assumeLibrarySpelledMembers = parsed.assumeLibrarySpelledMembers;
+  options.assumeLibraryReachableClasses = parsed.assumeLibraryReachableClasses;
   options.assumeLibraryMacroValues = parsed.assumeLibraryMacroValues;
   options.assumeUnspelledFunctions = parsed.assumeUnspelledFunctions;
   options.assumeIdempotentStandardHeaders = parsed.assumeIdempotentStandardHeaders;

@@ -181,7 +181,7 @@ TEST(pipeline_prunes_without_instantiation_effects_assumption) {
   const auto r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned");
   CHECK(!r.pruningModel->assumeInstantiationEffects); CHECK(!r.assumptions.contains("A11"));
   CHECK(r.bytes.find("unused") == r.bytes.npos); CHECK(r.assumptions.contains("A7"));
-  CHECK(r.report.find("policy: D3e, without instantiation-effects") != r.report.npos);
+  CHECK(r.report.find("policy: D3e-A16, without instantiation-effects") != r.report.npos);
   CHECK(r.report.find("--no-assume=instantiation-effects") != r.report.npos);
   CHECK(r.report.find("pruning assumption: A11") == r.report.npos);
   f.options.noPrune = true;

@@ -239,6 +239,12 @@ Result<bool> validatePruningModel(const PruningModel& m, std::string* invalidFie
   for (std::size_t i = 0; i < m.positionUses.size(); ++i)
     if (m.positionUses[i].offset > m.text.size() || m.positionUses[i].what.empty())
       return invalid("invalid position use","model.positionUses["+std::to_string(i)+"]");
+  for (std::size_t i = 0; i < m.families.size(); ++i)
+    if (m.families[i].memberClass != noFamily && m.families[i].memberClass >= m.libraryClasses.size())
+      return invalid("invalid member class index","model.families["+std::to_string(i)+"].memberClass");
+  for (std::size_t i = 0; i < m.libraryClasses.size(); ++i)
+    if (m.libraryClasses[i].label.empty())
+      return invalid("empty library class label","model.libraryClasses["+std::to_string(i)+"].label");
   return true;
 }
 Result<PruningResult> computeRetention(const PruningModel& m) {
@@ -246,6 +252,8 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   const auto& registry = embeddedAdlRegistry();
   PruningResult out; out.dialect = m.dialect; out.registryVersion = registry.version; out.registryDigest = registry.digest;
   if (!m.assumeInstantiationEffects) out.policy += ", without instantiation-effects";
+  if (!m.assumeLibraryReachableClasses) out.policy += ", without library-reachable-classes";
+  else if (!m.libraryReachabilityComputed) out.policy += ", library-reachable-classes unavailable";
   if (!m.assumeLibrarySpelledMembers) out.policy += ", without library-spelled-members";
   if (!m.assumeUnspelledFunctions) out.policy += ", without unspelled-functions";
   out.memberDisabledReasons = m.memberDisabledReasons;
@@ -320,7 +328,7 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
         std::none_of(f.callableNames.begin(),f.callableNames.end(),[&](const auto& name) { return adl.contains(name); });
   }
   // Also cover models supplied without worker extraction (and offline tests).
-  auto memberRegistry = m.libraryMemberNames;
+  std::set<std::string,std::less<>> languageMembers;
   const auto scannedMemberNames = embeddedLibraryData().memberNames;
   // The scanned union is already sorted. Query it in place instead of copying
   // every name into a set for each retention calculation.
@@ -328,18 +336,21 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   for (const char* name : {
       "begin", "end", "get", "get_return_object", "initial_suspend", "final_suspend",
       "return_value", "return_void", "yield_value", "await_transform", "unhandled_exception",
-      "get_return_object_on_allocation_failure", "await_ready", "await_suspend", "await_resume"}) memberRegistry.insert(name);
+      "get_return_object_on_allocation_failure", "await_ready", "await_suspend", "await_resume"}) languageMembers.insert(name);
   std::vector<std::vector<FamilyId>> members(n);
   std::vector<std::string> memberReasons(n);
   for (FamilyId i = 0; i < n; ++i) if (m.families[i].memberOf != noFamily) {
     const auto& f = m.families[i];
     members[f.memberOf].push_back(i);
     memberReasons[i] = out.memberDisabledReasons.empty() ? f.memberBlocker : "member pruning disabled";
-    if (memberReasons[i].empty() && (memberRegistry.contains(f.memberName) ||
-        (m.assumeLibrarySpelledMembers &&
-         std::binary_search(scannedMemberNames.begin(),scannedMemberNames.end(),f.memberName))))
+    if (memberReasons[i].empty() && (languageMembers.contains(f.memberName) ||
+        (libraryRule4Applies(m,f) && (m.libraryMemberNames.contains(f.memberName) ||
+         (m.assumeLibrarySpelledMembers &&
+          std::binary_search(scannedMemberNames.begin(),scannedMemberNames.end(),f.memberName))))))
       memberReasons[i] = "D3e rule 4: library or language spelling: " + f.memberName;
   }
+  // A16 changes forward rule-4 retention only. Keep the original spelling
+  // boundary for the A11 potential-effect graph, including unreachable classes.
   // Rules 1-4/8 never separate a unit from a kept owner. Their incoming member
   // dispatch was already covered by D3d-7's whole-record analysis. Keep using
   // that owner analysis rather than inventing an unbounded library hook at
@@ -348,7 +359,8 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
   std::vector<bool> ownerDispatch(n);
   for (FamilyId i = 0; i < n; ++i) {
     const auto& f = m.families[i];
-    if (f.memberOf != noFamily && !memberReasons[i].empty())
+    if (f.memberOf != noFamily && (!memberReasons[i].empty() || m.libraryMemberNames.contains(f.memberName) ||
+        (m.assumeLibrarySpelledMembers && std::binary_search(scannedMemberNames.begin(),scannedMemberNames.end(),f.memberName))))
       for (auto unit : groups[find(i)])
         if (m.families[unit].memberOf == f.memberOf) ownerDispatch[unit] = true;
   }
@@ -548,7 +560,10 @@ Result<PruningResult> computeRetention(const PruningModel& m) {
     if (m.assumeUnspelledFunctions) out.assumptions.insert("D3f");
     if (m.assumeInstantiationEffects) out.assumptions.insert("A11");
     if (m.assumeUnobservedGuardMacros) out.assumptions.insert("A14");
-    if (out.memberDisabledReasons.empty()) out.assumptions.insert("A12");
+    if (out.memberDisabledReasons.empty()) {
+      out.assumptions.insert("A12");
+      if (m.assumeLibraryReachableClasses && m.libraryReachabilityComputed) out.assumptions.insert("A16");
+    }
   }
   return out;
 }

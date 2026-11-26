@@ -155,6 +155,7 @@ struct Pipeline {
       m.assumeLibrarySpelledNames = options.assumeLibrarySpelledNames;
       m.assumeInstantiationEffects = options.assumeInstantiationEffects;
       m.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
+      m.assumeLibraryReachableClasses = options.assumeLibraryReachableClasses;
       m.assumeUnspelledFunctions = options.assumeUnspelledFunctions;
       m.assumeIdempotentStandardHeaders = options.assumeIdempotentStandardHeaders;
       m.assumeUnobservedGuardMacros = options.assumeUnobservedGuardMacros;
@@ -275,6 +276,7 @@ struct Pipeline {
       input.shortenNames = true;
       input.assumeLibrarySpelledNames = options.assumeLibrarySpelledNames;
       input.assumeLibrarySpelledMembers = options.assumeLibrarySpelledMembers;
+      input.assumeLibraryReachableClasses = options.assumeLibraryReachableClasses;
       input.assumeInstantiationEffects = options.assumeInstantiationEffects;
       input.assumeUnspelledFunctions = options.assumeUnspelledFunctions;
       input.assumeIdempotentStandardHeaders = options.assumeIdempotentStandardHeaders;
@@ -514,6 +516,8 @@ struct Pipeline {
     }
     if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)\n";
+    if (!options.assumeLibraryReachableClasses && (!result.pruningModel || !result.retention))
+      result.diagnostic += "pruning assumption disabled: A16 library-reachable-classes (--no-assume=library-reachable-classes)\n";
     if (!options.assumeLibrarySpelledMembers && (!result.pruningModel || !result.retention))
       result.diagnostic += "pruning assumption disabled: A12 library-spelled-members (--no-assume=library-spelled-members)\n";
     if (!options.assumeUnspelledFunctions && (!result.pruningModel || !result.retention))

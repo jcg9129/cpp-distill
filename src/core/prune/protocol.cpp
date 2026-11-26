@@ -90,6 +90,7 @@ struct Archive {
     field("instantiationEffect",x.instantiationEffect);
     field("unspelledFunctionEligible",x.unspelledFunctionEligible);
     field("boundedSystemHooks",x.boundedSystemHooks);
+    field("memberClass",x.memberClass);
     field("memberOf",x.memberOf); field("memberName",x.memberName); field("memberBlocker",x.memberBlocker);
     field("namespaceUsing",x.namespaceUsing); field("externCDefinition",x.externCDefinition); field("systemSpecialization",x.systemSpecialization);
   }
@@ -97,6 +98,7 @@ struct Archive {
   void field(KeepAnnotation& x) { field("offset",x.offset); field("family",x.family); }
   void field(SystemEntity& x) { field("label",x.label); field("userEdges",x.userEdges); field("systemEdges",x.systemEdges); }
   void field(SystemUse& x) { field("family",x.family); field("entity",x.entity); }
+  void field(LibraryReachableClass& x) { field("label",x.label); field("reason",x.reason); field("user",x.user); }
   void field(PruningModel& x) {
     field("text",x.text); field("dialect",x.dialect); field("families",x.families); field("unions",x.unions); field("generatedMarkers",x.generatedMarkers);
     field("sourceDirectives",x.sourceDirectives); field("lineMap",x.lineMap); field("annotations",x.annotations); field("keepOffsets",x.keepOffsets); field("keepNames",x.keepNames); field("expansions",x.expansions);
@@ -107,6 +109,10 @@ struct Archive {
     field("shorteningExcludedNames",x.shorteningExcludedNames); field("shorteningRefused",x.shorteningRefused);
     field("assumeInstantiationEffects",x.assumeInstantiationEffects);
     field("assumeLibrarySpelledMembers",x.assumeLibrarySpelledMembers);
+    field("assumeLibraryReachableClasses",x.assumeLibraryReachableClasses);
+    field("libraryReachabilityComputed",x.libraryReachabilityComputed);
+    field("libraryReachabilityFailure",x.libraryReachabilityFailure);
+    field("libraryClasses",x.libraryClasses);
     field("assumeUnspelledFunctions",x.assumeUnspelledFunctions);
     field("assumeIdempotentStandardHeaders",x.assumeIdempotentStandardHeaders);
     field("assumeUnobservedGuardMacros",x.assumeUnobservedGuardMacros);
@@ -118,7 +124,7 @@ struct Archive {
 Result<std::string> serializePruningModel(const PruningModel& m) {
   auto v = validatePruningModel(m); if (!v.ok()) return v.error();
   try {
-    Archive a; a.stream << "DISTILL-PRUNE-13 "; auto copy = m; a.field(copy);
+    Archive a; a.stream << "DISTILL-PRUNE-14 "; auto copy = m; a.field(copy);
     auto s = a.stream.str(); if (s.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit"};
     return s;
   } catch (const Error& e) { return e; }
@@ -127,7 +133,7 @@ Result<PruningModel> parsePruningModel(std::string_view text) {
   if (text.size() > 256 * 1024 * 1024) return Error{"pruning protocol byte limit at field model, line 1, byte 0"};
   try {
     Archive a; a.reading = true; a.input = text; a.stream.str(std::string(text)); std::string version; a.stream >> version;
-    if (version != "DISTILL-PRUNE-13") { a.path = "version"; a.fail("invalid pruning protocol version"); }
+    if (version != "DISTILL-PRUNE-14") { a.path = "version"; a.fail("invalid pruning protocol version"); }
     PruningModel m; a.field(m); a.stream >> std::ws;
     if (!a.stream.eof()) { a.path = "trailer"; a.fail("trailing pruning protocol bytes"); }
     std::string invalidField;

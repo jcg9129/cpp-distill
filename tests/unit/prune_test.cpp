@@ -58,25 +58,25 @@ TEST(prune_a7_a11_apply_even_without_family_deletion) {
   const auto r = b.run(); CHECK(r.families[0].kept); CHECK_EQ(r.removedBytes,0u);
   CHECK(r.assumptions.contains("A7")); CHECK(r.assumptions.contains("A11"));
   CHECK(!r.assumptions.contains("A6"));
-  CHECK(b.run().policy == "D3e");
+  CHECK(b.run().policy == "D3e-A16, library-reachable-classes unavailable");
 }
 TEST(prune_without_instantiation_effects_identity_and_report) {
   Model b; b.add("main","int main(){}"); b.add("dead","int dead(){return 0;}");
   const auto assumed = serializePruningModel(b.m).value();
   b.m.assumeInstantiationEffects = false;
   const auto encoded = serializePruningModel(b.m).value();
-  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-13 "));
+  CHECK(assumed != encoded); CHECK(encoded.starts_with("DISTILL-PRUNE-14 "));
   CHECK(!parsePruningModel(encoded).value().assumeInstantiationEffects);
   CHECK(parsePruningModel(assumed).value().assumeInstantiationEffects);
   CHECK(!parsePruningModel("DISTILL-PRUNE-2 ").ok());
-  for (const auto version : {"10", "11", "12"}) {
+  for (const auto version : {"10", "11", "12", "13"}) {
     auto previous = assumed;
     previous.replace(0,16,std::string("DISTILL-PRUNE-") + version);
     CHECK(!parsePruningModel(previous).ok());
   }
   const auto r = b.run(); CHECK(r.disabledReasons.empty()); CHECK(!r.families[1].kept);
   CHECK(r.assumptions.contains("A7")); CHECK(!r.assumptions.contains("A11"));
-  CHECK_EQ(r.policy,"D3e, without instantiation-effects");
+  CHECK_EQ(r.policy,"D3e-A16, without instantiation-effects, library-reachable-classes unavailable");
   const auto report = renderPruningReport(b.m,r).value();
   CHECK(report.find("pruning assumption: A11") == std::string::npos);
   CHECK(report.find("pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)") != std::string::npos);
@@ -122,6 +122,69 @@ TEST(prune_library_spelled_members_identity_fallback_and_report) {
     ProcessResult response; response.exitCode = 0; response.stdoutText = enabled; return response;
   };
   CHECK(extractPruning(b.m,o).value().disabledReasons.back().starts_with("pruning worker changed immutable input"));
+}
+
+TEST(prune_library_reachable_classes_gating_identity_and_fallback) {
+  Model b;
+  b.m.libraryMemberNamesComputed = true;
+  b.m.libraryMemberNames.insert("init");
+  b.m.libraryReachabilityComputed = true;
+  b.m.libraryClasses.push_back({"S",{}});
+  const auto owner = b.add("S","struct S {};",FamilyKind::record);
+  const auto member = b.add("S::init","int init(){return 0;}");
+  b.m.families[member].names.clear(); b.m.families[member].callableNames.clear();
+  b.m.families[member].memberOf = owner; b.m.families[member].memberName = "init";
+  b.m.families[member].memberClass = 0;
+  b.add("main","int main(){S s;}");
+  auto r = b.run(); CHECK(!r.families[member].kept); CHECK(r.assumptions.contains("A16"));
+  const auto report = renderPruningReport(b.m,r).value();
+  CHECK(report.find("rule4-library-reachable: classes=0 unreachable=1 waived-units=1 bytes=") != report.npos);
+  const auto encoded = serializePruningModel(b.m).value();
+  auto decoded = parsePruningModel(encoded).value();
+  CHECK(decoded.libraryReachabilityComputed); CHECK_EQ(decoded.families[member].memberClass,0u);
+  CHECK_EQ(decoded.libraryClasses[0].label,"S"); CHECK(decoded.libraryClasses[0].reason.empty());
+  b.m.libraryClasses[0].reason = "system template argument";
+  r = b.run(); CHECK(r.families[member].kept);
+  CHECK_EQ(r.families[member].reason,"D3e rule 4: library or language spelling: init");
+  b.m.libraryClasses[0].reason.clear(); b.m.assumeLibraryReachableClasses = false;
+  r = b.run(); CHECK(r.families[member].kept); CHECK(!r.assumptions.contains("A16"));
+  CHECK(encoded != serializePruningModel(b.m).value());
+  CHECK(!parsePruningModel(serializePruningModel(b.m).value()).value().assumeLibraryReachableClasses);
+  b.m.assumeLibraryReachableClasses = true; b.m.libraryReachabilityComputed = false;
+  b.m.libraryReachabilityFailure = "AST traversal limit";
+  r = b.run(); CHECK(r.families[member].kept); CHECK(!r.assumptions.contains("A16"));
+  CHECK(renderPruningReport(b.m,r).value().find("AST traversal limit; using full rule 4") != std::string::npos);
+  b.m.libraryReachabilityComputed = true; b.m.families[member].memberName = "begin";
+  CHECK(b.run().families[member].kept); // Language lookup never needs reachability.
+  b.m.families[member].memberClass = 1;
+  CHECK(!serializePruningModel(b.m).ok());
+}
+
+TEST(prune_library_reachable_class_report_is_capped) {
+  Model b; b.m.libraryMemberNamesComputed = true; b.m.libraryReachabilityComputed = true;
+  for (int n = 0; n < 105; ++n) b.m.libraryClasses.push_back({"C"+std::to_string(n),"system call"});
+  const auto report = renderPruningReport(b.m,b.run()).value();
+  CHECK(report.find("class \"C99\": system call") != report.npos);
+  CHECK(report.find("class \"C100\"") == report.npos);
+  CHECK(report.find("5 further classes omitted") != report.npos);
+  CHECK(report.find("classes=105 unreachable=0") != report.npos);
+}
+
+TEST(prune_a16_preserves_instantiation_effect_name_boundary) {
+  Model b; b.m.libraryMemberNamesComputed = true; b.m.libraryMemberNames.insert("init");
+  b.m.libraryReachabilityComputed = true; b.m.libraryClasses.push_back({"S",{}});
+  const auto owner = b.add("S","struct S {};",FamilyKind::record);
+  const auto effect = b.add("Effect","struct Effect {};",FamilyKind::record);
+  b.m.families[effect].instantiationEffect = "template static storage";
+  const auto member = b.add("S::init","int init(){return 0;}");
+  auto& f = b.m.families[member]; f.names.clear(); f.callableNames.clear();
+  f.memberOf = owner; f.memberName = "init"; f.memberClass = 0; f.edges = {effect};
+  const auto dormant = b.add("dormant","void dormant(){int init = 1; (void)init;}");
+  b.add("main","int main(){S s;}");
+  const auto narrowed = b.run(); CHECK(!narrowed.families[dormant].kept);
+  b.m.assumeLibraryReachableClasses = false;
+  const auto legacy = b.run(); CHECK_EQ(narrowed.disabledReasons,legacy.disabledReasons);
+  for (FamilyId id = 0; id < b.m.families.size(); ++id) CHECK_EQ(narrowed.families[id].kept,legacy.families[id].kept);
 }
 
 TEST(prune_never_removed_rules_and_nonroots) {
@@ -446,18 +509,18 @@ TEST(prune_model_protocol_roundtrip_and_rejections) {
   CHECK(rejected.error().message.find("invalid pruning protocol version") != std::string::npos);
   CHECK(!parsePruningModel(encoded.value()+" garbage").ok());
   CHECK(!parsePruningModel(encoded.value().substr(0,encoded.value().size()/2)).ok());
-  CHECK(!parsePruningModel("DISTILL-PRUNE-13").ok());
+  CHECK(!parsePruningModel("DISTILL-PRUNE-14").ok());
   b.m.families[0].edges = {100}; CHECK(!computeRetention(b.m).ok()); b.m.families[0].edges.clear();
   b.m.families[1].ranges = b.m.families[0].ranges; CHECK(!computeRetention(b.m).ok());
 }
 TEST(prune_protocol_errors_locate_field_and_line) {
   for (const auto* value : {"oops", "11", "65"}) {
-    auto r = parsePruningModel(std::string("DISTILL-PRUNE-13 \"first\nsecond\" \"c++20\" 1 ") + value);
+    auto r = parsePruningModel(std::string("DISTILL-PRUNE-14 \"first\nsecond\" \"c++20\" 1 ") + value);
     CHECK(!r.ok()); CHECK(r.error().message.find("field model.families[0].kind, line 2") != std::string::npos);
   }
-  auto string = parsePruningModel("DISTILL-PRUNE-13 unquoted");
+  auto string = parsePruningModel("DISTILL-PRUNE-14 unquoted");
   CHECK(!string.ok()); CHECK(string.error().message.find("field model.text, line 1") != std::string::npos);
-  auto truncated = parsePruningModel("DISTILL-PRUNE-13 \"first\nsecond");
+  auto truncated = parsePruningModel("DISTILL-PRUNE-14 \"first\nsecond");
   CHECK(!truncated.ok()); CHECK(truncated.error().message.find("field model.text, line 2") != std::string::npos);
   PruningModel m; m.text = "first\n" + std::string(1000,' '); m.keepOffsets = {987};
   auto encoded = serializePruningModel(m); CHECK(encoded.ok());

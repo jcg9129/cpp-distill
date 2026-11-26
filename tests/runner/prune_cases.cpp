@@ -78,6 +78,7 @@ int main(int argc, char** argv) {
         model = take(preparePruning(configuration,{},flat,&configuration.facts,cli.keep));
         model.assumeInstantiationEffects = cli.assumeInstantiationEffects;
         model.assumeLibrarySpelledMembers = cli.assumeLibrarySpelledMembers;
+        model.assumeLibraryReachableClasses = cli.assumeLibraryReachableClasses;
         model.assumeUnspelledFunctions = cli.assumeUnspelledFunctions;
         model.assumeIdempotentStandardHeaders = cli.assumeIdempotentStandardHeaders;
         model.assumeUnobservedGuardMacros = cli.assumeUnobservedGuardMacros;

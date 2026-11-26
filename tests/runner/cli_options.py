@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             report = (root / 'report.txt').read_text()
             check(('void dormant' in result.stdout) == bool(flags), result.stdout)
             check(('pruning assumption: A11 instantiation-effects\n' in report) == (not flags), report)
-            check(('policy: D3e, without instantiation-effects\n' in report) == bool(flags), report)
+            check(('policy: D3e-A16, without instantiation-effects\n' in report) == bool(flags), report)
             if flags:
                 check('pruning assumption disabled: A11 instantiation-effects (--no-assume=instantiation-effects)' in report, report)
         (root / 'main.cpp').write_bytes(saved)
@@ -124,6 +124,23 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
         (root / 'sample.in').unlink()
+    with case('library-reachable-classes independently gates library spellings'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('#include <vector>\nstruct Helper { int init(){return 1;} };\n'
+                                      'int main(){Helper c;(void)c;}\n')
+        for flags in [[], ['--no-assume=library-reachable-classes'],
+                      ['--no-assume=library-reachable-classes,library-reachable-classes'], []]:
+            result = subprocess.run([binary, *flags, '--report', 'report.txt', 'g++', '-std=gnu++23', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 0 and 'wrote pruned (local)' in result.stderr, result.stderr)
+            report = (root / 'report.txt').read_text()
+            check(('int init()' in result.stdout) == bool(flags), result.stdout)
+            check(('pruning assumption: A16 library-reachable-classes\n' in report) == (not flags), report)
+            check('pruning assumption: A12 library-spelled-members\n' in report, report)
+            if not flags:
+                check('classes=0 unreachable=1 waived-units=1' in report, report)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
     with case('library-spelled-members flag reaches the worker independently of A11'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('struct S { int unused(){return 0;} };\n'

@@ -1608,6 +1608,8 @@ public:
     return true;
   }
 };
+#include "library_reachability.inc"
+
 class Consumer final : public ASTConsumer {
   Extraction& e;
 public:
@@ -1621,6 +1623,7 @@ public:
       MemberUnits(e).TraverseDecl(context.getTranslationUnitDecl());
       e.partitionMembers();
     }
+    if (e.memberUnitsEnabled() && e.model.assumeLibraryReachableClasses) LibraryReachability(e).run(context);
     e.normalizeRanges();
     // Namespaces, redeclarations, overloads and template identities share retention.
     std::map<std::pair<const DeclContext*,std::string>,FamilyId> overloads;

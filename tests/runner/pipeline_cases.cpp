@@ -149,6 +149,7 @@ int run(int argc, char** argv) {
                      std::filesystem::absolute(pathFromUtf8(argv[2])),*gcc);
   const bool models = argc == 2 && std::string_view(argv[1]) == "--checker-models";
   const bool d3c = argc == 4 && std::string_view(argv[3]) == "--d3c";
+  const bool a16 = argc == 4 && std::string_view(argv[3]) == "--a16";
   const bool d3d = argc == 4 && std::string_view(argv[3]) == "--d3d";
   const bool cli = argc >= 3 && std::string_view(argv[1]) == "--cli";
   const bool worker = argc >= 3 && std::string_view(argv[1]) == "--worker";
@@ -176,8 +177,8 @@ int run(int argc, char** argv) {
       auto value = [&](const char* key) { const auto f = expected.find(key); return f == expected.end() ? std::string{} : f->second; };
       if (models && value("checker").empty()) continue;
       if (!models && (cli || worker)) {
-        if (d3c != (value("milestone") == "D3c") || d3d != (value("milestone") == "D3d")) continue;
-      } else if (!models && value("milestone") == "D3c") continue;
+        if (d3c != (value("milestone") == "D3c") || d3d != (value("milestone") == "D3d") || a16 != (value("milestone") == "A16")) continue;
+      } else if (!models && (value("milestone") == "D3c" || value("milestone") == "A16")) continue;
       if ((value("requires") == "formatter" || value("requires") == "chrono_parse") &&
           !take(testing::libraryFeature(value("requires"),*gcc,temp.path))) {
         std::cout << "SKIP " << name << ": local library lacks " << value("requires") << '\n'; continue;
@@ -351,6 +352,7 @@ int run(int argc, char** argv) {
           o.assumeLibrarySpelledNames = flags.assumeLibrarySpelledNames;
           o.assumeInstantiationEffects = flags.assumeInstantiationEffects;
           o.assumeLibrarySpelledMembers = flags.assumeLibrarySpelledMembers;
+          o.assumeLibraryReachableClasses = flags.assumeLibraryReachableClasses;
           o.assumeLibraryMacroValues = flags.assumeLibraryMacroValues;
           o.assumeUnspelledFunctions = flags.assumeUnspelledFunctions;
           o.assumeIdempotentStandardHeaders = flags.assumeIdempotentStandardHeaders;

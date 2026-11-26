@@ -29,6 +29,8 @@ int main(int argc, char** argv) {
       ResolveResult flat; flat.text = text;
       for (std::size_t i = 0, line = 1; i < text.size(); ++i) if (!i || text[i-1] == '\n') flat.lineMap.push_back(SourceLocation{"main.cpp",line++});
       auto model = take(preparePruning(config,{},flat)); model.assumeLibrarySpelledMembers = memberPruning; model.assumeInstantiationEffects = assume;
+      // Preserve the original A12 corpus as the byte-compatible A16 opt-out suite.
+      model.assumeLibraryReachableClasses = false;
       model.keepNames.insert(keep.begin(),keep.end());
       model = take(extractPruning(model,worker));
       auto retained = take(computeRetention(model));
@@ -36,6 +38,11 @@ int main(int argc, char** argv) {
       require(reasons.empty() != expectRefusal,"unexpected refusal state: " + reasons);
       const auto output = expectRefusal ? text : take(renderSource(model,&retained)).provenance.text;
       if (!expectRefusal) { take(renderingInvariant(model,&retained,output)); take(staticNameInvariant(model,retained,output)); }
+      if (const auto* directory = std::getenv("DISTILL_MEMBER_SNAPSHOT")) {
+        static std::size_t snapshot = 0;
+        std::ofstream saved(std::filesystem::path(directory) / (std::to_string(snapshot++) + ".cpp"));
+        saved << output; require(bool(saved),"cannot save member regression output");
+      }
       return std::tuple{model,retained,output};
     };
     auto verify = [&](const std::string& output) {

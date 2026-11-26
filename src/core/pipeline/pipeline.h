@@ -11,7 +11,7 @@ struct DistillOptions {
   bool assumeLibrarySpelledNames = true;
   // Implies comment stripping, marker omission and checked compaction.
   bool shortenNames = false;
-  bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
+  bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryReachableClasses = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   // Opt-in: omit generated #line markers from a pruned result when the parse
   // proves no position is observed (docs/reviews/2026-11-18-no-line-markers.md).

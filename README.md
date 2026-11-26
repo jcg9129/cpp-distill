@@ -104,7 +104,7 @@ must include the target's C/C++ standard headers and libraries.
 | `--record <dir>` | With `--judge-check`, save dated observation evidence. |
 | `--report <file>` | Write validation, configuration, conditional and pruning explanations. |
 | `--no-prune` | Inline and resolve only. |
-| `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), or `unobserved-guard-macros` (A14); repeatable, comma lists accepted. |
+| `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-reachable-classes` (A16), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), or `unobserved-guard-macros` (A14); repeatable, comma lists accepted. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
 | `--no-line-markers` | Omit generated `#line` markers from a `pruned` result when the analysis proves no user code observes source positions (`__LINE__`, `__FILE__`, `__builtin_LINE`, `assert` without `NDEBUG`, call-site default arguments, …); otherwise they stay and the report says `line markers kept: <why>`. |
@@ -312,7 +312,7 @@ library configuration. Conflicting captured values remain unknown.
 when this part of A9 is off.
 
 `--no-assume=<name>` accepts repeated flags and comma lists. The switchable
-names are `instantiation-effects` (A11), `library-spelled-members` (A12),
+names are `instantiation-effects` (A11), `library-spelled-members` (A12), `library-reachable-classes` (A16),
 `library-spelled-names` (A15), `library-macro-values` (A9 standard macros), `unspelled-functions` (D3f),
 `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14).
 Unknown names are usage errors.

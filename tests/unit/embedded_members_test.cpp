@@ -49,10 +49,17 @@ int main(int argc, char** argv) try {
     CHECK(extracted.libraryMemberNames.contains("scanned_only_member"));
     CHECK(!extracted.libraryMemberNames.contains("absent_member"));
     auto kept = take(computeRetention(extracted));
+    auto legacy = extracted; legacy.assumeLibraryReachableClasses = false;
+    const auto legacyKept = take(computeRetention(legacy));
     CHECK(kept.disabledReasons.empty()); CHECK(kept.memberDisabledReasons.empty());
     bool found = false;
     for (FamilyId i = 0; i < extracted.families.size(); ++i) {
-      if (extracted.families[i].memberName == "scanned_only_member") { CHECK(kept.families[i].kept); found = true; }
+      if (extracted.families[i].memberName == "scanned_only_member") {
+        CHECK(!kept.families[i].kept); CHECK(legacyKept.families[i].kept); found = true;
+        auto reachable = extracted;
+        reachable.libraryClasses[extracted.families[i].memberClass].reason = "system template argument";
+        CHECK(take(computeRetention(reachable)).families[i].kept);
+      }
       if (extracted.families[i].memberName == "absent_member") CHECK(!kept.families[i].kept);
     }
     CHECK(found);

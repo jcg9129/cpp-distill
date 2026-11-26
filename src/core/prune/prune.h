@@ -7,10 +7,11 @@
 namespace distill {
 using FamilyId = std::size_t;
 inline constexpr FamilyId noFamily = std::numeric_limits<FamilyId>::max();
-inline constexpr std::string_view pruningPolicyVersion = "D3e";
+inline constexpr std::string_view pruningPolicyVersion = "D3e-A16";
 inline std::string_view assumptionLabel(std::string_view id) {
   if (id == "A11") return "A11 instantiation-effects";
   if (id == "A15") return "A15 library-spelled-names";
+  if (id == "A16") return "A16 library-reachable-classes";
   if (id == "A12") return "A12 library-spelled-members";
   if (id == "A14") return "A14 unobserved-guard-macros";
   if (id == "D3f") return "D3f unspelled-functions";
@@ -51,6 +52,8 @@ struct PruneFamily {
   // retained record's structural family (also for records nested in it).
   FamilyId memberOf = noFamily;
   std::string memberName, memberBlocker;
+  // Independent of structural ownership: nested records have their own class.
+  std::size_t memberClass = noFamily;
 };
 struct PruneMacroExpansion {
   std::size_t offset = 0;
@@ -83,6 +86,10 @@ struct PositionUse {
   bool operator==(const PositionUse&) const = default;
 };
 struct KeepAnnotation { std::size_t offset = 0; FamilyId family = noFamily; };
+struct LibraryReachableClass {
+  std::string label, reason; // Empty reason certifies unreachable under A16.
+  bool user = true;
+};
 struct PruningModel {
   // Part of the serialized worker input/result identity, not a parse-target fact.
   bool assumeLibrarySpelledNames = true;
@@ -92,6 +99,10 @@ struct PruningModel {
   std::string shorteningRefused;
   bool assumeInstantiationEffects = true;
   bool assumeLibrarySpelledMembers = true;
+  bool assumeLibraryReachableClasses = true;
+  bool libraryReachabilityComputed = false;
+  std::string libraryReachabilityFailure;
+  std::vector<LibraryReachableClass> libraryClasses;
   bool assumeUnspelledFunctions = true;
   // Pruned-renderer settings, also immutable worker input/result identity.
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
@@ -118,6 +129,10 @@ struct PruningModel {
   bool unknownInUserCode = false;
   std::vector<PositionUse> positionUses; // Set by the worker.
 };
+inline bool libraryRule4Applies(const PruningModel& m, const PruneFamily& f) {
+  return !m.assumeLibraryReachableClasses || !m.libraryReachabilityComputed ||
+      f.memberClass == noFamily || !m.libraryClasses[f.memberClass].reason.empty();
+}
 struct FamilyRetention {
   bool kept = false;
   std::string reason = "removed: outside the retention closure";

@@ -861,14 +861,14 @@ library-hook refusals are unchanged. See the
 A11 exclusions, compiler probes and measurements.
 `--no-assume=instantiation-effects` keeps pruning enabled without A11. The CLI
 accepts repetition and comma lists; `instantiation-effects`,
-`library-spelled-members`, `library-macro-values`, `unspelled-functions`,
+`library-spelled-members`, `library-reachable-classes` (A16), `library-macro-values`, `unspelled-functions`,
 `idempotent-standard-headers` and `unobserved-guard-macros` are
 the switchable names.
 Other names (including assumption IDs) are usage errors (exit 1) listing all
 six names. For A11, A12, D3f and the trimming settings, `CliOptions` → `DistillOptions` → `PruningModel` carries the setting to
 the worker. Pruning protocol **10** serializes the A11, A12, D3f and both trimming flags, and the parent rejects a worker
 response that changes it. No pruning-result cache exists; serialized model
-identity and `D3e, without instantiation-effects` distinguish the two modes.
+identity and `D3e-A16, without instantiation-effects` distinguish the two modes.
 Both report formats print the readable A11 name; the flag mode lists it as
 disabled by the flag, never as a relied-on assumption.
 
@@ -1416,6 +1416,18 @@ stderr note only after 180 days. The default clock is `system_clock`; both CLI
 selection paths print the note next to `profileSelectionLine`. This diagnostic
 never changes facts, generated output or exit status.
 
+A16 `library-reachable-classes` is enabled by default. Worker protocol 14 carries
+an independent class index on each member unit, plus reachability and the first
+reason for each class. Nested classes have separate identities; user class
+specializations share their template pattern's reachability. System template
+arguments/calls, language protocols, bases and conversions seed/close the set;
+uncertain dependent user code includes all recorded user-template class arguments.
+Unavailable analysis restores full rule 4. `--no-assume=library-reachable-classes`
+restores A12's original library spelling test byte for byte. Language names,
+virtual-name protection and A11's effect machinery are unchanged. Reports count
+reachable/unreachable user classes, waived units/bytes, and list at most 100
+reachable classes with their first reason.
+
 Member pruning (D3e) is enabled by default under A12 `library-spelled-members`.
 The worker inventories raw included system headers and identifiers emitted by
 the full TU's system macro expansions, including pasted results and user arguments.
@@ -1477,7 +1489,7 @@ expansion, including a name synthesized by token pasting. The input-wide collisi
 covers worker input; A14 covers judge-only library/compiler headers. Generated
 defines in surviving conditionals stay to protect conditional position uses.
 Disable with `--no-assume=unobserved-guard-macros`. Both flags are immutable
-worker/renderer identity in protocol 13 and independent of A11/A12/A9/D3f/A15.
+worker/renderer identity in protocol 14 and independent of A11/A12/A9/D3f/A15.
 Reports list their enabled/disabled state and unique source-byte/physical-line
 counts as `idempotent-includes-removed: lines=N bytes=B` and
 `guard-defines-removed: lines=N bytes=B`.
