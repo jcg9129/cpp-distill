@@ -285,6 +285,9 @@ struct Pipeline {
     if (result.lineMarkers.empty()) result.lineMarkers = "kept: " + why;
     result.diagnostic += "line markers kept: " + why + '\n';
   }
+  void skipRenderingBuild(std::string_view stage) {
+    result.diagnostic += "verify: " + std::string(stage) + " build skipped (--verify=final)\n";
+  }
   // Runs after pruned passed every check; any failure keeps the checked
   // marked bytes (docs/reviews/2026-11-18-no-line-markers.md).
   void unmark(const RenderedSource& rendered, const std::filesystem::path& marked) {
@@ -301,6 +304,19 @@ struct Pipeline {
       const auto bytes = take(withoutLineMarkers(rendered));
       take(unmarkedInvariant(rendered.provenance.text,bytes));
       const auto path = work.path / "unmarked.cpp"; write(path,bytes);
+      const auto accept = [&] {
+        result.lineMarkers = "omitted";
+        result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
+      };
+      const bool deferred = options.verifyFinal && (options.compactWhitespace || options.shortenNames);
+      if (deferred) {
+        if (Clock::now() >= deadline) throw Error{"unmarked checks deadline exceeded"};
+        skipRenderingBuild("unmarked");
+        if (compact(path,bytes)) { accept(); return; }
+        // No later rendering passed. Fully check these exact bytes before
+        // making them the fallback; otherwise retain the checked pruned bytes.
+        step("unmarked checks");
+      }
       prefetchPreprocessing(*flatConfiguration,marked,true,*flatConfiguration,path);
       take(compareUnmarkedPreprocessed(preprocess(*flatConfiguration,marked,true),preprocess(*flatConfiguration,path,true)));
       auto program = build(*flatConfiguration,path,true,"unmarked");
@@ -308,9 +324,8 @@ struct Pipeline {
       checkedBytes(path,bytes); checkedBytes(marked,rendered.provenance.text);
       if (Clock::now() >= deadline) throw Error{"unmarked checks deadline exceeded"};
       result.checks.push_back({"pruned without line markers","passed",flatConfiguration,{}});
-      result.bytes = bytes; result.lineMarkers = "omitted";
-      result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
-      if (options.compactWhitespace || options.shortenNames) compact(path,bytes);
+      result.bytes = bytes; accept();
+      if (!deferred && (options.compactWhitespace || options.shortenNames)) compact(path,bytes);
     } catch (const Error& e) { failedUnmarked(e.message); }
     catch (const std::exception& e) { failedUnmarked(e.what()); }
   }
@@ -323,13 +338,26 @@ struct Pipeline {
     result.compactWhitespace = "kept: " + why;
     result.diagnostic += "whitespace kept: " + why + '\n';
   }
-  void compact(const std::filesystem::path& unmarked, const std::string& original) {
+  // Return whether this rendering or a successor passed all of its checks.
+  // Deferred ancestors never replace result.bytes until they pass themselves.
+  bool compact(const std::filesystem::path& unmarked, const std::string& original) {
     const auto previousRuntime = result.runtime;
     try {
       step("compact checks");
       const auto bytes = take(compactWhitespace(original));
       take(unmarkedInvariant(original,bytes));
       const auto path = work.path / "compact.cpp"; write(path,bytes);
+      const auto accept = [&] {
+        result.compactWhitespace = "compacted";
+        result.diagnostic += "whitespace compacted: no user code observes source positions (including columns)\n";
+      };
+      const bool deferred = options.verifyFinal && options.shortenNames;
+      if (deferred) {
+        if (Clock::now() >= deadline) throw Error{"compact checks deadline exceeded"};
+        skipRenderingBuild("compact");
+        if (shortenNames(bytes)) { accept(); return true; }
+        step("compact checks");
+      }
       prefetchPreprocessing(*flatConfiguration,unmarked,true,*flatConfiguration,path);
       take(compareUnmarkedPreprocessed(preprocess(*flatConfiguration,unmarked,true),preprocess(*flatConfiguration,path,true)));
       auto program = build(*flatConfiguration,path,true,"compact");
@@ -337,17 +365,18 @@ struct Pipeline {
       checkedBytes(path,bytes); checkedBytes(unmarked,original);
       if (Clock::now() >= deadline) throw Error{"compact checks deadline exceeded"};
       result.checks.push_back({"pruned with compact whitespace","passed",flatConfiguration,{}});
-      result.bytes = bytes; result.compactWhitespace = "compacted";
-      result.diagnostic += "whitespace compacted: no user code observes source positions (including columns)\n";
-      if (options.shortenNames) shortenNames(bytes);
+      result.bytes = bytes; accept();
+      if (!deferred && options.shortenNames) shortenNames(bytes);
+      return true;
     } catch (const Error& e) { failedCompact(e.message,previousRuntime); }
     catch (const std::exception& e) { failedCompact(e.what(),previousRuntime); }
+    return false;
   }
   void keepShortenNames(const std::string& why) {
     result.shortenNames = "kept: " + why;
     result.diagnostic += "shorten-names: " + result.shortenNames + '\n';
   }
-  void shortenNames(const std::string& original) {
+  bool shortenNames(const std::string& original) {
     const auto previousRuntime = result.runtime;
     try {
       step("shorten-names checks");
@@ -369,7 +398,7 @@ struct Pipeline {
       if (!model.disabledReasons.empty()) throw Error{"shorten-names analysis: " + model.disabledReasons.front()};
       const auto candidate = take(shortenNamesSource(original,model));
       take(shortenNamesInvariant(original,candidate.text,candidate.renames));
-      if (!candidate.namesKept.empty()) { keepShortenNames(candidate.namesKept); return; }
+      if (!candidate.namesKept.empty()) { keepShortenNames(candidate.namesKept); return false; }
       const auto path = work.path / "shortened.cpp"; write(path,candidate.text);
       auto program = build(*flatConfiguration,path,true,"shortened");
       compareRuns(runs["flat"],execute(*flatConfiguration,program));
@@ -381,11 +410,13 @@ struct Pipeline {
       result.shortenNames = "renamed=" + std::to_string(candidate.renames.size()) + " spellings saved=" + std::to_string(original.size()-candidate.text.size()) + " bytes";
       result.diagnostic += "shorten-names: " + result.shortenNames + '\n';
       if (!candidate.renames.empty()) result.assumptions.insert("A15");
+      return true;
     } catch (const Error& e) {
       result.runtime = previousRuntime;
       result.checks.push_back({"pruned with shortened names",e.message,flatConfiguration,{}});
       keepShortenNames(e.message);
     } catch (const std::exception& e) { result.runtime = previousRuntime; keepShortenNames(e.what()); }
+    return false;
   }
   void failedCompact(const std::string& message, const std::string& previousRuntime) {
     result.runtime = previousRuntime;
@@ -429,7 +460,8 @@ struct Pipeline {
       c.changes.push_back({{f}, "profile link option omitted for local fallback; local link options retained"});
   }
   PipelineResult run() {
-    result.optionLines = {"jobs=" + std::to_string(options.jobs), "baseline=" + std::string(options.skipBaseline ? "skip" : "build")};
+    result.optionLines = {"jobs=" + std::to_string(options.jobs), "baseline=" + std::string(options.skipBaseline ? "skip" : "build"),
+                          "verify=" + std::string(options.verifyFinal ? "final" : "all")};
     try {
       if (!options.jobs) throw Error{"--jobs requires a positive integer"};
       if (options.skipBaseline && !options.samples.empty()) throw Error{"--baseline=skip cannot be combined with --verify-run"};

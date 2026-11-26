@@ -47,6 +47,16 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
       if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || o.jobs == 0)
         return Error{"--jobs requires a positive integer"};
     }
+    else if (a == "--verify" || a.starts_with("--verify=")) {
+      speedOptionSpecified = true;
+      std::string value;
+      if (a == "--verify") {
+        if (++i == args.size()) return Error{"missing value for --verify"};
+        value = args[i];
+      } else value = a.substr(9);
+      if (value != "all" && value != "final") return Error{"--verify requires all or final"};
+      o.verifyFinal = value == "final";
+    }
     else if (a == "--baseline" || a.starts_with("--baseline=")) {
       speedOptionSpecified = true;
       std::string value;
@@ -138,6 +148,8 @@ std::string distillHelp() {
       "                     implies --strip-comments --no-line-markers --compact-whitespace\n"
       "  --jobs=N, -j N     concurrent independent compiler processes (default 1)\n"
       "  --baseline=build|skip build the original (default build); skip requires no samples\n"
+      "  --verify=all|final check all renderings (default all), or only the last,\n"
+      "                     checking earlier renderings on failure; raw/flat/pruned unchanged\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"

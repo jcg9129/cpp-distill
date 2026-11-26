@@ -58,9 +58,13 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--jobs=-2', 'main.cpp'], 1, '--jobs requires a positive integer'),
         (['--jobs=2x', 'main.cpp'], 1, '--jobs requires a positive integer'),
         (['--baseline=syntax', 'main.cpp'], 1, '--baseline requires build or skip'),
+        (['--verify'], 1, 'missing value for --verify'),
+        (['--verify=', 'main.cpp'], 1, '--verify requires all or final'),
+        (['--verify=none', 'main.cpp'], 1, '--verify requires all or final'),
         (['--baseline=skip', '--verify-run', 'main.cpp', 'main.cpp'], 1, 'cannot be combined with --verify-run'),
         (['--jobs=4', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['-j', '2', '--baseline=skip', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
+        (['--verify=final', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--verify-run', 'missing.in', 'main.cpp'], 1, 'not a sample file or directory'),
         (['--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--no-prune', 'g++', '-c', 'main.cpp'], 1, 'rejected option'),
@@ -114,6 +118,40 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         for name in ['library.h', 'sample.in', 'report.txt', 'submit.cpp']:
             (root / name).unlink()
         (root / 'main.cpp').write_bytes(saved)
+    with case('final verification preserves passing rendering bytes and reports skipped builds'):
+        saved = (root / 'main.cpp').read_bytes()
+        sources = [
+            '// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n',
+            '#define TEXT(x) #x\nconstexpr auto text = TEXT(alpha\n\n beta);\n'
+            'static_assert(text[5] == \' \' && text[6] == \'b\');\nint main(){return 0;}\n',
+            'int main(){const char* longLocalName=R"x(\n  raw\n\n)x";return longLocalName[0] != \'\\n\';}\n']
+        for source in sources:
+            (root / 'main.cpp').write_text(source)
+            for rendering in ['--shorten-names', '--compact-whitespace']:
+                outputs = []
+                for mode in ['all', 'final']:
+                    result = subprocess.run([binary, rendering, '--verify=' + mode, '--jobs=4',
+                                             '--baseline=skip', '--report', 'report.txt',
+                                             'g++', '-std=gnu++20', 'main.cpp'],
+                                            cwd=root, capture_output=True, timeout=120)
+                    check(result.returncode == 0, result.stderr)
+                    outputs.append(result.stdout)
+                    report = (root / 'report.txt').read_text()
+                    check('option verify=' + mode + '\n' in report, report)
+                    stage = 'pruned with shortened names' if rendering == '--shorten-names' else 'pruned with compact whitespace'
+                    check(stage + ': passed\n' in report, report)
+                    if mode == 'final':
+                        check(report.count('verify: unmarked build skipped (--verify=final)\n') == 1, report)
+                        check('process unmarked checks ' not in report, report)
+                        check(report.count('verify: compact build skipped (--verify=final)\n') ==
+                              (1 if rendering == '--shorten-names' else 0), report)
+                        if rendering == '--shorten-names':
+                            check('process compact checks ' not in report, report)
+                    else:
+                        check('verify: ' not in report, report)
+                check(outputs[0] == outputs[1], outputs)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
     with case('jobs preserve bytes and report order; baseline skip retains full artifact checks'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n')

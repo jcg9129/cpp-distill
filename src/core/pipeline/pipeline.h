@@ -17,6 +17,9 @@ struct DistillOptions {
   // The baseline executable is used only for sample comparisons. Raw still
   // passes its preprocessing and full build checks. Rejected with samples.
   bool skipBaseline = false;
+  // Defer intermediate rendering builds/runs, retaining every invariant and
+  // all raw/flat/pruned checks. Check deferred renderings in reverse on failure.
+  bool verifyFinal = false;
   bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;
   // Opt-in: omit generated #line markers from a pruned result when the parse

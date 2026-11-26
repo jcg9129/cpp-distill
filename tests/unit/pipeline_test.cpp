@@ -134,14 +134,19 @@ struct Fixture {
       if (result.ok() && std::find(spec.argv.begin(),spec.argv.end(),"-E") != spec.argv.end() &&
           std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "compact.cpp"; }) && fault == "compact-tokens")
         result.value().stdoutText += "int corrupt;\n";
-      if (result.ok() && fault == "compact-build" && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "compact.cpp"; }) &&
+      const bool renderingBuilds = fault == "rendering-builds";
+      const bool laterBuilds = renderingBuilds || fault == "compact-and-shortened-build";
+      if (result.ok() && (fault == "compact-build" || laterBuilds) && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "compact.cpp"; }) &&
+          std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() && spec.argv.size() > 1)
+        result.value().exitCode = 1;
+      if (result.ok() && (fault == "unmarked-build" || renderingBuilds) && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "unmarked.cpp"; }) &&
           std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() && spec.argv.size() > 1)
         result.value().exitCode = 1;
       if (result.ok() && fault == "flat-build" && std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() &&
           std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "flat.cpp"; })) {
         result.value().exitCode = 1; result.value().stderrText = "test-only flat build failure";
       }
-      if (result.ok() && fault == "shortenNames-build" && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "shortened.cpp"; })) result.value().exitCode = 1;
+      if (result.ok() && (fault == "shortenNames-build" || laterBuilds) && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "shortened.cpp"; })) result.value().exitCode = 1;
       if (fault == "stdout" && pathFromUtf8(spec.argv.front()).filename() == "pruned.exe" && result.ok())
         result.value().stdoutText = "different output";
       return result;
@@ -722,6 +727,7 @@ TEST(pipeline_flat_link_failure_can_have_a_successfully_built_pruned_successor) 
   Fixture f("#ifdef DISTILL_FIXTURE_JUDGE\nextern int unavailable();\n"
             "int unused(){return unavailable();}\n#endif\nint main(){return 0;}\n");
   f.options.samples.clear();
+  f.options.shortenNames = true;
   auto profile = take(testing::captureProfile(f.gcc,f.temp.path)); f.options.profile = &profile;
   const auto result = f.run();
   CHECK_EQ(result.exitCode,0); CHECK_EQ(result.artifact,"raw"); CHECK(!result.pruningModel);
@@ -738,6 +744,10 @@ TEST(pipeline_flat_link_failure_can_have_a_successfully_built_pruned_successor) 
   ProcessSpec spec; spec.cwd = f.temp.path;
   spec.argv = flat->configuration->command.buildArgv(f.temp.path/"successor.cpp",f.temp.path/"successor.exe",true,{},true);
   const auto built = take(runProcess(spec)); CHECK_EQ(built.exitCode,0);
+  f.options.verifyFinal = true;
+  const auto final = f.run();
+  CHECK_EQ(final.exitCode,0); CHECK_EQ(final.artifact,"raw"); CHECK(!final.pruningModel);
+  CHECK_EQ(final.bytes,result.bytes);
 }
 
 TEST(pipeline_jobs_global_bound_and_baseline_raw_overlap) {
@@ -815,5 +825,158 @@ TEST(pipeline_jobs_inline_failure_preserves_baseline_failure_precedence) {
     CHECK_EQ(parallel.exitCode,serial.exitCode); CHECK_EQ(parallel.bytes,serial.bytes);
     CHECK(stableReport(parallel.report) == stableReport(serial.report));
     CHECK(!parallel.keptWork);
+  }
+}
+
+namespace {
+std::vector<std::string> buildStages(const PipelineResult& result) {
+  std::vector<std::string> stages;
+  for (const auto& process : result.processes) {
+    const auto& args = process.spec.argv;
+    if (std::find(args.begin(),args.end(),"-E") != args.end()) continue;
+    const auto output = std::find(args.begin(),args.end(),"-o");
+    if (output != args.end() && output + 1 != args.end()) {
+      const auto path = pathFromUtf8(*(output + 1));
+      if (path.extension() == ".exe") stages.push_back(pathToUtf8(path.stem()));
+    }
+  }
+  return stages;
+}
+}
+
+TEST(pipeline_verify_final_matches_all_when_renderings_pass) {
+  const std::vector<std::string> sources{
+      "// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n",
+      "#define TEXT(x) #x\n  constexpr auto text = TEXT(alpha\n\n    beta);  \n"
+      "static_assert(text[5]==' ' && text[6]=='b');\n"
+      "constexpr auto raw = R\"x(\n  raw \t\n\n)x\";\nint main(){return 0;}\n",
+      "#include \"helper.h\"\r\n#if 1\r\n  int main(){return longHelper(0);}  \r\n#endif\r\n"};
+  for (const auto& source : sources) for (bool shorten : {false,true}) {
+    Fixture f(source); f.temp.write("helper.h","#pragma once\nint longHelper(int longArgument){return longArgument;}\n");
+    f.options.shortenNames = shorten; f.options.compactWhitespace = !shorten;
+    const auto all = f.run();
+    f.options.verifyFinal = true;
+    const auto final = f.run();
+    CHECK_EQ(final.exitCode,0); CHECK_EQ(final.bytes,all.bytes); CHECK_EQ(final.artifact,"pruned");
+    CHECK_EQ(final.runtime,all.runtime); CHECK_EQ(final.assumptions,all.assumptions);
+    CHECK_EQ(final.lineMarkers,"omitted"); CHECK_EQ(final.compactWhitespace,"compacted");
+    CHECK_EQ(final.shortenNames,all.shortenNames);
+    CHECK_EQ(final.bytes,f.built.at(shorten ? "shortened" : "compact"));
+    CHECK_EQ(buildStages(final),(std::vector<std::string>{"baseline","raw","original-flat","flat","pruned",shorten ? "shortened" : "compact"}));
+    CHECK(all.report.find("option verify=all\n") != all.report.npos);
+    CHECK(all.report.find("verify: ") == all.report.npos);
+    CHECK(final.report.find("option verify=final\n") != final.report.npos);
+    CHECK(final.report.find("verify: unmarked build skipped (--verify=final)\n") != final.report.npos);
+    CHECK_EQ(final.report.find("verify: compact build skipped (--verify=final)\n") != final.report.npos,shorten);
+    for (const auto& p : final.processes) {
+      CHECK(p.step != "unmarked checks");
+      if (shorten) CHECK(p.step != "compact checks");
+    }
+    CHECK(std::none_of(final.checks.begin(),final.checks.end(),[&](const auto& c) {
+      return c.artifact == "pruned without line markers" || (shorten && c.artifact == "pruned with compact whitespace");
+    }));
+  }
+}
+
+TEST(pipeline_verify_final_steps_back_through_failed_renderings) {
+  struct Case { const char* fault; bool shorten; const char* fallback; std::vector<std::string> builds; };
+  for (const auto& c : {
+      Case{"compact-build",false,"unmarked",{"compact","unmarked"}},
+      Case{"compact-tokens",false,"unmarked",{"unmarked"}},
+      Case{"compact-preprocess",false,"unmarked",{"unmarked"}},
+      Case{"compact-stdout",false,"unmarked",{"compact","unmarked"}},
+      Case{"shortenNames-build",true,"compact",{"shortened","compact"}},
+      Case{"shortenNames-stdout",true,"compact",{"shortened","compact"}},
+      Case{"compact-and-shortened-build",true,"unmarked",{"shortened","compact","unmarked"}},
+      Case{"rendering-builds",true,"pruned",{"shortened","compact","unmarked"}}}) {
+    Fixture f("// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
+    f.options.verifyFinal = true; f.options.shortenNames = c.shorten; f.options.compactWhitespace = !c.shorten;
+    f.options.jobs = 4;
+    // Exercise the judge's flags on the final check and all step-back checks.
+    auto profile = take(testing::captureProfile(f.gcc,f.temp.path)); f.options.profile = &profile;
+    const auto r = f.run(c.fault);
+    CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned"); CHECK_EQ(r.bytes,f.built.at(c.fallback));
+    CHECK_EQ(r.runtime,"compared 1 samples"); CHECK(!r.assumptions.contains("A15"));
+    auto builds = std::vector<std::string>{"baseline","raw","original-flat","flat","pruned"};
+    builds.insert(builds.end(),c.builds.begin(),c.builds.end());
+    CHECK_EQ(buildStages(r),builds);
+    const std::string fallback = c.fallback;
+    CHECK_EQ(r.lineMarkers == "omitted",fallback != "pruned");
+    CHECK_EQ(r.compactWhitespace == "compacted",fallback == "compact");
+    const auto stage = fallback == "compact" ? "pruned with compact whitespace" :
+                       fallback == "unmarked" ? "pruned without line markers" : "pruned";
+    CHECK(r.report.find(std::string(stage) + ": passed\n") != r.report.npos);
+    CHECK_EQ(r.report.find("verify: unmarked build skipped (--verify=final)\n"),
+             r.report.rfind("verify: unmarked build skipped (--verify=final)\n"));
+    for (const auto& p : r.processes) if (p.spec.argv.size() > 1 &&
+        (p.step == "unmarked checks" || p.step == "compact checks" || p.step == "shorten-names checks") &&
+        std::find(p.spec.argv.begin(),p.spec.argv.end(),"--internal-prune") == p.spec.argv.end())
+      CHECK(std::find(p.spec.argv.begin(),p.spec.argv.end(),"-DDISTILL_FIXTURE_JUDGE=1") != p.spec.argv.end());
+  }
+}
+
+TEST(pipeline_verify_final_accepts_checked_successor_of_failing_intermediate) {
+  for (const auto* fault : {"unmarked-build","unmarked-stdout","compact-build","compact-tokens"}) {
+    Fixture f("int unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
+    f.options.shortenNames = true;
+    const auto all = f.run(fault);
+    f.options.verifyFinal = true;
+    const auto final = f.run(fault);
+    CHECK_EQ(final.exitCode,0); CHECK(final.bytes != all.bytes);
+    CHECK_EQ(final.bytes,f.built.at("shortened")); CHECK(final.assumptions.contains("A15"));
+    CHECK(final.report.find("pruned with shortened names: passed\n") != final.report.npos);
+    CHECK_EQ(buildStages(final),(std::vector<std::string>{"baseline","raw","original-flat","flat","pruned","shortened"}));
+  }
+}
+
+TEST(pipeline_verify_final_checks_last_available_stage_and_preserves_core_gates) {
+  for (const auto* selection : {"none","strip","unmark","no-prune","position","shortening-refused","shortening-analysis"}) {
+    const std::string mode = selection;
+    Fixture f(mode == "position" ? "int main(){return __LINE__ > 0 ? 0 : 1;}\n" :
+              "// comment\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
+    f.options.stripComments = mode == "strip";
+    f.options.noLineMarkers = mode == "unmark";
+    f.options.shortenNames = mode == "shortening-refused" || mode == "shortening-analysis" || mode == "no-prune";
+    f.options.compactWhitespace = mode == "position";
+    f.options.noPrune = mode == "no-prune";
+    f.options.assumeLibrarySpelledNames = mode != "shortening-refused";
+    const auto fault = mode == "position" ? "position" : mode == "shortening-analysis" ? "shortenNames-library" : "";
+    const auto all = f.run(fault);
+    f.options.verifyFinal = true;
+    const auto final = f.run(fault);
+    CHECK_EQ(final.bytes,all.bytes); CHECK_EQ(final.exitCode,all.exitCode);
+    if (mode == "shortening-refused" || mode == "shortening-analysis")
+      CHECK_EQ(final.bytes,f.built.at("compact"));
+    else {
+      CHECK_EQ(buildStages(final),buildStages(all));
+      CHECK(final.report.find("verify: ") == final.report.npos);
+    }
+  }
+  for (const auto* fault : {"raw-preprocess","raw-stdout","flat-preprocess","flat-build","flat-stdout","stdout","render"}) {
+    Fixture f("int unused(){return 7;}\nint main(){return 0;}\n"); f.options.shortenNames = true;
+    const auto all = f.run(fault);
+    f.options.verifyFinal = true;
+    const auto final = f.run(fault);
+    CHECK_EQ(final.bytes,all.bytes); CHECK_EQ(final.exitCode,all.exitCode); CHECK_EQ(final.artifact,all.artifact);
+    CHECK_EQ(buildStages(final),buildStages(all));
+    CHECK(final.report.find("verify: ") == final.report.npos);
+  }
+}
+
+TEST(pipeline_verify_final_jobs_and_baseline_skip) {
+  Fixture f("int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
+  f.options.shortenNames = true; f.options.samples.clear(); f.options.verifyFinal = true;
+  for (const auto* fault : {"","shortenNames-build","compact-and-shortened-build","rendering-builds"}) {
+    f.options.jobs = 1; f.options.skipBaseline = false;
+    const auto serial = f.run(fault);
+    f.options.jobs = 4;
+    const auto parallel = f.run(fault);
+    CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(stableReport(parallel.report),stableReport(serial.report));
+    f.options.skipBaseline = true;
+    const auto skipped = f.run(fault);
+    CHECK_EQ(skipped.exitCode,0); CHECK_EQ(skipped.bytes,serial.bytes); CHECK_EQ(skipped.runtime,"not requested");
+    const auto builds = buildStages(skipped);
+    CHECK(std::find(builds.begin(),builds.end(),"baseline") == builds.end());
+    CHECK(skipped.report.find("option verify=final\n") != skipped.report.npos);
   }
 }

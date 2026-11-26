@@ -427,7 +427,7 @@ TEST(validate_pp_trimming_options) {
 
 TEST(validate_speed_options_and_compiler_boundary) {
   const auto defaults = parseDistillOptions({"main.cpp"});
-  CHECK_EQ(defaults.value().jobs,1u); CHECK(!defaults.value().skipBaseline);
+  CHECK_EQ(defaults.value().jobs,1u); CHECK(!defaults.value().skipBaseline); CHECK(!defaults.value().verifyFinal);
   for (const auto& args : std::vector<std::vector<std::string>>{
       {"--jobs=4","--baseline=skip","main.cpp"},
       {"--jobs","4","--baseline","skip","main.cpp"},
@@ -450,4 +450,24 @@ TEST(validate_speed_options_and_compiler_boundary) {
     CHECK(!parseDistillOptions(args).ok());
   CHECK(distillHelp().find("--jobs=N") != std::string::npos);
   CHECK(distillHelp().find("--baseline=build|skip") != std::string::npos);
+}
+
+TEST(validate_verify_options_and_compiler_boundary) {
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--verify=final","main.cpp"}, {"--verify","final","main.cpp"},
+      {"--verify=final","--jobs=4","--baseline=skip","--shorten-names","main.cpp"},
+      {"--verify=final","--verify-run","sample.in","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(r.value().verifyFinal);
+  }
+  CHECK(!parseDistillOptions({"--verify=all","main.cpp"}).value().verifyFinal);
+  CHECK(!parseDistillOptions({"--verify=final","--verify=all","main.cpp"}).value().verifyFinal);
+  const auto compiler = parseDistillOptions({"g++","--verify=final","main.cpp"});
+  CHECK(!compiler.value().verifyFinal);
+  CHECK_EQ(compiler.value().compile,(std::vector<std::string>{"g++","--verify=final","main.cpp"}));
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--verify"}, {"--verify=","main.cpp"}, {"--verify=none","main.cpp"},
+      {"--verify=Final","main.cpp"}, {"--verify","--strict","main.cpp"},
+      {"--verify=all","--judge-probe","cses"}, {"--verify=final","--judge-check","cses","result.txt"}})
+    CHECK(!parseDistillOptions(args).ok());
+  CHECK(distillHelp().find("--verify=all|final") != std::string::npos);
 }

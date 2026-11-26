@@ -141,6 +141,7 @@ int run(const std::vector<std::string>& args) {
   options.mergeOnly = parsed.mergeOnly;
   options.shortenNames = parsed.shortenNames;
   options.jobs = parsed.jobs; options.skipBaseline = parsed.skipBaseline;
+  options.verifyFinal = parsed.verifyFinal;
   options.assumeLibrarySpelledNames = parsed.assumeLibrarySpelledNames;
   options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;
   options.assumeLibrarySpelledMembers = parsed.assumeLibrarySpelledMembers;

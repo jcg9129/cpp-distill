@@ -215,6 +215,7 @@ Distill options (before the compiler name):
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--jobs=N`, `-j N` | Run independent compiler invocations concurrently, at most N at a time (default 1). Options precede the compiler; compiler arguments are left intact. |
 | `--baseline=build\|skip` | Build the original by default; `skip` omits that build when no runtime samples are requested. Cannot be combined with `--verify-run`; every emitted artifact still passes a full build. |
+| `--verify=all\|final` | Check every rendering by default; `final` defers intermediate rendering builds and runs, checking them in reverse if the last fails. Raw, flat and pruned checks and every transformation invariant remain mandatory (§4.8). |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | keep every declaration, but still resolve preprocessor conditionals for the judge and remove inactive `#if` branches (result `flat`); use `--merge-only` to keep everything |
 | `--merge-only` | inline local headers only (result `raw`), keeping every conditional and line of code; keep baseline and raw checks, skip resolution, pruning and later renderings |
@@ -285,7 +286,8 @@ with raw preparation and its
 build, reserving a slot for the baseline. Every child retains its timeout and
 output cap; batches share the enclosing phase deadline. Results and report
 records are consumed in serial order, including failure precedence. Later
-artifact builds remain verification gates for their successors. Commands with
+artifact builds remain verification gates for their successors by default;
+`--verify=final` changes only the rendering gates described below. Commands with
 unmodelled flags stay serial because those flags may introduce shared side
 effects.
 
@@ -296,6 +298,33 @@ original-build gate; raw preprocessing comparison and raw's full compile/link
 check remain mandatory. The default `--baseline=build` retains the original
 behavior. Reports include `option jobs=N`, `option baseline=build|skip`, and
 an explicit skipped-baseline option line when applicable.
+
+`--verify=all` (default) retains the existing sequential rendering checks.
+`--verify=final` keeps every raw, flat and pruned check, including builds,
+preprocessing comparisons, invariants and sample runs. Only intermediate
+renderings of the checked pruned artifact defer their builds/runs and the
+preprocessing comparisons used to validate that rendering. All transformation
+invariants, including re-lex/token checks, still run at every stage. The last
+requested rendering receives all of its usual checks. If it fails or is
+refused, fully check the previous deferred rendering, then continue backwards
+until one passes; if none passes, emit the already checked pruned bytes.
+A preprocessing comparison required by the stage being checked still runs,
+even if its input is a deferred rendering.
+
+The owner accepts that these modes can differ: if an intermediate rendering
+would fail but a later one passes, `final` emits the later checked rendering
+where `all` would stop at an earlier one. Every emitted artifact has passed a
+full build and all checks of its own stage. Rendering checks use the same
+selected flat configuration and judge flags as `all`.
+This does not permit bypassing flat's build: a pruned program can link after
+deleting a dead function even when flat cannot link. It works with `--jobs`
+and `--baseline=skip` (the latter still excludes runtime samples). Reports
+include `option verify=all|final` and exactly one
+`verify: <stage> build skipped (--verify=final)` line per deferred stage
+(`unmarked`, `compact`), even if a later failure causes it to be checked on
+step-back. Deferred stages have no passed check record unless subsequently
+checked. Comment stripping is already part of raw/flat/pruned rendering and
+keeps those mandatory checks; it has no separate redundant build to skip.
 
 ### 4.1 Command model
 
@@ -1937,9 +1966,13 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   `flat`'s. A failure keeps the marked `pruned` bytes. The rendering
   invariant with line provenance applies to the marked output; the proof
   that positions are unobserved replaces it for the marker-free one.
+  Under `--verify=final`, its build/run and preprocessing check can be deferred
+  when compaction or shortening follows; the position gate and re-lex remain.
 - **Compact whitespace** (`--compact-whitespace`, opt-in, user 2026-11-22):
-  implies `--no-line-markers`; only the checked marker-free `pruned` artifact
-  is eligible. The §4.4 proof already covers column observations through
+  implies `--no-line-markers`; only the marker-free `pruned` artifact is
+  eligible, checked first under `--verify=all` or invariant-checked with its
+  full check deferred under `--verify=final`. The §4.4 proof already covers
+  column observations through
   `__builtin_COLUMN`, whole-TU source-location expressions (including system
   defaults), and `std::source_location` values/types/member calls such as
   `column()`. No extra assumption is made. Remove leading horizontal whitespace,
@@ -1950,14 +1983,18 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   Re-lex and require equal tokens/kinds/directive boundaries; compare `-E`
   tokens/pragma boundaries with the marker-free artifact (also verifying
   stringized multi-line macro arguments); build and compare samples on the
-  exact compact bytes. A failed compact check retains the checked unmarked
-  bytes. A failed gate or marker-free check leaves its artifact unchanged.
+  exact compact bytes. A failed compact check falls back to unmarked bytes
+  that have passed their full check (checking them on step-back under
+  `--verify=final`), else the checked pruned bytes. A failed gate or
+  marker-free check leaves its artifact unchanged.
   Report `whitespace compacted: ...` or `whitespace kept: <why>`. Renderer
   annotations/provenance are consumed before this final transformation.
 - **Readable shortening** (`--shorten-names`, opt-in): implies `--strip-comments`,
-  `--no-line-markers` and `--compact-whitespace`. Only a checked compact pruned
-  artifact, after preprocessor trimming and the position-observation gate, is eligible; refusal keeps
-  the checked artifact and reports `shorten-names: kept: <why>`.
+  `--no-line-markers` and `--compact-whitespace`. Only a compact pruned
+  artifact, after preprocessor trimming and the position-observation gate, is
+  eligible. Its full check can be deferred under `--verify=final`; refusal
+  checks deferred predecessors before selecting a fallback and reports
+  `shorten-names: kept: <why>`.
   Identifiers are substituted simultaneously by spelling across code and ordinary
   user macro replacements. The compact layout stays exact: existing statement
   line breaks, punctuation spacing and literal bytes are retained, with no indentation.
@@ -2010,7 +2047,8 @@ Clarifications from D3c and D3d (implementation and first measurement, reviewed)
   the rename map, including directive membership/end boundaries, macro definition
   adjacency, literal suffix adjacency and exact literal bytes. It is then built
   and compared on the configured samples. An invariant, build or sample failure
-  keeps the checked compact bytes. Successful shortening reports
+  falls back to compact bytes that pass their full check, else an earlier
+  checked rendering. Successful shortening reports
   `shorten-names: renamed=N spellings saved=B bytes`; refusal reports
   `shorten-names: kept: <why>`. A15 is reported only when spellings change.
   `--no-assume=library-spelled-names` retains names and the compact layout.
