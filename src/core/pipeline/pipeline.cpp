@@ -376,7 +376,8 @@ struct Pipeline {
       result.artifact = "raw"; result.bytes = rawChecked.text; result.assumptions = raw.assumptions;
       result.verification = targetEquivalent(rawLocal, options.profile, hostDependent(command)) ? "target" : "local";
       const auto rawRuntime = result.runtime;
-      try {
+      if (options.mergeOnly) result.diagnostic += "resolution disabled: --merge-only\n";
+      else try {
         step("resolve conditions");
         ResolveOptions ro; ro.profile = options.profile; ro.deadline = deadline;
         ro.assumeLibraryMacroValues = options.assumeLibraryMacroValues;

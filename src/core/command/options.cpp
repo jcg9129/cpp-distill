@@ -11,6 +11,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     if (a == "--help") { o.help = true; return o; }
     if (a == "--version") { o.version = true; return o; }
     if (a == "--no-prune") o.noPrune = true;
+    else if (a == "--merge-only") o.mergeOnly = true;
     else if (a == "--no-assume" || a.starts_with("--no-assume=")) {
       std::string names;
       if (a == "--no-assume") {
@@ -58,12 +59,24 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        o.noPrune || o.mergeOnly || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
     if (o.judgeCheck && o.judgeOutputs.empty()) return Error{"--judge-check requires output files"};
     return o;
+  }
+  if (o.mergeOnly) {
+    const char* conflict = nullptr;
+    if (o.shortenNames) conflict = "--shorten-names";
+    else if (o.compactWhitespace) conflict = "--compact-whitespace";
+    else if (o.noLineMarkers) conflict = "--no-line-markers";
+    else if (!o.keep.empty()) conflict = "--keep";
+    else if (o.strict) conflict = "--strict";
+    else if (!o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues ||
+             !o.assumeUnspelledFunctions || !o.assumeLibrarySpelledNames ||
+             !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros) conflict = "--no-assume";
+    if (conflict) return Error{std::string("--merge-only cannot be combined with ") + conflict};
   }
   if (o.part || o.record) return Error{"--part/--record require a judge diagnostic command"};
   if (o.compile.empty() && o.judge == "list") return o;
@@ -81,7 +94,14 @@ std::string distillHelp() {
       "  --judge-probe <selector> [--part N/M] print diagnostic source\n"
       "  --judge-check <selector> <output-file>... [--record <dir>] compare diagnostics\n"
       "  --report <file>    validation, conditional and pruning report\n"
-      "  --no-prune         inline and resolve only\n"
+      "  --no-prune         keep every declaration, but still resolve preprocessor conditionals\n"
+      "                     for the judge and remove inactive #if branches (flat);\n"
+      "                     use --merge-only to keep everything\n"
+      "  --merge-only       inline local headers only (raw); keep every conditional and line of code\n"
+      "                     baseline and raw checks still run; --judge, --verify-run,\n"
+      "                     --strip-comments and redundant --no-prune are allowed\n"
+      "                     cannot combine with --no-line-markers, --compact-whitespace,\n"
+      "                     --shorten-names, --keep, --strict or --no-assume\n"
       "  --no-assume=<name> disable an assumption or policy (repeatable, comma lists accepted)\n"
       "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-spelled-names (A15), library-macro-values (A9 standard macros), unspelled-functions (D3f), idempotent-standard-headers (policy), unobserved-guard-macros (A14)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
