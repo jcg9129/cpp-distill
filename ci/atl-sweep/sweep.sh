@@ -4,6 +4,7 @@ set -euo pipefail
 
 usage() {
   echo 'Usage: ci/atl-sweep/sweep.sh <atl-dir> <distill> <out-dir> <judge>'
+  echo 'Optional filter: set SWEEP_EXAMPLES to space-separated summary.tsv example names.'
   echo 'Measure plain, strip, nlm, compact and short variants; write summary.tsv, reports and logs.'
 }
 
@@ -29,6 +30,28 @@ printf 'example\tvariant\tdistill_exit\tartifact\trun_check\tbytes\tline_markers
 
 mapfile -d '' -t examples < <(find "$atl/docs/examples" -type f -name '*.cpp' -print0 | LC_ALL=C sort -z)
 [[ ${#examples[@]} -gt 0 ]] || die 'no examples found'
+if [[ -n ${SWEEP_EXAMPLES:-} ]]; then
+  read -r -a requested_examples <<< "$SWEEP_EXAMPLES"
+  selected_examples=()
+  matched_examples=()
+  for index in "${!requested_examples[@]}"; do matched_examples[index]=false; done
+  for src in "${examples[@]}"; do
+    base=${src%.cpp}
+    name=${base#"$atl/docs/examples/"}
+    name=${name//\//-}
+    for index in "${!requested_examples[@]}"; do
+      if [[ $name == "${requested_examples[index]}" ]]; then
+        selected_examples+=("$src")
+        matched_examples[index]=true
+        break
+      fi
+    done
+  done
+  for index in "${!requested_examples[@]}"; do
+    [[ ${matched_examples[index]} == true ]] || die "requested example '${requested_examples[index]}' matches no example"
+  done
+  examples=("${selected_examples[@]}")
+fi
 variants=(plain strip nlm)
 distill_help=$(timeout 5 "$distill" --help 2>&1 || true)
 if [[ $distill_help == *--compact-whitespace* ]]; then
