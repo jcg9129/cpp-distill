@@ -96,6 +96,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (o.noLineMarkers) conflict = "--no-line-markers";
     else if (!o.keep.empty()) conflict = "--keep";
     else if (o.strict) conflict = "--strict";
+    else if (o.verifyFinal) conflict = "--verify=final";
     else if (!o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues ||
              !o.assumeUnspelledFunctions || !o.assumeLibrarySpelledNames ||
              !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros) conflict = "--no-assume";
@@ -122,9 +123,9 @@ std::string distillHelp() {
       "                     use --merge-only to keep everything\n"
       "  --merge-only       inline local headers only (raw); keep every conditional and line of code\n"
       "                     baseline and raw checks still run; --judge, --verify-run,\n"
-      "                     --strip-comments and redundant --no-prune are allowed\n"
+      "                     --strip-comments, --jobs and redundant --no-prune are allowed\n"
       "                     cannot combine with --no-line-markers, --compact-whitespace,\n"
-      "                     --shorten-names, --keep, --strict or --no-assume\n"
+      "                     --shorten-names, --keep, --strict, --no-assume or --verify=final\n"
       "  --no-assume=<name> disable an assumption or policy (repeatable, comma lists accepted)\n"
       "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-spelled-names (A15), library-macro-values (A9 standard macros), unspelled-functions (D3f), idempotent-standard-headers (policy), unobserved-guard-macros (A14)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"

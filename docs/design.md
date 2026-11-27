@@ -254,8 +254,8 @@ comparisons against the baseline remain. `--judge` keeps the usual raw check
 configuration and verification level. `--strip-comments` is allowed because raw
 already renders stripped comments before its checks. `--no-prune` is redundant
 and accepted. Combining `--merge-only` with `--no-line-markers`,
-`--compact-whitespace`, `--shorten-names`, `--keep`, `--strict` or `--no-assume`
-is a usage error (exit 1).
+`--compact-whitespace`, `--shorten-names`, `--keep`, `--strict`, `--no-assume`
+or `--verify=final` is a usage error (exit 1). `--jobs` is allowed.
 
 ## 3. Pipeline
 

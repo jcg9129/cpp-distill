@@ -569,7 +569,8 @@ Commands with unmodelled flags stay serial: those flags can request shared
 side-effect files or compiler plugins that make invocations dependent.
 Custom `ProcessRunner` callbacks must support concurrent calls with jobs > 1.
 
-Final-only verification requires a contract decision before implementation.
+Final-only verification of the whole pipeline would require a contract decision
+before implementation.
 A passing final build does not prove the earlier stages would pass: a judge
 macro can introduce an undefined reference in an unused function, causing flat
 to fail linking, while pruning that function produces a valid executable.
@@ -578,6 +579,14 @@ Today's pipeline emits raw in that case. See the real-GCC regression
 Preserving that exact fallback requires the earlier link check even when the
 final artifact passes. Replaying earlier stages only after final failure
 cannot preserve the specified behavior in this case.
+
+`--verify=final` therefore defers only intermediate rendering checks after the
+pruned artifact. Raw, flat and pruned checks remain mandatory. The last requested
+rendering receives its full checks; failure or refusal checks deferred renderings
+in reverse until one passes, otherwise selecting the checked pruned bytes.
+Source-position proofs and transformation invariants still run at every stage.
+The default `--verify=all` checks every rendering. Reports record `verify=final`
+and each skipped build; `--jobs` and `--verify-run` work with either mode.
 
 The CLI exposes this API with repeatable `--verify-run <path>` before the
 compiler. A regular file (any suffix) is one stdin sample; a directory contributes
@@ -622,8 +631,9 @@ The baseline build, raw preprocessing comparison/build and `--verify-run`
 comparisons against the baseline still run. `--judge` keeps the usual raw check
 configuration and verification level. `--strip-comments` is allowed and runs
 before raw checks; `--no-prune` is accepted as redundant. `--no-line-markers`,
-`--compact-whitespace`, `--shorten-names`, `--keep`, `--strict` and `--no-assume`
-cannot be combined with `--merge-only` (usage error, exit 1). The result line
+`--compact-whitespace`, `--shorten-names`, `--keep`, `--strict`, `--no-assume`
+and `--verify=final` cannot be combined with `--merge-only` (usage error, exit 1).
+`--jobs` is allowed. The result line
 says `raw`; stderr and the report say `resolution disabled: --merge-only`.
 Repeatable `--keep <name>` requests namespace-indexed names; an unknown name exits 1 with
 no artifact. Keep names are validated even alongside `--no-prune`; if no checked

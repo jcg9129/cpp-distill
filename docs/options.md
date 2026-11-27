@@ -161,10 +161,11 @@ preprocessing comparison against the original and local-command build checks;
 keeps the usual raw check configuration and verification level.
 
 Cannot be combined with `--no-line-markers`, `--compact-whitespace`,
-`--shorten-names`, `--keep`, `--strict` or `--no-assume` (usage error, exit 1).
-`--no-prune` is accepted as redundant. `--strip-comments` is allowed: raw already
-strips comments before its checks, retaining comments needed for directive/line
-safety. The result line says `raw`; the report and stderr say
+`--shorten-names`, `--keep`, `--strict`, `--no-assume` or `--verify=final`
+(usage error, exit 1). `--jobs` is allowed. `--no-prune` is accepted as redundant.
+`--strip-comments` is allowed: raw already strips comments before its checks,
+retaining comments needed for directive/line safety. The result line says `raw`;
+the report and stderr say
 `resolution disabled: --merge-only`.
 
 ### `--keep <name>`

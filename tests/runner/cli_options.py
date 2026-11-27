@@ -75,6 +75,12 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--merge-only'], 1, 'missing compile command'),
         (['--merge-only', 'main.cpp'], 0, 'distill: wrote raw (local), runtime not requested'),
         (['--merge-only', '--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        (['--merge-only', '--jobs=4', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        (['--verify=all', '-j', '2', '--merge-only', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        *[(flags + ['main.cpp'], 1, '--merge-only cannot be combined with --verify=final')
+          for flags in [['--merge-only', '--verify=final'], ['--verify=final', '--merge-only'],
+                        ['--merge-only', '--verify', 'final'], ['--verify', 'final', '--merge-only'],
+                        ['--merge-only', '--jobs=4', '--verify=final']]],
         *[(['--merge-only', *flags, 'main.cpp'], 1,
            '--merge-only cannot be combined with ' + flags[0].split('=')[0])
           for flags in [['--no-line-markers'], ['--compact-whitespace'], ['--shorten-names'],
@@ -94,7 +100,8 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (root / 'main.cpp').write_text('#include "library.h"\n#if 1\nint main(){return 0;}\n'
                                       '#else\nint inactive(){return 2;}\n#endif\n')
         (root / 'sample.in').write_text('')
-        for flags in [[], ['--strip-comments'], ['--no-prune']]:
+        for flags in [[], ['--strip-comments'], ['--no-prune'], ['--jobs=4'],
+                      ['-j', '2', '--no-prune', '--strip-comments']]:
             result = subprocess.run([binary, '--merge-only', *flags, '--verify-run', 'sample.in',
                                      '--report', 'report.txt', '-o', 'submit.cpp',
                                      'g++', '-std=gnu++20', 'main.cpp'],

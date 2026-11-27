@@ -146,6 +146,30 @@ TEST(validate_merge_only_options) {
   CHECK(distillHelp().find("remove inactive #if branches (flat)") != std::string::npos);
 }
 
+TEST(validate_merge_only_speed_options) {
+  for (const auto& flags : std::vector<std::vector<std::string>>{
+      {"--jobs=4"}, {"--jobs","2"}, {"-j","4"}, {"--verify=all","--jobs=4"}}) {
+    for (const bool first : {false,true}) {
+      auto args = flags;
+      args.insert(first ? args.begin() : args.end(),"--merge-only"); args.push_back("main.cpp");
+      const auto parsed = parseDistillOptions(args); CHECK(parsed.ok());
+      if (parsed.ok()) {
+        CHECK(parsed.value().mergeOnly); CHECK(!parsed.value().verifyFinal);
+        CHECK_EQ(parsed.value().jobs,flags.front() == "--jobs" ? 2u : 4u);
+      }
+    }
+  }
+  for (const auto& flags : std::vector<std::vector<std::string>>{
+      {"--verify=final"}, {"--verify","final"}, {"--jobs=4","--verify=final"}}) {
+    for (const bool first : {false,true}) {
+      auto args = flags;
+      args.insert(first ? args.begin() : args.end(),"--merge-only"); args.push_back("main.cpp");
+      const auto parsed = parseDistillOptions(args); CHECK(!parsed.ok());
+      if (!parsed.ok()) CHECK_EQ(parsed.error().message,"--merge-only cannot be combined with --verify=final");
+    }
+  }
+}
+
 #include "core/pipeline/pipeline.h"
 #include "evaluate.h"
 #include "profile.h"
