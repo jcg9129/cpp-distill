@@ -6,14 +6,27 @@
 #include "evaluate.h"
 #include "profile.h"
 #include <algorithm>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <regex>
 #include <sstream>
-#include <thread>
 
 using namespace distill;
 namespace {
+// Compile/run combinations are costly with Homebrew/MinGW GCC. Keep each
+// behaviour below on every platform; unit (linux) and unit (linux, fork) CI
+// entries additionally exercise every source, fault and option combination.
+template<class T> std::vector<T> equivalenceCases(std::initializer_list<T> representative,
+                                               std::initializer_list<T> additional) {
+  std::vector<T> cases(representative);
+#ifdef DISTILL_TEST_EXHAUSTIVE_EQUIVALENCE
+  cases.insert(cases.end(),additional.begin(),additional.end());
+#else
+  (void)additional;
+#endif
+  return cases;
+}
 template<class T> T take(Result<T> r) { if (!r.ok()) throw std::runtime_error(r.error().message); return std::move(r.value()); }
 struct Fixture {
   test::TempDirectory temp;
@@ -651,7 +664,8 @@ TEST(pipeline_shortenNames_implied_flags_report_and_checked_fallbacks) {
 }
 
 TEST(pipeline_shortening_runs_after_trimming_and_compaction) {
-  for (unsigned disabled = 0; disabled < 8; ++disabled) {
+  // Default and each independent opt-out everywhere; combined opt-outs on Linux.
+  for (const unsigned disabled : equivalenceCases({0u,1u,2u,4u},{3u,5u,6u,7u})) {
     Fixture f("#include <vector>\n#include \"once.h\"\n#include <vector>\nint main(){int longLocal=5;return longLocal-5;}\n");
     f.temp.write("once.h","#pragma once\n");
     f.options.shortenNames = true;
@@ -682,7 +696,11 @@ std::string stableReport(const std::string& report) {
 }
 }
 TEST(pipeline_jobs_output_reports_and_fallbacks_match_serial) {
-  for (const auto* fault : {"", "disabled", "compact-build", "compact-tokens", "shortenNames-build", "shortenNames-stdout", "flat-stdout", "raw-stdout", "raw-preprocess", "flat-preprocess", "unmarked-preprocess", "compact-preprocess", "probe-search", "probe-macros", "probe-timeout"}) {
+  for (const auto* fault : equivalenceCases(
+      {"", "compact-build", "raw-stdout"},
+      {"disabled", "compact-tokens", "shortenNames-build", "shortenNames-stdout", "flat-stdout",
+       "raw-preprocess", "flat-preprocess", "unmarked-preprocess", "compact-preprocess",
+       "probe-search", "probe-macros", "probe-timeout"})) {
     Fixture f("// comment\nint unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
     f.options.shortenNames = true;
     std::vector<std::string> progress;
@@ -705,7 +723,7 @@ TEST(pipeline_jobs_baseline_exceptions_roll_back_results_and_progress) {
     const auto serial = f.run(fault); CHECK_EQ(serial.exitCode,1);
     CHECK(serial.diagnostic.starts_with("baseline failed: "));
     const auto serialProgress = std::exchange(progress,{});
-    for (const unsigned jobs : {2u,4u}) {
+    for (const unsigned jobs : equivalenceCases({2u},{4u})) {
       f.options.jobs = jobs;
       bool rawLaunched = false;
       f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
@@ -738,7 +756,7 @@ TEST(pipeline_jobs_link_failure_drops_speculative_verbose_progress) {
   const auto serial = f.run(); CHECK_EQ(serial.exitCode,1);
   const auto serialProgress = std::exchange(progress,{});
   CHECK_EQ(serialProgress,(std::vector<std::string>{"probe local compiler","baseline build"}));
-  for (const unsigned jobs : {2u,4u}) {
+  for (const unsigned jobs : equivalenceCases({2u},{4u})) {
     f.options.jobs = jobs;
     const auto parallel = f.run(); CHECK_EQ(parallel.exitCode,1); CHECK(!parallel.keptWork);
     CHECK_EQ(progress,serialProgress); progress.clear();
@@ -780,8 +798,8 @@ TEST(pipeline_jobs_records_retain_effective_launch_specs) {
 TEST(pipeline_jobs_expired_batch_has_no_launch_records) {
   for (const unsigned jobs : {1u,4u}) {
     Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.jobs = jobs;
-    f.options.stepTimeout = std::chrono::milliseconds(5);
-    f.options.progress = [&](std::string_view) { std::this_thread::sleep_for(std::chrono::milliseconds(20)); };
+    // An already-expired phase exercises the no-launch path deterministically.
+    f.options.stepTimeout = std::chrono::milliseconds(0);
     unsigned launched = 0;
     f.observeProcess = [&](const ProcessSpec&, bool entering) { if (entering) ++launched; };
     const auto result = f.run(); CHECK_EQ(result.exitCode,1);
@@ -803,14 +821,15 @@ TEST(pipeline_default_reports_omit_scheduling_and_default_check_metadata) {
 }
 
 TEST(pipeline_jobs_baseline_raw_builds_and_failure_precedence) {
-  for (const auto* fault : {"", "baseline-build", "both-build", "disabled", "compact-build", "shortenNames-build"}) {
+  for (const auto* fault : equivalenceCases(
+      {"", "both-build"}, {"baseline-build", "disabled", "compact-build", "shortenNames-build"})) {
     Fixture f("// comment\nint unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
     f.options.samples.clear(); f.options.shortenNames = true;
     std::vector<std::string> progress;
     f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
     const auto serial = f.run(fault);
     const auto serialProgress = std::exchange(progress,{});
-    for (const unsigned jobs : {2u,4u}) {
+    for (const unsigned jobs : equivalenceCases({2u},{4u})) {
       f.options.jobs = jobs;
       const auto parallel = f.run(fault);
       CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.artifact,serial.artifact);
@@ -856,7 +875,7 @@ TEST(pipeline_flat_link_failure_can_have_a_successfully_built_pruned_successor) 
 }
 
 TEST(pipeline_jobs_global_bound_and_baseline_raw_overlap) {
-  for (const unsigned jobs : {2u,4u}) {
+  for (const unsigned jobs : equivalenceCases({2u},{4u})) {
     Fixture f("int main(){return 0;}\n");
     f.options.samples.clear(); f.options.noPrune = true; f.options.jobs = jobs;
     std::mutex mutex;
@@ -891,9 +910,10 @@ TEST(pipeline_jobs_global_bound_and_baseline_raw_overlap) {
 
 TEST(pipeline_jobs_existing_cases_and_final_flat_build_fallback) {
   struct Case { const char* name; const char* fault; const char* artifact; };
-  for (const auto& c : {Case{"no_profile","","flat"}, Case{"local_macro_unknown","","flat"},
-                        Case{"counter","","raw"}, Case{"strict","","flat"}, Case{"strip_define_no_prune","","flat"},
-                        Case{"resolver_fault","flat-build","raw"}}) {
+  for (const auto& c : equivalenceCases(
+      {Case{"strip_define_no_prune","","flat"}, Case{"resolver_fault","flat-build","raw"}},
+      {Case{"no_profile","","flat"}, Case{"local_macro_unknown","","flat"},
+       Case{"counter","","raw"}, Case{"strict","","flat"}})) {
     const auto directory = std::filesystem::path(DISTILL_PIPELINE_CASES) / c.name;
     Fixture f(test::read(directory/"main.cpp"));
     std::istringstream commands(test::read(directory/"cmd.txt"));
@@ -960,12 +980,13 @@ std::vector<std::string> buildStages(const PipelineResult& result) {
 }
 
 TEST(pipeline_verify_final_matches_all_when_renderings_pass) {
-  const std::vector<std::string> sources{
-      "// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n",
+  const auto sources = equivalenceCases<std::string>(
+      {"// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n"},
+      {
       "#define TEXT(x) #x\n  constexpr auto text = TEXT(alpha\n\n    beta);  \n"
       "static_assert(text[5]==' ' && text[6]=='b');\n"
       "constexpr auto raw = R\"x(\n  raw \t\n\n)x\";\nint main(){return 0;}\n",
-      "#include \"helper.h\"\r\n#if 1\r\n  int main(){return longHelper(0);}  \r\n#endif\r\n"};
+      "#include \"helper.h\"\r\n#if 1\r\n  int main(){return longHelper(0);}  \r\n#endif\r\n"});
   for (const auto& source : sources) for (bool shorten : {false,true}) {
     Fixture f(source); f.temp.write("helper.h","#pragma once\nint longHelper(int longArgument){return longArgument;}\n");
     f.options.shortenNames = shorten; f.options.compactWhitespace = !shorten;
@@ -995,15 +1016,18 @@ TEST(pipeline_verify_final_matches_all_when_renderings_pass) {
 
 TEST(pipeline_verify_final_steps_back_through_failed_renderings) {
   struct Case { const char* fault; bool shorten; const char* fallback; std::vector<std::string> builds; };
-  for (const auto& c : {
+  // Token rejection, a runtime mismatch, and a cascade of failed builds each
+  // retain a checked predecessor. Linux also checks every individual step-back.
+  for (const auto& c : equivalenceCases(
+     {Case{"compact-tokens",false,"unmarked",{"unmarked"}},
+      Case{"shortenNames-stdout",true,"compact",{"shortened","compact"}},
+      Case{"rendering-builds",true,"pruned",{"shortened","compact","unmarked"}}},
+     {
       Case{"compact-build",false,"unmarked",{"compact","unmarked"}},
-      Case{"compact-tokens",false,"unmarked",{"unmarked"}},
       Case{"compact-preprocess",false,"unmarked",{"unmarked"}},
       Case{"compact-stdout",false,"unmarked",{"compact","unmarked"}},
       Case{"shortenNames-build",true,"compact",{"shortened","compact"}},
-      Case{"shortenNames-stdout",true,"compact",{"shortened","compact"}},
-      Case{"compact-and-shortened-build",true,"unmarked",{"shortened","compact","unmarked"}},
-      Case{"rendering-builds",true,"pruned",{"shortened","compact","unmarked"}}}) {
+      Case{"compact-and-shortened-build",true,"unmarked",{"shortened","compact","unmarked"}}})) {
     Fixture f("// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
     f.options.verifyFinal = true; f.options.shortenNames = c.shorten; f.options.compactWhitespace = !c.shorten;
     f.options.jobs = 4;
@@ -1031,7 +1055,8 @@ TEST(pipeline_verify_final_steps_back_through_failed_renderings) {
 }
 
 TEST(pipeline_verify_final_accepts_checked_successor_of_failing_intermediate) {
-  for (const auto* fault : {"unmarked-build","unmarked-stdout","compact-build","compact-tokens"}) {
+  for (const auto* fault : equivalenceCases(
+      {"unmarked-build"}, {"unmarked-stdout","compact-build","compact-tokens"})) {
     Fixture f("int unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
     f.options.shortenNames = true;
     const auto all = f.run(fault);
@@ -1045,7 +1070,9 @@ TEST(pipeline_verify_final_accepts_checked_successor_of_failing_intermediate) {
 }
 
 TEST(pipeline_verify_final_checks_last_available_stage_and_preserves_core_gates) {
-  for (const auto* selection : {"none","strip","unmark","no-prune","position","shortening-refused","shortening-analysis"}) {
+  for (const auto* selection : equivalenceCases(
+      {"none","no-prune","position","shortening-refused"},
+      {"strip","unmark","shortening-analysis"})) {
     const std::string mode = selection;
     Fixture f(mode == "position" ? "int main(){return __LINE__ > 0 ? 0 : 1;}\n" :
               "// comment\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
@@ -1067,7 +1094,10 @@ TEST(pipeline_verify_final_checks_last_available_stage_and_preserves_core_gates)
       CHECK(final.report.find("verify: ") == final.report.npos);
     }
   }
-  for (const auto* fault : {"raw-preprocess","raw-stdout","flat-preprocess","flat-build","flat-stdout","stdout","render"}) {
+  // Preserve a raw, flat, pruned-runtime and rendering gate on every platform.
+  for (const auto* fault : equivalenceCases(
+      {"raw-preprocess","flat-build","stdout","render"},
+      {"raw-stdout","flat-preprocess","flat-stdout"})) {
     Fixture f("int unused(){return 7;}\nint main(){return 0;}\n"); f.options.shortenNames = true;
     const auto all = f.run(fault);
     f.options.verifyFinal = true;
@@ -1081,7 +1111,8 @@ TEST(pipeline_verify_final_checks_last_available_stage_and_preserves_core_gates)
 TEST(pipeline_verify_final_jobs) {
   Fixture f("int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
   f.options.shortenNames = true; f.options.samples.clear(); f.options.verifyFinal = true;
-  for (const auto* fault : {"","shortenNames-build","compact-and-shortened-build","rendering-builds"}) {
+  for (const auto* fault : equivalenceCases(
+      {"", "rendering-builds"}, {"shortenNames-build","compact-and-shortened-build"})) {
     f.options.jobs = 1;
     const auto serial = f.run(fault);
     f.options.jobs = 4;

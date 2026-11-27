@@ -80,15 +80,17 @@ TEST(process_timeout) {
 }
 TEST(process_timeout_kills_grandchild_holding_pipe) {
   test::TempDirectory temp;
-  const auto marker = temp.path / "survived";
-  auto process = spec({"spawn-sleeper", "800", pathToUtf8(marker)});
-  process.timeout = 150ms;
+  const auto lock = pathToUtf8(temp.path / "descendant.lock");
+  auto process = spec({"spawn-sleeper", "100000", lock});
+  // Allow the descendant to acquire the lock and announce readiness.
+  process.timeout = 250ms;
   const auto result = run(process);
   CHECK(result.timedOut);
   CHECK_EQ(result.stdoutText, "started\n");
   CHECK(result.wall < 4s);
-  run(spec({"sleep", "900"}));
-  CHECK(!std::filesystem::exists(marker));
+  // Readiness proves the descendant held the lock. Reacquiring it proves that
+  // it died, even if the runner returned by abandoning the inherited pipes.
+  CHECK_EQ(run(spec({"try-lock", lock})).exitCode,0);
 }
 TEST(process_exit_grace_kills_descendants) {
   auto process = spec({"spawn-sleeper", "100000"});

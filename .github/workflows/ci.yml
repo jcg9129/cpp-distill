@@ -93,7 +93,9 @@ jobs:
       - name: Build
         run: cmake --build build -j2
       - name: Test
-        run: ctest --test-dir build --output-on-failure --timeout 120
+        # Suites use private fixture directories; overlap compiler startup/linker
+        # latency while keeping the runner's build and test parallelism bounded.
+        run: ctest --test-dir build --output-on-failure --timeout 120 -j2
   resolver:
     name: resolver (linux, clang)
     runs-on: ubuntu-24.04

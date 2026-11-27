@@ -2228,6 +2228,23 @@ C++20, CMake ≥ 3.24, exactly one pinned LLVM version, no compatibility layer.
 - **Corpus:** the user's library and solved problems, from D3 on.
 - Every test runs under a hard timeout.
 
+The compiler-heavy option, jobs and final-verification tests in `unit`,
+`unit_jobs` and `unit_verify_final` keep representative opt-outs, scheduling,
+report/progress equivalence, rollback, deadlines and rendering fallbacks on
+every platform. Exhaustive source/fault/option/job-count combinations run in the
+`unit (linux)` and `unit (linux, fork)` jobs in `.github/workflows/ci.yml`.
+`DISTILL_TEST_EXHAUSTIVE_EQUIVALENCE` defaults to `ON` on Linux and `OFF`
+elsewhere; configure with `-DDISTILL_TEST_EXHAUSTIVE_EQUIVALENCE=OFF` on Linux
+to measure the macOS/Windows selection locally, or `ON` elsewhere to run the
+full matrices. The original pipeline case runner still runs on every platform.
+The unit CI job runs at most two CTest suites concurrently (`-j2`), using their
+private fixture directories to overlap compiler/linker latency.
+Concurrency rendezvous release when participants arrive, with a bounded timeout
+only as a scheduler escape. Deadline tests use an already-expired phase, and
+the descendant-kill test checks release of an OS file lock instead of sleeping
+to wait for a survival marker. Explicit process-timeout, descendant-grace and
+rendezvous-timeout tests retain their intentional waits.
+
 ## 7. Milestones
 
 | M | Work |

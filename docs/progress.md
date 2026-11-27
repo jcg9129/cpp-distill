@@ -893,3 +893,56 @@ Checksums and build/test/sweep logs remain under ignored `.checks/`.
 Rebased commits, oldest first: `4e80b47`, `3430fd6`, `e1bf1b8`, `4e4c782`,
 `4f32eac`. The final protocol/plumbing, integration tests and documentation
 corrections remain uncommitted in this worktree; nothing was pushed.
+
+## Unit CI runtime (2026-11-27)
+
+Measured HEAD `345fc95` before changes and the updated tests in a Release,
+LLVM-free build with GCC 15.2 on Linux ARM64. All ten registered CTest suites
+pass in each selection below. The three existing platform/architecture unit
+skips remain; SDK-only cases are outside this build, as in the unit CI job.
+These are local measurements, not native macOS/Windows timings.
+
+| Complete CTest selection | Wall seconds |
+| --- | ---: |
+| Before, exhaustive, `-j1` | 129.74 |
+| After, exhaustive Linux selection, `-j1` | 129.22 |
+| After, macOS/Windows selection, `-j1` | 98.09 |
+| After, exhaustive Linux selection, CI's `-j2` | 69.13 |
+| After, macOS/Windows selection, CI's `-j2` | 60.07 |
+
+Individual test wall times from timestamped CTest `-V` RUN/PASS output, with
+one suite running at a time:
+
+| Test | Before seconds | After, macOS/Windows selection |
+| --- | ---: | ---: |
+| `pipeline_shortening_runs_after_trimming_and_compaction` | 13.592 | 6.932 |
+| `pipeline_jobs_output_reports_and_fallbacks_match_serial` | 7.507 | 2.034 |
+| `pipeline_jobs_baseline_raw_builds_and_failure_precedence` | 4.425 | 0.960 |
+| `pipeline_verify_final_matches_all_when_renderings_pass` | 5.068 | 1.615 |
+| `pipeline_verify_final_steps_back_through_failed_renderings` | 3.454 | 1.287 |
+| `pipeline_verify_final_checks_last_available_stage_and_preserves_core_gates` | 7.973 | 4.516 |
+| `process_timeout_kills_grandchild_holding_pipe` | 1.065 | 0.258 |
+| `pipeline_jobs_expired_batch_has_no_launch_records` | 0.055 | 0.012 |
+
+`unit_jobs` falls from 16.54 to 5.45 seconds and `unit_verify_final` from 22.28
+to 9.45 seconds serially. The three unit-binary CTest entries together fall
+from 97.39 to 66.11 seconds serially. The default and each independent trimming/shortening
+opt-out still run everywhere; combined opt-outs, extra fault/source/job-count
+equivalence combinations and the full final-verification step-back matrix run
+in both `unit (linux)` and `unit (linux, fork)`. No test function is disabled.
+
+The existing success rendezvous already release on arrival: the mocked batch
+test takes 0.3 ms, with no CPU-affinity or stress-repetition loops in this
+checkout. Intentional timeout/grace tests remain. The deadline test now starts
+with an expired phase; the descendant test immediately checks release of an OS
+file lock. A negative control confirmed that a live holder blocks reacquisition
+and termination releases it, including a spaced Unicode lock path.
+
+All configure/build/test runs used hard timeouts and `ulimit -v 6000000`,
+building with at most `-j4` and testing with `-j1` or `-j2`. CI's ten-minute job
+limit and all CTest timeouts are unchanged. Logs and per-test timing JSON remain
+under ignored `build/{before,after-linux,after-portable}*`.
+
+A fresh `DISTILL_FORCE_FORK_SPAWN=ON` build defaults to exhaustive coverage
+without an override and passes all ten suites with CI's `-j2` in 71.48 seconds.
+Its configure/build/CTest logs are `build/fork-*.log`.
