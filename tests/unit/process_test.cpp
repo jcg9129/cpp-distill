@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
+#include "rendezvous.h"
 #include "core/process/process.h"
 #include <future>
+#include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #ifdef _WIN32
 #include <cstdint>
 #include <sstream>
 #include <windows.h>
 #else
 #include <csignal>
+#include <unistd.h>
 #endif
 
 using namespace distill;
@@ -74,15 +80,17 @@ TEST(process_timeout) {
 }
 TEST(process_timeout_kills_grandchild_holding_pipe) {
   test::TempDirectory temp;
-  const auto marker = temp.path / "survived";
-  auto process = spec({"spawn-sleeper", "800", pathToUtf8(marker)});
-  process.timeout = 150ms;
+  const auto lock = pathToUtf8(temp.path / "descendant.lock");
+  auto process = spec({"spawn-sleeper", "100000", lock});
+  // Allow the descendant to acquire the lock and announce readiness.
+  process.timeout = 250ms;
   const auto result = run(process);
   CHECK(result.timedOut);
   CHECK_EQ(result.stdoutText, "started\n");
   CHECK(result.wall < 4s);
-  run(spec({"sleep", "900"}));
-  CHECK(!std::filesystem::exists(marker));
+  // Readiness proves the descendant held the lock. Reacquiring it proves that
+  // it died, even if the runner returned by abandoning the inherited pipes.
+  CHECK_EQ(run(spec({"try-lock", lock})).exitCode,0);
 }
 TEST(process_exit_grace_kills_descendants) {
   auto process = spec({"spawn-sleeper", "100000"});
@@ -203,6 +211,21 @@ TEST(process_thread_safety) {
     CHECK_EQ(result.value().stdoutText, "1:" + std::to_string(i) + '\n');
   }
 }
+TEST(process_macos_spawn_excludes_unlisted_pipe_writers) {
+#if defined(__APPLE__) && defined(DISTILL_TEST_HAVE_SPAWN_CHDIR)
+  // Model the pipe()+fcntl(CLOEXEC) window deterministically: leave this writer
+  // inheritable while another process is spawned. It must not survive exec.
+  int fds[2];
+  if (pipe(fds) != 0) throw std::runtime_error("cannot create test pipe");
+  struct Pipe {
+    int read, write;
+    ~Pipe() { close(read); close(write); }
+  } pipeGuard{fds[0],fds[1]};
+  CHECK_EQ(run(spec({"fd-open",std::to_string(fds[1])})).exitCode,0);
+#else
+  throw test::Skip{"macOS close-on-exec default"};
+#endif
+}
 TEST(process_exec_failures_are_errors) {
 #ifdef _WIN32
   throw test::Skip{"POSIX exec failure reporting"};
@@ -226,4 +249,86 @@ TEST(process_memory_limit_smoke) {
   auto process = spec({"exit", "0"});
   process.memoryLimitBytes = 256 * 1024 * 1024;
   CHECK_EQ(run(process).exitCode, 0);
+}
+
+TEST(process_batch_bounded_concurrent_order_and_errors) {
+  // jobs is an upper bound, not a scheduling guarantee. When the first wave
+  // meets, also check that it filled the available slots.
+  for (const unsigned jobs : {1u,2u,4u}) {
+    std::mutex mutex;
+    test::Rendezvous firstWave(jobs);
+    unsigned active = 0, peak = 0;
+    std::vector<ProcessSpec> specs(9);
+    for (std::size_t i = 0; i < specs.size(); ++i) specs[i].argv = {std::to_string(i)};
+    auto results = runProcessBatch(specs,jobs,[&](const ProcessSpec& input) -> Result<ProcessResult> {
+      const auto index = std::stoul(input.argv[0]);
+      {
+        std::lock_guard lock(mutex);
+        ++active; peak = (std::max)(peak,active);
+      }
+      if (index < jobs) firstWave.arriveAndWait();
+      { std::lock_guard lock(mutex); --active; }
+      if (index == 3) return Error{"ordered failure"};
+      if (index == 5) throw std::runtime_error("runner failure");
+      ProcessResult r; r.exitCode = static_cast<int>(index); return r;
+    });
+    CHECK(peak >= 1u && peak <= jobs);
+    if (firstWave.completed()) CHECK_EQ(peak,jobs);
+    CHECK_EQ(results.size(),specs.size()); CHECK_EQ(active,0u);
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+      if (i == 3) CHECK_EQ(results[i].error().message,"ordered failure");
+      else if (i == 5) CHECK_EQ(results[i].error().message,"runner failure");
+      else CHECK_EQ(results[i].value().exitCode,static_cast<int>(i));
+    }
+  }
+}
+TEST(process_batch_preserves_each_process_limits) {
+  auto timeout = spec({"sleep","100000"}); timeout.timeout = 100ms;
+  auto flood = spec({"flood","8192"}); flood.maxOutputBytes = 32;
+  const auto results = runProcessBatch({timeout,flood,spec({"exit","7"})},2);
+  CHECK(results[0].ok()); CHECK(results[0].value().timedOut);
+  CHECK_EQ(results[1].value().stdoutText.size(),32u); CHECK(results[1].value().stdoutTruncated);
+  CHECK_EQ(results[2].value().exitCode,7);
+}
+
+TEST(process_batch_empty_oversized_and_throwing_runners) {
+  CHECK(runProcessBatch({},4).empty());
+  for (const unsigned jobs : {0u,1u,4u}) {
+    std::atomic<unsigned> finished{0};
+    auto results = runProcessBatch(std::vector<ProcessSpec>(3),jobs,[&](const ProcessSpec&) -> Result<ProcessResult> {
+      const auto index = finished.fetch_add(1);
+      if (index == 0) throw Error{"runner error"};
+      if (index == 1) throw std::runtime_error("runner exception");
+      throw 42;
+    });
+    CHECK_EQ(finished.load(),3u);
+    std::vector<std::string> errors;
+    for (const auto& result : results) {
+      CHECK(!result.ok());
+      errors.push_back(result.error().message);
+    }
+    std::sort(errors.begin(),errors.end());
+    CHECK_EQ(errors,(std::vector<std::string>{"process runner threw an unknown exception","runner error","runner exception"}));
+    // A subsequent batch can reenter the runner without a scheduler lock.
+    auto nested = runProcessBatch(std::vector<ProcessSpec>(2),jobs,[&](const ProcessSpec&) -> Result<ProcessResult> {
+      return runProcessBatch(std::vector<ProcessSpec>(1),1,[](const ProcessSpec&) -> Result<ProcessResult> {
+        ProcessResult result; result.exitCode = 7; return result;
+      }).front();
+    });
+    for (const auto& result : nested) { CHECK(result.ok()); CHECK_EQ(result.value().exitCode,7); }
+  }
+}
+
+TEST(process_batch_rendezvous_timeout_still_joins_workers) {
+  for (const unsigned jobs : {1u,2u}) {
+    test::Rendezvous gate(3,1ms); // Deliberately more participants than tasks.
+    std::atomic<unsigned> finished{0};
+    auto results = runProcessBatch(std::vector<ProcessSpec>(2),jobs,[&](const ProcessSpec&) -> Result<ProcessResult> {
+      gate.arriveAndWait();
+      ++finished;
+      ProcessResult result; result.exitCode = 0; return result;
+    });
+    CHECK(!gate.completed()); CHECK_EQ(finished.load(),2u);
+    for (const auto& result : results) { CHECK(result.ok()); CHECK_EQ(result.value().exitCode,0); }
+  }
 }

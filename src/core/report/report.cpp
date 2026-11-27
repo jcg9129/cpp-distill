@@ -90,6 +90,7 @@ std::string renderReport(const PipelineResult& r, const CompileCommand& command,
     if (pruning.ok()) out << pruning.value();
     else out << "pruning report error: " << pruning.error().message << '\n';
   }
+  for (const auto& line : r.optionLines) out << "option " << line << '\n';
   for (const auto& a : command.args) {
     out << "option " << className(a.classification) << ':';
     for (const auto& word : a.spelling) out << ' ' << std::quoted(word);

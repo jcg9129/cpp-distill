@@ -7,11 +7,20 @@
 #include "core/path.h"
 #include "core/temporary.h"
 #include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <future>
+#include <memory>
 
 namespace distill {
 namespace {
 template<class T> T take(Result<T> r) { if (!r.ok()) throw r.error(); return std::move(r.value()); }
+template<class F> Result<ProcessResult> processTask(F&& task) {
+  try { return task(); }
+  catch (const Error& e) { return e; }
+  catch (const std::exception& e) { return Error{e.what()}; }
+  catch (...) { return Error{"process runner threw an unknown exception"}; }
+}
 using Clock = std::chrono::steady_clock;
 bool runnable(const Configuration& c) {
   const auto& t = c.probe.triple;
@@ -32,6 +41,10 @@ bool runnable(const Configuration& c) {
   return false;
 #endif
 }
+bool independentCompilerCommand(const CompileCommand& command) {
+  // Unknown flags can name shared side-effect files or load compiler plugins.
+  return std::none_of(command.args.begin(),command.args.end(),[](const auto& a) { return a.classification == Class::unmodelled; });
+}
 void checkedBytes(const std::filesystem::path& p, std::string_view expected) {
   std::ifstream f(p, std::ios::binary);
   const std::string actual{std::istreambuf_iterator<char>(f), {}};
@@ -42,6 +55,10 @@ void write(const std::filesystem::path& p, std::string_view bytes) {
   if (!f) throw Error{"cannot write work file: " + pathToUtf8(p)};
 }
 struct Pipeline {
+  struct ProcessAttempt {
+    Result<ProcessResult> outcome = Error{"process not started"};
+    std::optional<ProcessRecord> record;
+  };
   CompileCommand command;
   const DistillOptions& options;
   ConditionEvaluator& evaluator;
@@ -52,14 +69,27 @@ struct Pipeline {
   std::string currentStep;
   std::optional<Configuration> flatConfiguration;
   std::map<std::string,std::vector<ProcessResult>> runs;
+  std::map<std::filesystem::path,ProcessAttempt> preprocessed;
+  std::future<Result<ProcessResult>> baselineBuild;
+  std::optional<PipelineResult> beforeBaseline;
+  std::optional<Configuration> baselineConfiguration;
+  ProcessRecord baselineRecord;
+  std::vector<std::string> speculativeProgress;
+  unsigned availableJobs() const { return options.jobs - (baselineBuild.valid() ? 1u : 0u); }
   Pipeline(const CompileCommand& c, const DistillOptions& o, ConditionEvaluator& e, ProcessRunner r)
       : command(c), options(o), evaluator(e), runner(std::move(r)), work(".distill-work-", o.temporaryRoot) {}
+  void progress(std::string_view message) {
+    if (!options.progress) return;
+    if (beforeBaseline) speculativeProgress.emplace_back(message);
+    else options.progress(message);
+  }
   void step(std::string_view name) {
     deadline = Clock::now() + options.stepTimeout;
     currentStep = name;
-    if (options.progress) options.progress(name);
+    progress(name);
   }
-  Result<ProcessResult> limited(const ProcessSpec& input, bool compilation = true, bool preprocessing = false) {
+  Result<ProcessResult> limited(const ProcessSpec& input, bool compilation = true, bool preprocessing = false,
+                                bool record = true, std::optional<ProcessRecord>* launched = nullptr) {
     auto spec = input;
     // Both the per-run cap and the enclosing phase deadline apply (§3/§4.6).
     const auto processDeadline = compilation ? deadline : std::min(deadline,Clock::now() + options.stepTimeout);
@@ -67,19 +97,60 @@ struct Pipeline {
     if (left.count() <= 0) return Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
     spec.timeout = std::min(spec.timeout, left);
     spec.maxOutputBytes = std::min(spec.maxOutputBytes, preprocessing ? options.maxPreprocessOutput : options.maxProcessOutput);
-    result.processes.push_back({currentStep, spec});
-    auto run = runner(spec);
+    if (record) result.processes.push_back({currentStep, spec});
+    if (launched) *launched = ProcessRecord{currentStep,spec};
+    auto run = processTask([&] { return runner(spec); });
+    return checkedProcess(std::move(run), spec, processDeadline, currentStep, compilation);
+  }
+  static Result<ProcessResult> checkedProcess(Result<ProcessResult> run, const ProcessSpec& spec,
+                                       Clock::time_point processDeadline, const std::string& processStep, bool compilation = true) {
     if (!run.ok()) return run.error();
     const auto& r = run.value();
-    if (Clock::now() >= processDeadline || r.timedOut) return Error{currentStep + ": " + (compilation ? "step" : "run") + " deadline exceeded in " + pathToUtf8(spec.cwd)};
-    if (r.stdoutTruncated || r.stderrTruncated) return Error{currentStep + ": process output cap exceeded in " + pathToUtf8(spec.cwd)};
-    if (r.signal || (compilation && r.exitCode)) return Error{currentStep + ": process " + (spec.argv.empty() ? "<empty argv>" : spec.argv.front()) + " failed (exit " + std::to_string(r.exitCode) + ") in " + pathToUtf8(spec.cwd) + ": " + r.stderrText};
+    if (Clock::now() >= processDeadline || r.timedOut) return Error{processStep + ": " + (compilation ? "step" : "run") + " deadline exceeded in " + pathToUtf8(spec.cwd)};
+    if (r.stdoutTruncated || r.stderrTruncated) return Error{processStep + ": process output cap exceeded in " + pathToUtf8(spec.cwd)};
+    if (r.signal || (compilation && r.exitCode)) return Error{processStep + ": process " + (spec.argv.empty() ? "<empty argv>" : spec.argv.front()) + " failed (exit " + std::to_string(r.exitCode) + ") in " + pathToUtf8(spec.cwd) + ": " + r.stderrText};
     return run;
+  }
+  std::vector<ProcessAttempt> limitedBatch(const std::vector<ProcessSpec>& inputs, bool preprocessing = false) {
+    std::vector<ProcessAttempt> attempts(inputs.size());
+    std::atomic<std::size_t> next{0};
+    const auto jobs = availableJobs();
+    // Each worker owns one result slot. limited() captures the effective spec
+    // at launch; only the caller publishes records, in consumption order.
+    auto work = [&] {
+      for (;;) {
+        const auto i = next.fetch_add(1);
+        if (i >= inputs.size()) return;
+        auto& attempt = attempts[i];
+        attempt.outcome = limited(inputs[i],true,preprocessing,false,&attempt.record);
+        if (jobs == 1 && !attempt.outcome.ok()) return;
+      }
+    };
+    std::vector<std::future<void>> workers;
+    for (std::size_t i = 1; i < std::min<std::size_t>(jobs,inputs.size()); ++i)
+      workers.push_back(std::async(std::launch::async,work));
+    work();
+    for (auto& worker : workers) worker.get();
+    return attempts;
   }
   ProbeOptions probeOptions() {
     ProbeOptions po; po.temporaryRoot = work.path;
     po.timeout = options.stepTimeout; po.maxOutputBytes = options.maxProcessOutput;
-    po.runner = [this](const ProcessSpec& s) { return limited(s); }; return po;
+    po.runner = [this](const ProcessSpec& s) { return limited(s); };
+    if (options.jobs > 1) {
+      auto pending = std::make_shared<std::vector<ProcessAttempt>>();
+      po.batchRunner = [this,pending](const std::vector<ProcessSpec>& specs) {
+        *pending = limitedBatch(specs);
+        std::vector<Result<ProcessResult>> outcomes;
+        for (auto& attempt : *pending) outcomes.push_back(std::move(attempt.outcome));
+        return outcomes;
+      };
+      po.batchConsumed = [this,pending,next = std::size_t{}](const ProcessSpec&) mutable {
+        auto& attempt = pending->at(next++);
+        if (attempt.record) result.processes.push_back(std::move(*attempt.record));
+      };
+    }
+    return po;
   }
   Configuration configuration(CompileCommand c, const std::string& kind) {
     // Generated builds execute away from the input tree. Keep system/library
@@ -87,7 +158,9 @@ struct Pipeline {
     for (auto& a : c.args) if (a.option == "-isystem" || a.option == "-L") {
       a.value = pathToUtf8(c.cwd / pathFromUtf8(a.value)); a.spelling = {a.option, a.value};
     }
-    return take(probeConfiguration(std::move(c), kind, probeOptions()));
+    auto po = probeOptions();
+    if (!independentCompilerCommand(c)) { po.batchRunner = {}; po.batchConsumed = {}; }
+    return take(probeConfiguration(std::move(c), kind, po));
   }
   std::vector<std::string> argv(const Configuration& c, const std::filesystem::path& file,
                                 const std::filesystem::path& output, bool generated) {
@@ -107,6 +180,42 @@ struct Pipeline {
     take(limited(spec));
     if (!std::filesystem::is_regular_file(program)) throw Error{"compiler did not produce an executable for " + pathToUtf8(file)};
     return program;
+  }
+  void startBaseline(const Configuration& c) {
+    beforeBaseline = result; baselineConfiguration = c;
+    const auto program = work.path / "baseline.exe";
+    std::filesystem::remove(program);
+    ProcessSpec spec; spec.argv = argv(c,command.source,program,false); spec.cwd = command.cwd;
+    spec.timeout = (std::min)(options.stepTimeout,std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()));
+    if (spec.timeout.count() <= 0) throw Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
+    spec.maxOutputBytes = (std::min)(spec.maxOutputBytes,options.maxProcessOutput);
+    baselineRecord = {currentStep,spec}; result.processes.push_back(baselineRecord);
+    const auto phaseDeadline = deadline;
+    baselineBuild = std::async(std::launch::async,[spec,program,source = command.source,phaseDeadline,run = runner]() -> Result<ProcessResult> {
+      return processTask([&]() -> Result<ProcessResult> {
+        auto result = checkedProcess(run(spec),spec,phaseDeadline,"baseline build");
+        if (result.ok() && !std::filesystem::is_regular_file(program))
+          return Error{"compiler did not produce an executable for " + pathToUtf8(source)};
+        return result;
+      });
+    });
+  }
+  void finishBaseline() {
+    if (!baselineBuild.valid()) return;
+    auto built = baselineBuild.get();
+    if (!built.ok()) {
+      // Earlier failures are authoritative. Discard speculative raw work from
+      // the serial report and retain the baseline failure's original wording.
+      result = std::move(*beforeBaseline);
+      speculativeProgress.clear();
+      beforeBaseline.reset();
+      result.processes.push_back(baselineRecord);
+      result.checks.push_back({"baseline",built.error().message,baselineConfiguration,{}});
+      throw Error{"baseline failed: " + built.error().message};
+    }
+    beforeBaseline.reset(); baselineConfiguration.reset();
+    for (const auto& message : speculativeProgress) progress(message);
+    speculativeProgress.clear();
   }
   std::vector<ProcessResult> execute(const Configuration& c, const std::filesystem::path& program) {
     if (options.samples.empty()) return {};
@@ -128,7 +237,7 @@ struct Pipeline {
     for (std::size_t i = 0; i < reference.size(); ++i) {
       result.runtime = "compared " + std::to_string(i + 1) + " samples";
       const bool same = reference[i].exitCode == candidate[i].exitCode && reference[i].stdoutText == candidate[i].stdoutText;
-      if (options.progress) options.progress(currentStep + ": sample " + options.samples[i].name + (same ? " matches" : " differs"));
+      progress(currentStep + ": sample " + options.samples[i].name + (same ? " matches" : " differs"));
       if (!same)
         throw Error{"differs on sample " + options.samples[i].name + " (distill bug or nondeterministic program)"};
     }
@@ -206,6 +315,9 @@ struct Pipeline {
     if (result.lineMarkers.empty()) result.lineMarkers = "kept: " + why;
     result.diagnostic += "line markers kept: " + why + '\n';
   }
+  void skipRenderingBuild(std::string_view stage) {
+    result.diagnostic += "verify: " + std::string(stage) + " build skipped (--verify=final)\n";
+  }
   // Runs after pruned passed every check; any failure keeps the checked
   // marked bytes (docs/reviews/2026-11-18-no-line-markers.md).
   void unmark(const RenderedSource& rendered, const std::filesystem::path& marked) {
@@ -222,15 +334,28 @@ struct Pipeline {
       const auto bytes = take(withoutLineMarkers(rendered));
       take(unmarkedInvariant(rendered.provenance.text,bytes));
       const auto path = work.path / "unmarked.cpp"; write(path,bytes);
+      const auto accept = [&] {
+        result.lineMarkers = "omitted";
+        result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
+      };
+      const bool deferred = options.verifyFinal && (options.compactWhitespace || options.shortenNames);
+      if (deferred) {
+        if (Clock::now() >= deadline) throw Error{"unmarked checks deadline exceeded"};
+        skipRenderingBuild("unmarked");
+        if (compact(path,bytes)) { accept(); return; }
+        // No later rendering passed. Fully check these exact bytes before
+        // making them the fallback; otherwise retain the checked pruned bytes.
+        step("unmarked checks");
+      }
+      prefetchPreprocessing(*flatConfiguration,marked,true,*flatConfiguration,path);
       take(compareUnmarkedPreprocessed(preprocess(*flatConfiguration,marked,true),preprocess(*flatConfiguration,path,true)));
       auto program = build(*flatConfiguration,path,true,"unmarked");
       compareRuns(runs["flat"],execute(*flatConfiguration,program));
       checkedBytes(path,bytes); checkedBytes(marked,rendered.provenance.text);
       if (Clock::now() >= deadline) throw Error{"unmarked checks deadline exceeded"};
       result.checks.push_back({"pruned without line markers","passed",flatConfiguration,{}});
-      result.bytes = bytes; result.lineMarkers = "omitted";
-      result.diagnostic += "line markers omitted: no user code observes presumed source positions\n";
-      if (options.compactWhitespace || options.shortenNames) compact(path,bytes);
+      result.bytes = bytes; accept();
+      if (!deferred && (options.compactWhitespace || options.shortenNames)) compact(path,bytes);
     } catch (const Error& e) { failedUnmarked(e.message); }
     catch (const std::exception& e) { failedUnmarked(e.what()); }
   }
@@ -243,30 +368,45 @@ struct Pipeline {
     result.compactWhitespace = "kept: " + why;
     result.diagnostic += "whitespace kept: " + why + '\n';
   }
-  void compact(const std::filesystem::path& unmarked, const std::string& original) {
+  // Return whether this rendering or a successor passed all of its checks.
+  // Deferred ancestors never replace result.bytes until they pass themselves.
+  bool compact(const std::filesystem::path& unmarked, const std::string& original) {
     const auto previousRuntime = result.runtime;
     try {
       step("compact checks");
       const auto bytes = take(compactWhitespace(original));
       take(unmarkedInvariant(original,bytes));
       const auto path = work.path / "compact.cpp"; write(path,bytes);
+      const auto accept = [&] {
+        result.compactWhitespace = "compacted";
+        result.diagnostic += "whitespace compacted: no user code observes source positions (including columns)\n";
+      };
+      const bool deferred = options.verifyFinal && options.shortenNames;
+      if (deferred) {
+        if (Clock::now() >= deadline) throw Error{"compact checks deadline exceeded"};
+        skipRenderingBuild("compact");
+        if (shortenNames(bytes)) { accept(); return true; }
+        step("compact checks");
+      }
+      prefetchPreprocessing(*flatConfiguration,unmarked,true,*flatConfiguration,path);
       take(compareUnmarkedPreprocessed(preprocess(*flatConfiguration,unmarked,true),preprocess(*flatConfiguration,path,true)));
       auto program = build(*flatConfiguration,path,true,"compact");
       compareRuns(runs["flat"],execute(*flatConfiguration,program));
       checkedBytes(path,bytes); checkedBytes(unmarked,original);
       if (Clock::now() >= deadline) throw Error{"compact checks deadline exceeded"};
       result.checks.push_back({"pruned with compact whitespace","passed",flatConfiguration,{}});
-      result.bytes = bytes; result.compactWhitespace = "compacted";
-      result.diagnostic += "whitespace compacted: no user code observes source positions (including columns)\n";
-      if (options.shortenNames) shortenNames(bytes);
+      result.bytes = bytes; accept();
+      if (!deferred && options.shortenNames) shortenNames(bytes);
+      return true;
     } catch (const Error& e) { failedCompact(e.message,previousRuntime); }
     catch (const std::exception& e) { failedCompact(e.what(),previousRuntime); }
+    return false;
   }
   void keepShortenNames(const std::string& why) {
     result.shortenNames = "kept: " + why;
     result.diagnostic += "shorten-names: " + result.shortenNames + '\n';
   }
-  void shortenNames(const std::string& original) {
+  bool shortenNames(const std::string& original) {
     const auto previousRuntime = result.runtime;
     try {
       step("shorten-names checks");
@@ -288,7 +428,7 @@ struct Pipeline {
       if (!model.disabledReasons.empty()) throw Error{"shorten-names analysis: " + model.disabledReasons.front()};
       const auto candidate = take(shortenNamesSource(original,model));
       take(shortenNamesInvariant(original,candidate.text,candidate.renames));
-      if (!candidate.namesKept.empty()) { keepShortenNames(candidate.namesKept); return; }
+      if (!candidate.namesKept.empty()) { keepShortenNames(candidate.namesKept); return false; }
       const auto path = work.path / "shortened.cpp"; write(path,candidate.text);
       auto program = build(*flatConfiguration,path,true,"shortened");
       compareRuns(runs["flat"],execute(*flatConfiguration,program));
@@ -300,25 +440,46 @@ struct Pipeline {
       result.shortenNames = "renamed=" + std::to_string(candidate.renames.size()) + " spellings saved=" + std::to_string(original.size()-candidate.text.size()) + " bytes";
       result.diagnostic += "shorten-names: " + result.shortenNames + '\n';
       if (!candidate.renames.empty()) result.assumptions.insert("A15");
+      return true;
     } catch (const Error& e) {
       result.runtime = previousRuntime;
       result.checks.push_back({"pruned with shortened names",e.message,flatConfiguration,{}});
       keepShortenNames(e.message);
     } catch (const std::exception& e) { result.runtime = previousRuntime; keepShortenNames(e.what()); }
+    return false;
   }
   void failedCompact(const std::string& message, const std::string& previousRuntime) {
     result.runtime = previousRuntime;
     result.checks.push_back({"pruned with compact whitespace",message,flatConfiguration,{}});
     keepWhitespace("compact check failed: " + message);
   }
-  std::string preprocess(const Configuration& c, const std::filesystem::path& file, bool generated) {
+  ProcessSpec preprocessSpec(const Configuration& c, const std::filesystem::path& file, bool generated) {
     ProcessSpec spec; spec.argv = argv(c, file, "-", generated); spec.argv.push_back("-E");
     spec.cwd = generated ? work.path : command.cwd;
     spec.timeout = options.stepTimeout; spec.maxOutputBytes = options.maxPreprocessOutput;
-    return std::move(take(limited(spec,true,true)).stdoutText);
+    return spec;
+  }
+  void prefetchPreprocessing(const Configuration& a, const std::filesystem::path& left, bool generated,
+                             const Configuration& b, const std::filesystem::path& right) {
+    if (availableJobs() < 2 || !independentCompilerCommand(a.command) || !independentCompilerCommand(b.command)) return;
+    // Prefetch without publishing records. The original call expressions below
+    // consume results and errors in exactly their existing evaluation order.
+    auto results = limitedBatch({preprocessSpec(a,left,generated),preprocessSpec(b,right,true)},true);
+    preprocessed.insert_or_assign(left,std::move(results[0]));
+    preprocessed.insert_or_assign(right,std::move(results[1]));
+  }
+  std::string preprocess(const Configuration& c, const std::filesystem::path& file, bool generated) {
+    auto pending = preprocessed.extract(file);
+    if (!pending.empty()) {
+      auto& attempt = pending.mapped();
+      if (attempt.record) result.processes.push_back(std::move(*attempt.record));
+      return std::move(take(std::move(attempt.outcome)).stdoutText);
+    }
+    return std::move(take(limited(preprocessSpec(c,file,generated),true,true)).stdoutText);
   }
   void compare(const Configuration& c, const std::filesystem::path& a, bool original,
                const std::filesystem::path& b, const InlineResult& raw, const Configuration* baseline = nullptr) {
+    prefetchPreprocessing(baseline ? *baseline : c,a,!original,c,b);
     auto left = preprocess(baseline ? *baseline : c, a, !original), right = preprocess(c, b, true);
     take(comparePreprocessed(left, right, originalFileMapper(raw)));
   }
@@ -330,7 +491,9 @@ struct Pipeline {
       c.changes.push_back({{f}, "profile link option omitted for local fallback; local link options retained"});
   }
   PipelineResult run() {
+    if (options.verifyFinal) result.optionLines.push_back("verify=final");
     try {
+      if (!options.jobs) throw Error{"--jobs requires a positive integer"};
       for (const auto& arg : command.args) if (arg.option == "-shared" || arg.option == "-r")
         throw Error{"compile command does not build an executable: " + arg.option};
       step("probe local compiler");
@@ -343,7 +506,10 @@ struct Pipeline {
       if (options.profile && command.dialect() && *command.dialect() != options.profile->dialect.name)
         result.diagnostic += "warning: profile dialect " + options.profile->dialect.name + " overrides " + *command.dialect() + " for flat\n";
       step("baseline build");
-      try { runs["baseline"] = execute(local,build(local, command.source, false,"baseline")); }
+      try {
+        if (options.jobs > 1 && options.samples.empty() && independentCompilerCommand(command)) startBaseline(local);
+        else runs["baseline"] = execute(local,build(local, command.source, false,"baseline"));
+      }
       catch (const Error& e) {
         result.checks.push_back({"baseline", e.message, local, {}});
         throw Error{"baseline failed: " + e.message};
@@ -364,14 +530,17 @@ struct Pipeline {
       try {
         rawLocal = configuration(take(flatCommand(command, nullptr, command.compiler, false)), "local");
         compare(rawLocal, command.source, true, rawPath, raw, &local);
-        compareRuns(runs["baseline"],execute(rawLocal,build(rawLocal, rawPath, true,"raw")));
+        auto rawProgram = build(rawLocal, rawPath, true,"raw");
+        compareRuns(runs["baseline"],execute(rawLocal,rawProgram));
         checkedBytes(rawPath, rawChecked.text);
         if (Clock::now() >= deadline) throw Error{"raw checks deadline exceeded"};
       } catch (const Error& e) {
+        finishBaseline();
         work.keep = true; result.keptWork = work.path;
         result.checks.push_back({"raw", e.message, rawLocal, {}});
         throw Error{"raw failed: " + e.message + "; work files kept at " + pathToUtf8(work.path)};
       }
+      finishBaseline();
       result.checks.push_back({"raw", "passed", rawLocal, {}});
       result.artifact = "raw"; result.bytes = rawChecked.text; result.assumptions = raw.assumptions;
       result.verification = targetEquivalent(rawLocal, options.profile, hostDependent(command)) ? "target" : "local";
@@ -509,8 +678,10 @@ struct Pipeline {
       result.exitCode = options.strict && (result.artifact != "pruned" || result.verification != "target") ? 3 : 0;
       result.resultLine = "distill: wrote " + result.artifact + " (" + result.verification + "), runtime " + result.runtime;
     } catch (const Error& e) {
+      auto failure = e;
+      try { finishBaseline(); } catch (const Error& baselineError) { failure = baselineError; }
       result.exitCode = 1; result.bytes.clear(); result.artifact.clear();
-      result.diagnostic += e.message + '\n';
+      result.diagnostic += failure.message + '\n';
       result.resultLine = "distill: nothing written, runtime " + result.runtime;
     }
     if (!options.assumeInstantiationEffects && (!result.pruningModel || !result.retention))

@@ -146,6 +146,30 @@ TEST(validate_merge_only_options) {
   CHECK(distillHelp().find("remove inactive #if branches (flat)") != std::string::npos);
 }
 
+TEST(validate_merge_only_speed_options) {
+  for (const auto& flags : std::vector<std::vector<std::string>>{
+      {"--jobs=4"}, {"--jobs","2"}, {"-j","4"}, {"--verify=all","--jobs=4"}}) {
+    for (const bool first : {false,true}) {
+      auto args = flags;
+      args.insert(first ? args.begin() : args.end(),"--merge-only"); args.push_back("main.cpp");
+      const auto parsed = parseDistillOptions(args); CHECK(parsed.ok());
+      if (parsed.ok()) {
+        CHECK(parsed.value().mergeOnly); CHECK(!parsed.value().verifyFinal);
+        CHECK_EQ(parsed.value().jobs,flags.front() == "--jobs" ? 2u : 4u);
+      }
+    }
+  }
+  for (const auto& flags : std::vector<std::vector<std::string>>{
+      {"--verify=final"}, {"--verify","final"}, {"--jobs=4","--verify=final"}}) {
+    for (const bool first : {false,true}) {
+      auto args = flags;
+      args.insert(first ? args.begin() : args.end(),"--merge-only"); args.push_back("main.cpp");
+      const auto parsed = parseDistillOptions(args); CHECK(!parsed.ok());
+      if (!parsed.ok()) CHECK_EQ(parsed.error().message,"--merge-only cannot be combined with --verify=final");
+    }
+  }
+}
+
 #include "core/pipeline/pipeline.h"
 #include "evaluate.h"
 #include "profile.h"
@@ -423,4 +447,53 @@ TEST(validate_pp_trimming_options) {
     CHECK(!parseDistillOptions({"--no-assume="+std::string(name),"--judge-probe","cses"}).ok());
     CHECK(distillHelp().find(name) != std::string::npos);
   }
+}
+
+TEST(validate_speed_options_and_compiler_boundary) {
+  const auto defaults = parseDistillOptions({"main.cpp"});
+  CHECK_EQ(defaults.value().jobs,1u); CHECK(!defaults.value().verifyFinal);
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--jobs=4","main.cpp"},
+      {"--jobs","4","main.cpp"},
+      {"-j","4","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok());
+    CHECK_EQ(r.value().jobs,4u);
+  }
+  CHECK(!parseDistillOptions({"-j4","main.cpp"}).ok());
+  const auto compiler = parseDistillOptions({"g++","--jobs=4","-j","4","main.cpp"});
+  CHECK_EQ(compiler.value().jobs,1u);
+  CHECK_EQ(compiler.value().compile,(std::vector<std::string>{"g++","--jobs=4","-j","4","main.cpp"}));
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--jobs"}, {"--jobs=0","main.cpp"}, {"--jobs=-1","main.cpp"},
+      {"--jobs=+2","main.cpp"}, {"--jobs=1.5","main.cpp"}, {"--jobs=4x","main.cpp"},
+      {"--jobs=","main.cpp"}, {"--jobs=99999999999999999999","main.cpp"},
+      {"--jobs=4","--judge-probe","cses"}, {"--jobs=1","--judge-probe","cses"},
+      {"--jobs=4","--judge-check","cses","result.txt"}})
+    CHECK(!parseDistillOptions(args).ok());
+  CHECK(distillHelp().find("--jobs=N") != std::string::npos);
+  CHECK(distillHelp().find("--baseline") == std::string::npos);
+  for (const auto* flag : {"--baseline", "--baseline=build", "--baseline=skip"}) {
+    const auto removed = parseDistillOptions({flag,"main.cpp"});
+    CHECK(!removed.ok()); CHECK(removed.error().message.starts_with("unknown distill option: "));
+  }
+}
+
+TEST(validate_verify_options_and_compiler_boundary) {
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--verify=final","main.cpp"}, {"--verify","final","main.cpp"},
+      {"--verify=final","--jobs=4","--shorten-names","main.cpp"},
+      {"--verify=final","--verify-run","sample.in","main.cpp"}}) {
+    const auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(r.value().verifyFinal);
+  }
+  CHECK(!parseDistillOptions({"--verify=all","main.cpp"}).value().verifyFinal);
+  CHECK(!parseDistillOptions({"--verify=final","--verify=all","main.cpp"}).value().verifyFinal);
+  const auto compiler = parseDistillOptions({"g++","--verify=final","main.cpp"});
+  CHECK(!compiler.value().verifyFinal);
+  CHECK_EQ(compiler.value().compile,(std::vector<std::string>{"g++","--verify=final","main.cpp"}));
+  for (const auto& args : std::vector<std::vector<std::string>>{
+      {"--verify"}, {"--verify=","main.cpp"}, {"--verify=none","main.cpp"},
+      {"--verify=Final","main.cpp"}, {"--verify","--strict","main.cpp"},
+      {"--verify=all","--judge-probe","cses"}, {"--verify=final","--judge-check","cses","result.txt"}})
+    CHECK(!parseDistillOptions(args).ok());
+  CHECK(distillHelp().find("--verify=all|final") != std::string::npos);
 }

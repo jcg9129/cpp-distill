@@ -2,6 +2,7 @@
 """Real-binary CLI surface checks; run only in the SDK job."""
 from pathlib import Path
 import os
+import re
 import shutil
 from contextlib import contextmanager
 import subprocess
@@ -52,6 +53,19 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--keep', 'unknown_function', 'g++', '-std=gnu++20', 'main.cpp'], 1, '--keep unknown_function: no indexed declaration'),
         (['--keep'], 1, 'missing value for --keep'),
         (['--verify-run'], 1, 'missing value for --verify-run'),
+        (['--jobs'], 1, 'missing value for --jobs'),
+        (['--jobs=0', 'main.cpp'], 1, '--jobs requires a positive integer'),
+        (['--jobs=-2', 'main.cpp'], 1, '--jobs requires a positive integer'),
+        (['--jobs=2x', 'main.cpp'], 1, '--jobs requires a positive integer'),
+        (['--baseline=build', 'main.cpp'], 1, 'unknown distill option: --baseline=build'),
+        (['--verify'], 1, 'missing value for --verify'),
+        (['--verify=', 'main.cpp'], 1, '--verify requires all or final'),
+        (['--verify=none', 'main.cpp'], 1, '--verify requires all or final'),
+        (['--baseline=skip', 'main.cpp'], 1, 'unknown distill option: --baseline=skip'),
+        (['--baseline', 'build', 'main.cpp'], 1, 'unknown distill option: --baseline'),
+        (['--jobs=4', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
+        (['-j', '2', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
+        (['--verify=final', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--verify-run', 'missing.in', 'main.cpp'], 1, 'not a sample file or directory'),
         (['--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--no-prune', 'g++', '-c', 'main.cpp'], 1, 'rejected option'),
@@ -61,6 +75,12 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--merge-only'], 1, 'missing compile command'),
         (['--merge-only', 'main.cpp'], 0, 'distill: wrote raw (local), runtime not requested'),
         (['--merge-only', '--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        (['--merge-only', '--jobs=4', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        (['--verify=all', '-j', '2', '--merge-only', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        *[(flags + ['main.cpp'], 1, '--merge-only cannot be combined with --verify=final')
+          for flags in [['--merge-only', '--verify=final'], ['--verify=final', '--merge-only'],
+                        ['--merge-only', '--verify', 'final'], ['--verify', 'final', '--merge-only'],
+                        ['--merge-only', '--jobs=4', '--verify=final']]],
         *[(['--merge-only', *flags, 'main.cpp'], 1,
            '--merge-only cannot be combined with ' + flags[0].split('=')[0])
           for flags in [['--no-line-markers'], ['--compact-whitespace'], ['--shorten-names'],
@@ -80,7 +100,8 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (root / 'main.cpp').write_text('#include "library.h"\n#if 1\nint main(){return 0;}\n'
                                       '#else\nint inactive(){return 2;}\n#endif\n')
         (root / 'sample.in').write_text('')
-        for flags in [[], ['--strip-comments'], ['--no-prune']]:
+        for flags in [[], ['--strip-comments'], ['--no-prune'], ['--jobs=4'],
+                      ['-j', '2', '--no-prune', '--strip-comments']]:
             result = subprocess.run([binary, '--merge-only', *flags, '--verify-run', 'sample.in',
                                      '--report', 'report.txt', '-o', 'submit.cpp',
                                      'g++', '-std=gnu++20', 'main.cpp'],
@@ -105,6 +126,72 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         for name in ['library.h', 'sample.in', 'report.txt', 'submit.cpp']:
             (root / name).unlink()
         (root / 'main.cpp').write_bytes(saved)
+    with case('verbose link failure preserves serial progress'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('extern int missing();\nint main(){return missing();}\n')
+        for jobs in [1, 2, 4]:
+            result = subprocess.run([binary, '-v', '--no-prune', '--jobs=' + str(jobs),
+                                     'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, text=True, timeout=120)
+            check(result.returncode == 1 and not result.stdout, result)
+            progress = [line for line in result.stderr.splitlines() if line.startswith('distill: ')]
+            check(progress == ['distill: probe local compiler', 'distill: baseline build',
+                               'distill: nothing written, runtime not requested'], progress)
+        (root / 'main.cpp').write_bytes(saved)
+    with case('final verification preserves passing rendering bytes and reports skipped builds'):
+        saved = (root / 'main.cpp').read_bytes()
+        sources = [
+            '// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n',
+            '#define TEXT(x) #x\nconstexpr auto text = TEXT(alpha\n\n beta);\n'
+            'static_assert(text[5] == \' \' && text[6] == \'b\');\nint main(){return 0;}\n',
+            'int main(){const char* longLocalName=R"x(\n  raw\n\n)x";return longLocalName[0] != \'\\n\';}\n']
+        for source in sources:
+            (root / 'main.cpp').write_text(source)
+            for rendering in ['--shorten-names', '--compact-whitespace']:
+                outputs = []
+                for mode in ['all', 'final']:
+                    result = subprocess.run([binary, rendering, '--verify=' + mode, '--jobs=4',
+                                             '--report', 'report.txt',
+                                             'g++', '-std=gnu++20', 'main.cpp'],
+                                            cwd=root, capture_output=True, timeout=120)
+                    check(result.returncode == 0, result.stderr)
+                    outputs.append(result.stdout)
+                    report = (root / 'report.txt').read_text()
+                    check(('option verify=final\n' in report) == (mode == 'final'), report)
+                    check('option verify=all\n' not in report and 'option jobs=' not in report, report)
+                    stage = 'pruned with shortened names' if rendering == '--shorten-names' else 'pruned with compact whitespace'
+                    check(stage + ': passed\n' in report, report)
+                    if mode == 'final':
+                        check(report.count('verify: unmarked build skipped (--verify=final)\n') == 1, report)
+                        check('process unmarked checks ' not in report, report)
+                        check(report.count('verify: compact build skipped (--verify=final)\n') ==
+                              (1 if rendering == '--shorten-names' else 0), report)
+                        if rendering == '--shorten-names':
+                            check('process compact checks ' not in report, report)
+                    else:
+                        check('verify: ' not in report, report)
+                check(outputs[0] == outputs[1], outputs)
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
+    with case('jobs preserve bytes and report order'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'main.cpp').write_text('int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n')
+        reference = None
+        for flags in [['--jobs=1'], ['--jobs=4'], ['-j', '2']]:
+            result = subprocess.run([binary, '--shorten-names', *flags, '--report', 'report.txt',
+                                     'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, timeout=120)
+            check(result.returncode == 0, result.stderr)
+            report = (root / 'report.txt').read_text()
+            stable = re.sub(r'\.distill-(work|probe|prune)-[0-9]+-[0-9]+', r'.distill-\1-TEMP', report)
+            check('option jobs=' not in report, report)
+            check('process baseline build ' in report and 'baseline: passed' in report, report)
+            if reference is None:
+                reference = (result.stdout, stable)
+            else:
+                check((result.stdout, stable) == reference, 'output or ordered report differs with ' + repr(flags))
+        (root / 'main.cpp').write_bytes(saved)
+        (root / 'report.txt').unlink()
     with case('instantiation-effects flag reaches the worker and modes do not mix'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('template<class T> struct Effect { friend int supplied(T); };\n'

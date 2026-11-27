@@ -5,7 +5,6 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdint>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -15,12 +14,37 @@
 #include <fcntl.h>
 #include <io.h>
 #else
+#include <fcntl.h>
 #include <spawn.h>
+#include <sys/file.h>
 #include <unistd.h>
 extern char** environ;
 #endif
 
 namespace {
+// A descendant holds an OS resource until it dies. The test can check release
+// immediately, without waiting for a sleeper to write a survival marker.
+int lockFile(const std::filesystem::path& path, std::chrono::milliseconds hold) {
+#ifdef _WIN32
+  const auto file = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return 1;
+#else
+  const auto file = open(path.c_str(), O_CREAT | O_RDWR, 0600);
+  if (file < 0) return 2;
+  if (flock(file, LOCK_EX | LOCK_NB) != 0) { close(file); return 1; }
+#endif
+  if (hold.count()) {
+    std::cout << "started\n" << std::flush;
+    std::this_thread::sleep_for(hold);
+  }
+#ifdef _WIN32
+  CloseHandle(file);
+#else
+  close(file);
+#endif
+  return 0;
+}
 int run(const std::vector<std::string>& argv) {
   if (argv.size() < 2) return 2;
   const auto& command = argv[1];
@@ -34,15 +58,21 @@ int run(const std::vector<std::string>& argv) {
   else if (command == "signal") std::raise(SIGTERM);
   else if (command == "sleep" && argv.size() >= 3) {
     std::this_thread::sleep_for(std::chrono::milliseconds(std::stoll(argv[2])));
-    if (argv.size() == 4) std::ofstream(distill::pathFromUtf8(argv[3])) << "survived";
+  } else if (command == "hold-lock" && argv.size() == 4) {
+    return lockFile(distill::pathFromUtf8(argv[3]), std::chrono::milliseconds(std::stoll(argv[2])));
+  } else if (command == "try-lock" && argv.size() == 3) {
+    return lockFile(distill::pathFromUtf8(argv[2]), std::chrono::milliseconds(0));
   } else if (command == "spawn-sleeper" && argv.size() >= 3) {
+    // With a lock path the descendant announces readiness after acquiring it.
+    const auto childCommand = argv.size() == 4 ? "hold-lock" : "sleep";
 #ifdef _WIN32
     // Use the executable's native path so tests also cover Unicode/spaced paths.
     std::wstring executable(32768, L'\0');
     const auto length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
     if (!length || length == executable.size()) return 3;
     executable.resize(length);
-    auto line = L"\"" + executable + L"\" sleep " + std::to_wstring(std::stoll(argv[2]));
+    auto line = L"\"" + executable + L"\" " + distill::pathFromUtf8(childCommand).native() +
+        L" " + std::to_wstring(std::stoll(argv[2]));
     if (argv.size() == 4) line += L" \"" + distill::pathFromUtf8(argv[3]).native() + L"\"";
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -54,7 +84,7 @@ int run(const std::vector<std::string>& argv) {
     if (!CreateProcessW(executable.c_str(), line.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process)) return 3;
     CloseHandle(process.hProcess); CloseHandle(process.hThread);
 #else
-    std::vector<std::string> childArgs{argv[0], "sleep", argv[2]};
+    std::vector<std::string> childArgs{argv[0], childCommand, argv[2]};
     if (argv.size() == 4) childArgs.push_back(argv[3]);
     std::vector<char*> pointers;
     for (auto& arg : childArgs) pointers.push_back(arg.data());
@@ -62,7 +92,7 @@ int run(const std::vector<std::string>& argv) {
     pid_t child;
     if (posix_spawn(&child, childArgs[0].c_str(), nullptr, nullptr, pointers.data(), environ)) return 3;
 #endif
-    std::cout << "started\n" << std::flush;
+    if (argv.size() != 4) std::cout << "started\n" << std::flush;
   } else if (command == "flood" && argv.size() == 3) {
     auto left = std::stoull(argv[2]);
     const std::string chunk(8192, 'x');
@@ -73,6 +103,10 @@ int run(const std::vector<std::string>& argv) {
       left -= static_cast<unsigned long long>(size);
     }
   } else if (command == "cat-stdin") std::cout << std::cin.rdbuf();
+#ifndef _WIN32
+  else if (command == "fd-open" && argv.size() == 3)
+    return fcntl(std::stoi(argv[2]), F_GETFD) >= 0 ? 1 : 0;
+#endif
 #ifdef _WIN32
   else if (command == "export-pipe-handles" && argv.size() == 3) {
     // Keep writers alive outside the runner's job, in the unit-test process.

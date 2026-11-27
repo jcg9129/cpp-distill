@@ -2,10 +2,12 @@
 #include "core/command/options.h"
 #include "core/path.h"
 #include "distill_build_version.h"
+#include <charconv>
 
 namespace distill {
 Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   CliOptions o;
+  bool speedOptionSpecified = false;
   for (std::size_t i = 0; i < args.size(); ++i) {
     const auto& a = args[i];
     if (a == "--help") { o.help = true; return o; }
@@ -34,6 +36,27 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
         begin = end+1;
       }
     }
+    else if (a == "--jobs" || a == "-j" || a.starts_with("--jobs=")) {
+      speedOptionSpecified = true;
+      std::string value;
+      if (a == "--jobs" || a == "-j") {
+        if (++i == args.size()) return Error{"missing value for " + a};
+        value = args[i];
+      } else value = a.substr(7);
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(), o.jobs);
+      if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || o.jobs == 0)
+        return Error{"--jobs requires a positive integer"};
+    }
+    else if (a == "--verify" || a.starts_with("--verify=")) {
+      speedOptionSpecified = true;
+      std::string value;
+      if (a == "--verify") {
+        if (++i == args.size()) return Error{"missing value for --verify"};
+        value = args[i];
+      } else value = a.substr(9);
+      if (value != "all" && value != "final") return Error{"--verify requires all or final"};
+      o.verifyFinal = value == "final";
+    }
     else if (a == "--strict") o.strict = true;
     else if (a == "-v") o.verbose = true;
     else if (a == "--strip-comments") o.stripComments = true;
@@ -59,7 +82,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
   }
   if (o.judgeProbe || o.judgeCheck) {
     if ((o.judgeProbe && o.judgeCheck) || o.judge || !o.compile.empty() || o.output || o.report ||
-        o.noPrune || o.mergeOnly || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
+        speedOptionSpecified || o.noPrune || o.mergeOnly || !o.assumeLibrarySpelledNames || o.shortenNames || !o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues || !o.assumeUnspelledFunctions || !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros || o.stripComments || o.noLineMarkers || o.strict || !o.keep.empty() || !o.verifyRun.empty())
       return Error{"judge diagnostics cannot be combined with distillation options or a compile command"};
     if (o.part && !o.judgeProbe) return Error{"--part requires --judge-probe"};
     if (o.record && !o.judgeCheck) return Error{"--record requires --judge-check"};
@@ -73,6 +96,7 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
     else if (o.noLineMarkers) conflict = "--no-line-markers";
     else if (!o.keep.empty()) conflict = "--keep";
     else if (o.strict) conflict = "--strict";
+    else if (o.verifyFinal) conflict = "--verify=final";
     else if (!o.assumeInstantiationEffects || !o.assumeLibrarySpelledMembers || !o.assumeLibraryMacroValues ||
              !o.assumeUnspelledFunctions || !o.assumeLibrarySpelledNames ||
              !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros) conflict = "--no-assume";
@@ -99,9 +123,9 @@ std::string distillHelp() {
       "                     use --merge-only to keep everything\n"
       "  --merge-only       inline local headers only (raw); keep every conditional and line of code\n"
       "                     baseline and raw checks still run; --judge, --verify-run,\n"
-      "                     --strip-comments and redundant --no-prune are allowed\n"
+      "                     --strip-comments, --jobs and redundant --no-prune are allowed\n"
       "                     cannot combine with --no-line-markers, --compact-whitespace,\n"
-      "                     --shorten-names, --keep, --strict or --no-assume\n"
+      "                     --shorten-names, --keep, --strict, --no-assume or --verify=final\n"
       "  --no-assume=<name> disable an assumption or policy (repeatable, comma lists accepted)\n"
       "                     switchable names: instantiation-effects (A11), library-spelled-members (A12), library-spelled-names (A15), library-macro-values (A9 standard macros), unspelled-functions (D3f), idempotent-standard-headers (policy), unobserved-guard-macros (A14)\n"
       "  --keep <name>      extra pruning root (repeatable indexed name)\n"
@@ -112,6 +136,9 @@ std::string distillHelp() {
       "                     implies --no-line-markers (else unchanged; report says why)\n"
       "  --shorten-names    readably shorten identifiers in a checked pruned artifact;\n"
       "                     implies --strip-comments --no-line-markers --compact-whitespace\n"
+      "  --jobs=N, -j N     concurrent independent compiler processes (default 1)\n"
+      "  --verify=all|final check all renderings (default all), or only the last,\n"
+      "                     checking earlier renderings on failure; raw/flat/pruned unchanged\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"
       "  --strict           exit 3 unless pruned with target verification\n"
       "  -v                 progress on stderr\n"

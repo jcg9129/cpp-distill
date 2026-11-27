@@ -1,14 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
+#include "rendezvous.h"
 #include "core/pipeline/pipeline.h"
 #include "core/validate/preprocess.h"
 #include "evaluate.h"
 #include "profile.h"
 #include <algorithm>
+#include <initializer_list>
 #include <memory>
+#include <mutex>
+#include <regex>
+#include <sstream>
 
 using namespace distill;
 namespace {
+// Compile/run combinations are costly with Homebrew/MinGW GCC. Keep each
+// behaviour below on every platform; unit (linux) and unit (linux, fork) CI
+// entries additionally exercise every source, fault and option combination.
+template<class T> std::vector<T> equivalenceCases(std::initializer_list<T> representative,
+                                               std::initializer_list<T> additional) {
+  std::vector<T> cases(representative);
+#ifdef DISTILL_TEST_EXHAUSTIVE_EQUIVALENCE
+  cases.insert(cases.end(),additional.begin(),additional.end());
+#else
+  (void)additional;
+#endif
+  return cases;
+}
 template<class T> T take(Result<T> r) { if (!r.ok()) throw std::runtime_error(r.error().message); return std::move(r.value()); }
 struct Fixture {
   test::TempDirectory temp;
@@ -19,6 +37,7 @@ struct Fixture {
   bool strippedKeepObserved = false;
   bool constantExpansionObserved = false;
   std::map<std::string,std::string> built;
+  std::function<void(const ProcessSpec&,bool)> observeProcess;
   explicit Fixture(std::string text) {
     const auto compiler = testing::testGcc(); if (!compiler) throw test::Skip{"GCC unavailable"}; gcc = *compiler;
     temp.write("main.cpp",text); temp.write("sample.in","");
@@ -29,7 +48,21 @@ struct Fixture {
     options.pruningWorker = temp.path/"synthetic-worker";
   }
   PipelineResult run(std::string fault = {}) {
+    built.clear();
+    std::mutex builtMutex;
     return take(distillProgram(command,options,*evaluator,[&](const ProcessSpec& spec) -> Result<ProcessResult> {
+      struct Observation {
+        const Fixture& fixture; const ProcessSpec& spec;
+        ~Observation() { if (fixture.observeProcess) fixture.observeProcess(spec,false); }
+      } observation{*this,spec};
+      if (observeProcess) observeProcess(spec,true);
+      if (std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) {
+            return pathFromUtf8(arg).filename() == "baseline.exe";
+          })) {
+        if (fault == "baseline-throw-error") throw Error{"failure"};
+        if (fault == "baseline-throw-standard") throw std::runtime_error("failure");
+        if (fault == "baseline-throw-unknown") throw 42;
+      }
       if (spec.argv.size() == 3 && spec.argv[1] == "--internal-prune") {
         auto m = take(parsePruningModel(test::read(pathFromUtf8(spec.argv[2]))));
         if (m.shortenNames) m.libraryMemberNamesComputed = fault != "shortenNames-library";
@@ -77,13 +110,37 @@ struct Fixture {
         }
         ProcessResult r; r.exitCode = 0; r.stdoutText = take(serializePruningModel(m)); return r;
       }
-      for (const auto& arg : spec.argv) {
-        const auto p = pathFromUtf8(arg);
-        if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp" || p.filename() == "compact.cpp" || p.filename() == "shortened.cpp")
-          built[pathToUtf8(p.stem())] = test::read(p);
+      {
+        std::lock_guard lock(builtMutex);
+        for (const auto& arg : spec.argv) {
+          const auto p = pathFromUtf8(arg);
+          if (p.filename() == "raw.cpp" || p.filename() == "flat.cpp" || p.filename() == "pruned.cpp" || p.filename() == "unmarked.cpp" || p.filename() == "compact.cpp" || p.filename() == "shortened.cpp")
+            built[pathToUtf8(p.stem())] = test::read(p);
+        }
       }
       auto result = runProcess(spec);
       const auto program = pathFromUtf8(spec.argv.front()).filename();
+      if (result.ok() && std::find(spec.argv.begin(),spec.argv.end(),"-E") != spec.argv.end()) {
+        const std::map<std::string,std::string> failures{{"raw-preprocess","raw.cpp"}, {"flat-preprocess","flat.cpp"},
+            {"unmarked-preprocess","unmarked.cpp"}, {"compact-preprocess","compact.cpp"}};
+        const auto failed = failures.find(fault);
+        if (failed != failures.end() && std::any_of(spec.argv.begin(),spec.argv.end(),[&](const auto& arg) {
+              return pathFromUtf8(arg).filename() == failed->second;
+            })) { result.value().exitCode = 1; result.value().stderrText = "test-only preprocessing failure"; }
+        if (fault == "probe-search" && std::find(spec.argv.begin(),spec.argv.end(),"-v") != spec.argv.end())
+          result.value().stderrText = "malformed search list";
+        if (fault == "probe-macros" && std::find(spec.argv.begin(),spec.argv.end(),"-dM") != spec.argv.end())
+          result.value().stdoutText = "#define INVALID(\n";
+      }
+      if (result.ok() && fault == "probe-timeout" && std::find(spec.argv.begin(),spec.argv.end(),"-dumpmachine") != spec.argv.end())
+        result.value().timedOut = true;
+      if (result.ok() && (fault == "baseline-build" || fault == "both-build") &&
+          std::any_of(spec.argv.begin(),spec.argv.end(),[&](const auto& arg) {
+            const auto name = pathFromUtf8(arg).filename();
+            return name == "baseline.exe" || (fault == "both-build" && name == "raw.exe");
+          })) {
+        result.value().exitCode = 1; result.value().stderrText = "test-only build failure";
+      }
       if (result.ok() && fault == "cross" && std::find(spec.argv.begin(),spec.argv.end(),"-dumpmachine") != spec.argv.end())
         result.value().stdoutText = "unrunnable-distill-test-target\n";
       if (result.ok() && spec.argv.size() == 1) {
@@ -98,10 +155,19 @@ struct Fixture {
       if (result.ok() && std::find(spec.argv.begin(),spec.argv.end(),"-E") != spec.argv.end() &&
           std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "compact.cpp"; }) && fault == "compact-tokens")
         result.value().stdoutText += "int corrupt;\n";
-      if (result.ok() && fault == "compact-build" && built.contains("compact") &&
+      const bool renderingBuilds = fault == "rendering-builds";
+      const bool laterBuilds = renderingBuilds || fault == "compact-and-shortened-build";
+      if (result.ok() && (fault == "compact-build" || laterBuilds) && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "compact.cpp"; }) &&
           std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() && spec.argv.size() > 1)
         result.value().exitCode = 1;
-      if (result.ok() && fault == "shortenNames-build" && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "shortened.cpp"; })) result.value().exitCode = 1;
+      if (result.ok() && (fault == "unmarked-build" || renderingBuilds) && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "unmarked.cpp"; }) &&
+          std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() && spec.argv.size() > 1)
+        result.value().exitCode = 1;
+      if (result.ok() && fault == "flat-build" && std::find(spec.argv.begin(),spec.argv.end(),"-E") == spec.argv.end() &&
+          std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "flat.cpp"; })) {
+        result.value().exitCode = 1; result.value().stderrText = "test-only flat build failure";
+      }
+      if (result.ok() && (fault == "shortenNames-build" || laterBuilds) && std::any_of(spec.argv.begin(),spec.argv.end(),[](const auto& arg) { return pathFromUtf8(arg).filename() == "shortened.cpp"; })) result.value().exitCode = 1;
       if (fault == "stdout" && pathFromUtf8(spec.argv.front()).filename() == "pruned.exe" && result.ok())
         result.value().stdoutText = "different output";
       return result;
@@ -598,7 +664,8 @@ TEST(pipeline_shortenNames_implied_flags_report_and_checked_fallbacks) {
 }
 
 TEST(pipeline_shortening_runs_after_trimming_and_compaction) {
-  for (unsigned disabled = 0; disabled < 8; ++disabled) {
+  // Default and each independent opt-out everywhere; combined opt-outs on Linux.
+  for (const unsigned disabled : equivalenceCases({0u,1u,2u,4u},{3u,5u,6u,7u})) {
     Fixture f("#include <vector>\n#include \"once.h\"\n#include <vector>\nint main(){int longLocal=5;return longLocal-5;}\n");
     f.temp.write("once.h","#pragma once\n");
     f.options.shortenNames = true;
@@ -615,5 +682,445 @@ TEST(pipeline_shortening_runs_after_trimming_and_compaction) {
     CHECK_EQ(r.assumptions.contains("A14"),!(disabled & 2));
     CHECK_EQ(r.assumptions.contains("A15"),!(disabled & 4));
     CHECK_EQ(r.bytes,f.built.at((disabled & 4) ? "compact" : "shortened"));
+  }
+}
+
+namespace {
+std::string stableReport(const std::string& report) {
+  std::istringstream input(report); std::string line, output;
+  const std::regex temporary(R"(\.distill-(work|probe|prune)-[0-9]+-[0-9]+)");
+  while (std::getline(input,line)) {
+    output += std::regex_replace(line,temporary,".distill-$1-TEMP") + '\n';
+  }
+  return output;
+}
+}
+TEST(pipeline_jobs_output_reports_and_fallbacks_match_serial) {
+  for (const auto* fault : equivalenceCases(
+      {"", "compact-build", "raw-stdout"},
+      {"disabled", "compact-tokens", "shortenNames-build", "shortenNames-stdout", "flat-stdout",
+       "raw-preprocess", "flat-preprocess", "unmarked-preprocess", "compact-preprocess",
+       "probe-search", "probe-macros", "probe-timeout"})) {
+    Fixture f("// comment\nint unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
+    f.options.shortenNames = true;
+    std::vector<std::string> progress;
+    f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
+    auto serial = f.run(fault);
+    const auto serialProgress = std::exchange(progress,{});
+    f.options.jobs = 4;
+    auto parallel = f.run(fault);
+    CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.artifact,serial.artifact);
+    CHECK_EQ(parallel.exitCode,serial.exitCode); CHECK_EQ(parallel.runtime,serial.runtime);
+    CHECK(stableReport(parallel.report) == stableReport(serial.report));
+    CHECK_EQ(progress,serialProgress);
+  }
+}
+TEST(pipeline_jobs_baseline_exceptions_roll_back_results_and_progress) {
+  for (const auto* fault : {"baseline-throw-error", "baseline-throw-standard", "baseline-throw-unknown"}) {
+    Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.noPrune = true;
+    std::vector<std::string> progress;
+    f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
+    const auto serial = f.run(fault); CHECK_EQ(serial.exitCode,1);
+    CHECK(serial.diagnostic.starts_with("baseline failed: "));
+    const auto serialProgress = std::exchange(progress,{});
+    for (const unsigned jobs : equivalenceCases({2u},{4u})) {
+      f.options.jobs = jobs;
+      bool rawLaunched = false;
+      f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
+        if (!entering) return;
+        const auto output = std::find(spec.argv.begin(),spec.argv.end(),"-o");
+        if (output == spec.argv.end() || output + 1 == spec.argv.end()) return;
+        const auto name = pathFromUtf8(*(output + 1)).filename();
+        // Raw work is speculative until finishBaseline(), even if the baseline
+        // runner has already thrown. No scheduling rendezvous is needed.
+        if (name == "raw.exe") rawLaunched = true;
+      };
+      const auto parallel = f.run(fault); CHECK(rawLaunched);
+      CHECK_EQ(parallel.exitCode,1); CHECK(parallel.bytes.empty()); CHECK(!parallel.keptWork);
+      CHECK_EQ(parallel.checks.size(),1u); CHECK_EQ(parallel.checks.front().artifact,"baseline");
+      CHECK(parallel.checks.front().status != "passed");
+      CHECK_EQ(stableReport(parallel.report),stableReport(serial.report));
+      CHECK_EQ(progress,serialProgress); progress.clear();
+      CHECK(std::none_of(parallel.processes.begin(),parallel.processes.end(),[](const auto& p) {
+        return p.step == "raw checks";
+      }));
+    }
+  }
+}
+
+TEST(pipeline_jobs_link_failure_drops_speculative_verbose_progress) {
+  Fixture f("extern int missing();\nint main(){return missing();}\n");
+  f.options.samples.clear(); f.options.noPrune = true; f.options.verifyFinal = true;
+  std::vector<std::string> progress;
+  f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
+  const auto serial = f.run(); CHECK_EQ(serial.exitCode,1);
+  const auto serialProgress = std::exchange(progress,{});
+  CHECK_EQ(serialProgress,(std::vector<std::string>{"probe local compiler","baseline build"}));
+  for (const unsigned jobs : equivalenceCases({2u},{4u})) {
+    f.options.jobs = jobs;
+    const auto parallel = f.run(); CHECK_EQ(parallel.exitCode,1); CHECK(!parallel.keptWork);
+    CHECK_EQ(progress,serialProgress); progress.clear();
+    CHECK_EQ(parallel.checks.size(),1u); CHECK(parallel.checks.front().status != "passed");
+  }
+}
+
+TEST(pipeline_jobs_records_retain_effective_launch_specs) {
+  Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.noPrune = true;
+  f.options.jobs = 4; f.options.verifyFinal = true;
+  std::vector<ProcessSpec> launched; std::mutex mutex;
+  f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
+    if (!entering) return;
+    std::lock_guard lock(mutex); launched.push_back(spec);
+  };
+  const auto result = f.run(); CHECK_EQ(result.exitCode,0);
+  CHECK_EQ(result.processes.size(),launched.size());
+  unsigned preprocesses = 0, probes = 0, baselines = 0;
+  for (const auto& record : result.processes) {
+    const auto actual = std::find_if(launched.begin(),launched.end(),[&](const auto& spec) {
+      return record.spec.argv == spec.argv && record.spec.cwd == spec.cwd;
+    });
+    CHECK(actual != launched.end()); if (actual == launched.end()) continue;
+    CHECK_EQ(record.spec.timeout,actual->timeout);
+    CHECK_EQ(record.spec.maxOutputBytes,actual->maxOutputBytes);
+    CHECK_EQ(record.spec.stdinFile,actual->stdinFile);
+    CHECK_EQ(record.spec.memoryLimitBytes,actual->memoryLimitBytes);
+    CHECK(record.spec.timeout < f.options.stepTimeout);
+    if (record.step == "probe local compiler") ++probes;
+    if (record.step == "baseline build") ++baselines;
+    if (record.spec.maxOutputBytes == f.options.maxPreprocessOutput) ++preprocesses;
+    // The same raw preprocessing argv recurs in later phases. Match each
+    // invocation once so those independent deadlines are compared correctly.
+    launched.erase(actual);
+  }
+  CHECK(launched.empty()); CHECK(probes >= 3); CHECK_EQ(preprocesses,4u); CHECK_EQ(baselines,1u);
+}
+
+TEST(pipeline_jobs_expired_batch_has_no_launch_records) {
+  for (const unsigned jobs : {1u,4u}) {
+    Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.jobs = jobs;
+    // An already-expired phase exercises the no-launch path deterministically.
+    f.options.stepTimeout = std::chrono::milliseconds(0);
+    unsigned launched = 0;
+    f.observeProcess = [&](const ProcessSpec&, bool entering) { if (entering) ++launched; };
+    const auto result = f.run(); CHECK_EQ(result.exitCode,1);
+    CHECK(result.diagnostic.find("step deadline exceeded") != result.diagnostic.npos);
+    CHECK_EQ(launched,0u); CHECK(result.processes.empty());
+  }
+}
+
+TEST(pipeline_default_reports_omit_scheduling_and_default_check_metadata) {
+  Fixture f("int main(){return 0;}\n"); f.options.samples.clear(); f.options.noPrune = true;
+  const auto defaults = f.run(); CHECK_EQ(defaults.exitCode,0); CHECK(defaults.optionLines.empty());
+  CHECK(defaults.report.find("option jobs=") == defaults.report.npos);
+  CHECK(defaults.report.find("option verify=") == defaults.report.npos);
+  f.options.jobs = 4;
+  const auto parallel = f.run(); CHECK(parallel.optionLines.empty());
+  CHECK_EQ(stableReport(parallel.report),stableReport(defaults.report));
+  f.options.verifyFinal = true;
+  const auto final = f.run(); CHECK_EQ(final.optionLines,(std::vector<std::string>{"verify=final"}));
+}
+
+TEST(pipeline_jobs_baseline_raw_builds_and_failure_precedence) {
+  for (const auto* fault : equivalenceCases(
+      {"", "both-build"}, {"baseline-build", "disabled", "compact-build", "shortenNames-build"})) {
+    Fixture f("// comment\nint unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
+    f.options.samples.clear(); f.options.shortenNames = true;
+    std::vector<std::string> progress;
+    f.options.progress = [&](std::string_view message) { progress.emplace_back(message); };
+    const auto serial = f.run(fault);
+    const auto serialProgress = std::exchange(progress,{});
+    for (const unsigned jobs : equivalenceCases({2u},{4u})) {
+      f.options.jobs = jobs;
+      const auto parallel = f.run(fault);
+      CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.artifact,serial.artifact);
+      CHECK_EQ(parallel.exitCode,serial.exitCode);
+      CHECK(stableReport(parallel.report) == stableReport(serial.report));
+      CHECK_EQ(progress,serialProgress); progress.clear();
+      if (std::string_view(fault).ends_with("build") && std::string_view(fault) != "compact-build" && std::string_view(fault) != "shortenNames-build") {
+        CHECK_EQ(parallel.exitCode,1); CHECK(!parallel.keptWork);
+        CHECK(parallel.report.find("baseline failed:") != parallel.report.npos);
+        CHECK(std::none_of(parallel.processes.begin(),parallel.processes.end(),[](const auto& p) { return p.step == "raw checks"; }));
+      }
+    }
+  }
+}
+TEST(pipeline_flat_link_failure_can_have_a_successfully_built_pruned_successor) {
+  // Final success does not establish that earlier verification gates passed.
+  // In the judge configuration the dead function creates a link failure. The
+  // local original and raw build; the existing pipeline must emit raw.
+  Fixture f("#ifdef DISTILL_FIXTURE_JUDGE\nextern int unavailable();\n"
+            "int unused(){return unavailable();}\n#endif\nint main(){return 0;}\n");
+  f.options.samples.clear();
+  f.options.shortenNames = true;
+  auto profile = take(testing::captureProfile(f.gcc,f.temp.path)); f.options.profile = &profile;
+  const auto result = f.run();
+  CHECK_EQ(result.exitCode,0); CHECK_EQ(result.artifact,"raw"); CHECK(!result.pruningModel);
+  const auto flat = std::find_if(result.checks.begin(),result.checks.end(),[](const auto& c) {
+    return c.artifact == "flat" && c.configuration && c.status != "passed";
+  });
+  CHECK(flat != result.checks.end());
+  if (flat == result.checks.end()) return;
+  auto successor = result.resolution.text;
+  const auto begin = successor.find("int unused()");
+  CHECK(begin != successor.npos); if (begin == successor.npos) return;
+  successor.erase(begin,successor.find('}',begin) + 1 - begin);
+  f.temp.write("successor.cpp",successor);
+  ProcessSpec spec; spec.cwd = f.temp.path;
+  spec.argv = flat->configuration->command.buildArgv(f.temp.path/"successor.cpp",f.temp.path/"successor.exe",true,{},true);
+  const auto built = take(runProcess(spec)); CHECK_EQ(built.exitCode,0);
+  f.options.verifyFinal = true;
+  const auto final = f.run();
+  CHECK_EQ(final.exitCode,0); CHECK_EQ(final.artifact,"raw"); CHECK(!final.pruningModel);
+  CHECK_EQ(final.bytes,result.bytes);
+}
+
+TEST(pipeline_jobs_global_bound_and_baseline_raw_overlap) {
+  for (const unsigned jobs : equivalenceCases({2u},{4u})) {
+    Fixture f("int main(){return 0;}\n");
+    f.options.samples.clear(); f.options.noPrune = true; f.options.jobs = jobs;
+    std::mutex mutex;
+    test::Rendezvous builds(2);
+    unsigned active = 0, peak = 0;
+    bool baselineActive = false, rawActive = false, baselineEntered = false, rawEntered = false, overlap = false;
+    f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
+      const auto output = std::find(spec.argv.begin(),spec.argv.end(),"-o");
+      const auto name = output == spec.argv.end() || output + 1 == spec.argv.end() ? std::string{} :
+          pathToUtf8(pathFromUtf8(*(output + 1)).filename());
+      {
+        std::lock_guard lock(mutex);
+        if (!entering) {
+          --active;
+          if (name == "baseline.exe") baselineActive = false;
+          if (name == "raw.exe") rawActive = false;
+          return;
+        }
+        ++active; peak = (std::max)(peak,active);
+        if (name == "baseline.exe") baselineEntered = baselineActive = true;
+        if (name == "raw.exe") rawEntered = rawActive = true;
+        overlap |= baselineActive && rawActive;
+      }
+      if (name == "baseline.exe" || name == "raw.exe") builds.arriveAndWait();
+    };
+    const auto result = f.run();
+    CHECK_EQ(result.exitCode,0); CHECK(baselineEntered); CHECK(rawEntered);
+    CHECK_EQ(active,0u); CHECK(peak >= 1u && peak <= jobs);
+    if (builds.completed()) CHECK(overlap);
+  }
+}
+
+TEST(pipeline_jobs_existing_cases_and_final_flat_build_fallback) {
+  struct Case { const char* name; const char* fault; const char* artifact; };
+  for (const auto& c : equivalenceCases(
+      {Case{"strip_define_no_prune","","flat"}, Case{"resolver_fault","flat-build","raw"}},
+      {Case{"no_profile","","flat"}, Case{"local_macro_unknown","","flat"},
+       Case{"counter","","raw"}, Case{"strict","","flat"}})) {
+    const auto directory = std::filesystem::path(DISTILL_PIPELINE_CASES) / c.name;
+    Fixture f(test::read(directory/"main.cpp"));
+    std::istringstream commands(test::read(directory/"cmd.txt"));
+    std::string line, response;
+    while (std::getline(commands,line)) if (!line.empty() && !line.starts_with('#')) {
+      std::istringstream input(line); std::string compiler, flags;
+      input >> compiler; std::getline(input,flags); response += flags + '\n';
+    }
+    f.temp.write("case.rsp",response);
+    f.command = take(parseCompileCommand({pathToUtf8(f.gcc),"@case.rsp"},f.temp.path)); f.options.noPrune = true;
+    f.options.strict = std::string_view(c.name) == "strict";
+    f.options.stripComments = std::string_view(c.name) == "strip_define_no_prune";
+    if (!f.options.stripComments) f.options.samples.clear();
+    const auto serial = f.run(c.fault); CHECK_EQ(serial.artifact,c.artifact);
+    f.options.jobs = 4;
+    const auto parallel = f.run(c.fault);
+    CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.exitCode,serial.exitCode);
+    CHECK_EQ(parallel.artifact,serial.artifact); CHECK(stableReport(parallel.report) == stableReport(serial.report));
+  }
+}
+
+TEST(pipeline_jobs_unmodelled_flags_keep_processes_serial) {
+  Fixture f("int main(){return 0;}\n"); f.options.samples.clear();
+  f.command = take(parseCompileCommand({pathToUtf8(f.gcc),"-std=gnu++20","-fwrapv","main.cpp"},f.temp.path));
+  const auto serial = f.run(); f.options.jobs = 4;
+  unsigned active = 0, peak = 0;
+  std::mutex mutex;
+  f.observeProcess = [&](const ProcessSpec&, bool entering) {
+    std::lock_guard lock(mutex);
+    if (entering) { ++active; peak = (std::max)(peak,active); } else --active;
+  };
+  const auto parallel = f.run(); CHECK_EQ(peak,1u); CHECK_EQ(active,0u);
+  CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.exitCode,serial.exitCode);
+  CHECK(stableReport(parallel.report) == stableReport(serial.report));
+}
+
+TEST(pipeline_jobs_inline_failure_preserves_baseline_failure_precedence) {
+  for (const auto* header : {"<cstddef>", "\"missing.h\""}) {
+    Fixture f("#define HEADER " + std::string(header) + "\n#include HEADER\nint main(){return 0;}\n");
+    f.options.samples.clear();
+    const auto serial = f.run(); CHECK_EQ(serial.exitCode,1);
+    f.options.jobs = 4;
+    const auto parallel = f.run();
+    CHECK_EQ(parallel.exitCode,serial.exitCode); CHECK_EQ(parallel.bytes,serial.bytes);
+    CHECK(stableReport(parallel.report) == stableReport(serial.report));
+    CHECK(!parallel.keptWork);
+  }
+}
+
+namespace {
+std::vector<std::string> buildStages(const PipelineResult& result) {
+  std::vector<std::string> stages;
+  for (const auto& process : result.processes) {
+    const auto& args = process.spec.argv;
+    if (std::find(args.begin(),args.end(),"-E") != args.end()) continue;
+    const auto output = std::find(args.begin(),args.end(),"-o");
+    if (output != args.end() && output + 1 != args.end()) {
+      const auto path = pathFromUtf8(*(output + 1));
+      if (path.extension() == ".exe") stages.push_back(pathToUtf8(path.stem()));
+    }
+  }
+  return stages;
+}
+}
+
+TEST(pipeline_verify_final_matches_all_when_renderings_pass) {
+  const auto sources = equivalenceCases<std::string>(
+      {"// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n"},
+      {
+      "#define TEXT(x) #x\n  constexpr auto text = TEXT(alpha\n\n    beta);  \n"
+      "static_assert(text[5]==' ' && text[6]=='b');\n"
+      "constexpr auto raw = R\"x(\n  raw \t\n\n)x\";\nint main(){return 0;}\n",
+      "#include \"helper.h\"\r\n#if 1\r\n  int main(){return longHelper(0);}  \r\n#endif\r\n"});
+  for (const auto& source : sources) for (bool shorten : {false,true}) {
+    Fixture f(source); f.temp.write("helper.h","#pragma once\nint longHelper(int longArgument){return longArgument;}\n");
+    f.options.shortenNames = shorten; f.options.compactWhitespace = !shorten;
+    const auto all = f.run();
+    f.options.verifyFinal = true;
+    const auto final = f.run();
+    CHECK_EQ(final.exitCode,0); CHECK_EQ(final.bytes,all.bytes); CHECK_EQ(final.artifact,"pruned");
+    CHECK_EQ(final.runtime,all.runtime); CHECK_EQ(final.assumptions,all.assumptions);
+    CHECK_EQ(final.lineMarkers,"omitted"); CHECK_EQ(final.compactWhitespace,"compacted");
+    CHECK_EQ(final.shortenNames,all.shortenNames);
+    CHECK_EQ(final.bytes,f.built.at(shorten ? "shortened" : "compact"));
+    CHECK_EQ(buildStages(final),(std::vector<std::string>{"baseline","raw","original-flat","flat","pruned",shorten ? "shortened" : "compact"}));
+    CHECK(all.report.find("option verify=") == all.report.npos);
+    CHECK(all.report.find("verify: ") == all.report.npos);
+    CHECK(final.report.find("option verify=final\n") != final.report.npos);
+    CHECK(final.report.find("verify: unmarked build skipped (--verify=final)\n") != final.report.npos);
+    CHECK_EQ(final.report.find("verify: compact build skipped (--verify=final)\n") != final.report.npos,shorten);
+    for (const auto& p : final.processes) {
+      CHECK(p.step != "unmarked checks");
+      if (shorten) CHECK(p.step != "compact checks");
+    }
+    CHECK(std::none_of(final.checks.begin(),final.checks.end(),[&](const auto& c) {
+      return c.artifact == "pruned without line markers" || (shorten && c.artifact == "pruned with compact whitespace");
+    }));
+  }
+}
+
+TEST(pipeline_verify_final_steps_back_through_failed_renderings) {
+  struct Case { const char* fault; bool shorten; const char* fallback; std::vector<std::string> builds; };
+  // Token rejection, a runtime mismatch, and a cascade of failed builds each
+  // retain a checked predecessor. Linux also checks every individual step-back.
+  for (const auto& c : equivalenceCases(
+     {Case{"compact-tokens",false,"unmarked",{"unmarked"}},
+      Case{"shortenNames-stdout",true,"compact",{"shortened","compact"}},
+      Case{"rendering-builds",true,"pruned",{"shortened","compact","unmarked"}}},
+     {
+      Case{"compact-build",false,"unmarked",{"compact","unmarked"}},
+      Case{"compact-preprocess",false,"unmarked",{"unmarked"}},
+      Case{"compact-stdout",false,"unmarked",{"compact","unmarked"}},
+      Case{"shortenNames-build",true,"compact",{"shortened","compact"}},
+      Case{"compact-and-shortened-build",true,"unmarked",{"shortened","compact","unmarked"}}})) {
+    Fixture f("// comment\nint unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
+    f.options.verifyFinal = true; f.options.shortenNames = c.shorten; f.options.compactWhitespace = !c.shorten;
+    f.options.jobs = 4;
+    // Exercise the judge's flags on the final check and all step-back checks.
+    auto profile = take(testing::captureProfile(f.gcc,f.temp.path)); f.options.profile = &profile;
+    const auto r = f.run(c.fault);
+    CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"pruned"); CHECK_EQ(r.bytes,f.built.at(c.fallback));
+    CHECK_EQ(r.runtime,"compared 1 samples"); CHECK(!r.assumptions.contains("A15"));
+    auto builds = std::vector<std::string>{"baseline","raw","original-flat","flat","pruned"};
+    builds.insert(builds.end(),c.builds.begin(),c.builds.end());
+    CHECK_EQ(buildStages(r),builds);
+    const std::string fallback = c.fallback;
+    CHECK_EQ(r.lineMarkers == "omitted",fallback != "pruned");
+    CHECK_EQ(r.compactWhitespace == "compacted",fallback == "compact");
+    const auto stage = fallback == "compact" ? "pruned with compact whitespace" :
+                       fallback == "unmarked" ? "pruned without line markers" : "pruned";
+    CHECK(r.report.find(std::string(stage) + ": passed\n") != r.report.npos);
+    CHECK_EQ(r.report.find("verify: unmarked build skipped (--verify=final)\n"),
+             r.report.rfind("verify: unmarked build skipped (--verify=final)\n"));
+    for (const auto& p : r.processes) if (p.spec.argv.size() > 1 &&
+        (p.step == "unmarked checks" || p.step == "compact checks" || p.step == "shorten-names checks") &&
+        std::find(p.spec.argv.begin(),p.spec.argv.end(),"--internal-prune") == p.spec.argv.end())
+      CHECK(std::find(p.spec.argv.begin(),p.spec.argv.end(),"-DDISTILL_FIXTURE_JUDGE=1") != p.spec.argv.end());
+  }
+}
+
+TEST(pipeline_verify_final_accepts_checked_successor_of_failing_intermediate) {
+  for (const auto* fault : equivalenceCases(
+      {"unmarked-build"}, {"unmarked-stdout","compact-build","compact-tokens"})) {
+    Fixture f("int unused(){return 7;}\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
+    f.options.shortenNames = true;
+    const auto all = f.run(fault);
+    f.options.verifyFinal = true;
+    const auto final = f.run(fault);
+    CHECK_EQ(final.exitCode,0); CHECK(final.bytes != all.bytes);
+    CHECK_EQ(final.bytes,f.built.at("shortened")); CHECK(final.assumptions.contains("A15"));
+    CHECK(final.report.find("pruned with shortened names: passed\n") != final.report.npos);
+    CHECK_EQ(buildStages(final),(std::vector<std::string>{"baseline","raw","original-flat","flat","pruned","shortened"}));
+  }
+}
+
+TEST(pipeline_verify_final_checks_last_available_stage_and_preserves_core_gates) {
+  for (const auto* selection : equivalenceCases(
+      {"none","no-prune","position","shortening-refused"},
+      {"strip","unmark","shortening-analysis"})) {
+    const std::string mode = selection;
+    Fixture f(mode == "position" ? "int main(){return __LINE__ > 0 ? 0 : 1;}\n" :
+              "// comment\n  int main(){int longLocalName=0;return longLocalName;}  \n\n");
+    f.options.stripComments = mode == "strip";
+    f.options.noLineMarkers = mode == "unmark";
+    f.options.shortenNames = mode == "shortening-refused" || mode == "shortening-analysis" || mode == "no-prune";
+    f.options.compactWhitespace = mode == "position";
+    f.options.noPrune = mode == "no-prune";
+    f.options.assumeLibrarySpelledNames = mode != "shortening-refused";
+    const auto fault = mode == "position" ? "position" : mode == "shortening-analysis" ? "shortenNames-library" : "";
+    const auto all = f.run(fault);
+    f.options.verifyFinal = true;
+    const auto final = f.run(fault);
+    CHECK_EQ(final.bytes,all.bytes); CHECK_EQ(final.exitCode,all.exitCode);
+    if (mode == "shortening-refused" || mode == "shortening-analysis")
+      CHECK_EQ(final.bytes,f.built.at("compact"));
+    else {
+      CHECK_EQ(buildStages(final),buildStages(all));
+      CHECK(final.report.find("verify: ") == final.report.npos);
+    }
+  }
+  // Preserve a raw, flat, pruned-runtime and rendering gate on every platform.
+  for (const auto* fault : equivalenceCases(
+      {"raw-preprocess","flat-build","stdout","render"},
+      {"raw-stdout","flat-preprocess","flat-stdout"})) {
+    Fixture f("int unused(){return 7;}\nint main(){return 0;}\n"); f.options.shortenNames = true;
+    const auto all = f.run(fault);
+    f.options.verifyFinal = true;
+    const auto final = f.run(fault);
+    CHECK_EQ(final.bytes,all.bytes); CHECK_EQ(final.exitCode,all.exitCode); CHECK_EQ(final.artifact,all.artifact);
+    CHECK_EQ(buildStages(final),buildStages(all));
+    CHECK(final.report.find("verify: ") == final.report.npos);
+  }
+}
+
+TEST(pipeline_verify_final_jobs) {
+  Fixture f("int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n");
+  f.options.shortenNames = true; f.options.samples.clear(); f.options.verifyFinal = true;
+  for (const auto* fault : equivalenceCases(
+      {"", "rendering-builds"}, {"shortenNames-build","compact-and-shortened-build"})) {
+    f.options.jobs = 1;
+    const auto serial = f.run(fault);
+    f.options.jobs = 4;
+    const auto parallel = f.run(fault);
+    CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(stableReport(parallel.report),stableReport(serial.report));
+    CHECK_EQ(parallel.exitCode,0); CHECK_EQ(parallel.runtime,"not requested");
+    const auto builds = buildStages(parallel);
+    CHECK(std::find(builds.begin(),builds.end(),"baseline") != builds.end());
+    CHECK(parallel.report.find("option verify=final\n") != parallel.report.npos);
   }
 }

@@ -32,6 +32,13 @@ Result<std::filesystem::path> resolveExecutable(const std::filesystem::path& exe
 // OS-reported path of this process, independent of argv[0] and PATH.
 Result<std::filesystem::path> runningExecutable();
 Result<ProcessResult> runProcess(const ProcessSpec& spec);
+// Independent jobs only; return slots retain input order. The runner must be
+// safe to call concurrently. Each process keeps its own timeout/output limits.
+// jobs is an upper bound, not a guarantee that callbacks overlap. A callback
+// must finish independently of callbacks that may not have started yet.
+std::vector<Result<ProcessResult>> runProcessBatch(const std::vector<ProcessSpec>&,
+                                                  unsigned jobs, ProcessRunner = runProcess);
+using ProcessBatchRunner = std::function<std::vector<Result<ProcessResult>>(const std::vector<ProcessSpec>&)>;
 namespace detail {
 Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::path& executable);
 inline void appendOutput(std::string& text, bool& truncated, const char* data,

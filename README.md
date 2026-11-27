@@ -104,7 +104,7 @@ must include the target's C/C++ standard headers and libraries.
 | `--record <dir>` | With `--judge-check`, save dated observation evidence. |
 | `--report <file>` | Write validation, configuration, conditional and pruning explanations. |
 | `--no-prune` | Keep every declaration, but still resolve preprocessor conditionals for the judge and remove inactive `#if` branches (result `flat`). Use `--merge-only` to keep everything. |
-| `--merge-only` | Inline local headers only (result `raw`), keeping every conditional and line of code. Keep the baseline build and raw preprocessing/build/sample checks; skip resolution, pruning and later renderings. |
+| `--merge-only` | Inline local headers only (result `raw`), keeping every conditional and line of code. Keep the baseline build and raw preprocessing/build/sample checks; skip resolution, pruning and later renderings. Allows `--jobs`; cannot combine with `--verify=final` (see [Pruning](docs/options.md#merge-only) for all conflicts). |
 | `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), or `unobserved-guard-macros` (A14); repeatable, comma lists accepted. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
@@ -112,6 +112,8 @@ must include the target's C/C++ standard headers and libraries.
 | `--shorten-names` | Opt-in readable identifier shortening of a checked pruned artifact; implies `--strip-comments --no-line-markers --compact-whitespace`. Keeps the compact line layout and uses A15 `library-spelled-names`; `--no-assume=library-spelled-names` keeps names unchanged. Observable names, position observations or failed checks keep the checked artifact, with the reason in the report. |
 | `--compact-whitespace` | Opt-in trimming of leading horizontal whitespace, trailing whitespace and empty lines; implies `--no-line-markers` and requires its proof that source positions (including columns) are unobserved. Preserves literal/comment contents and spliced logical lines. If refused, output stays unchanged and the report says `whitespace kept: <why>`. |
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
+| `--verify=all\|final` | `final` skips the builds of intermediate renderings (marker removal, compaction) when a later rendering is requested; the written file is always fully checked. See [Speed](docs/options.md#speed). |
+| `--jobs=N`, `-j N` | Run independent compiler invocations concurrently, at most N at a time (default 1). Options precede the compiler; compiler arguments are left intact. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
 | `-v` | Show progress on stderr. |
 | `--help` | Show help. |
