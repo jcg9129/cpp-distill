@@ -588,8 +588,18 @@ The executable path comes from `/proc/self/exe` on Linux,
 OS lookup falls back to resolving `argv[0]`. Workers are launched by
 D2a's process runner in a process group/Job Object with the remaining deadline
 and bounded output. No LLVM resource headers are needed for isolated conditions.
-Pruning is the default; `--no-prune` requests inline/resolve only. Repeatable
-`--keep <name>` requests namespace-indexed names; an unknown name exits 1 with
+Pruning is the default; `--no-prune` keeps every declaration, but still resolves
+preprocessor conditionals for the judge and removes inactive `#if` branches
+(result `flat`). Use `--merge-only` to keep everything: it selects the exact
+checked `raw` fallback bytes and skips resolution, pruning and later renderings.
+The baseline build, raw preprocessing comparison/build and `--verify-run`
+comparisons against the baseline still run. `--judge` keeps the usual raw check
+configuration and verification level. `--strip-comments` is allowed and runs
+before raw checks; `--no-prune` is accepted as redundant. `--no-line-markers`,
+`--compact-whitespace`, `--shorten-names`, `--keep`, `--strict` and `--no-assume`
+cannot be combined with `--merge-only` (usage error, exit 1). The result line
+says `raw`; stderr and the report say `resolution disabled: --merge-only`.
+Repeatable `--keep <name>` requests namespace-indexed names; an unknown name exits 1 with
 no artifact. Keep names are validated even alongside `--no-prune`; if no checked
 flat configuration/index is available they cannot be bound and exit 1.
 `--strip-comments` runs before every artifact's checks. Repeatable `--verify-run`

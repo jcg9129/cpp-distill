@@ -18,7 +18,7 @@ macOS one) and asks for real GCC; a Clang named explicitly is accepted and noted
 - [Recipes](#recipes)
 - [Output](#output): `-o`, `--report`, `-v`
 - [Judge](#judge): `--judge`, `--judge-probe`, `--part`, `--judge-check`, `--record`
-- [Pruning](#pruning): `--no-prune`, `--keep`, `--no-assume`
+- [Pruning](#pruning): `--no-prune`, `--merge-only`, `--keep`, `--no-assume`
 - [Size and layout](#size-and-layout): `--strip-comments`, `--no-line-markers`, `--compact-whitespace`, `--shorten-names`
 - [Checking](#checking): `--verify-run`, `--strict`
 - [Information](#information): `--help`, `--version`
@@ -31,6 +31,7 @@ macOS one) and asks for real GCC; a Clang named explicitly is accepted and noted
 | Submit to Codeforces, smallest readable file | `distill --judge codeforces --shorten-names -o submit.cpp g++ -std=c++23 -O2 -I ~/lib main.cpp` |
 | Small file, original identifier names | `distill --judge codeforces --strip-comments --compact-whitespace -o submit.cpp g++ ... main.cpp` |
 | Keep comments and line structure, only drop unused code | `distill --judge codeforces -o submit.cpp g++ ... main.cpp` |
+| Only merge headers into one file, remove nothing | `distill --merge-only -o merged.cpp g++ ... main.cpp` |
 | Also check the output on sample inputs | add `--verify-run samples/` |
 | Find out why the result is not `pruned`, or what was kept and why | add `--report report.txt` |
 | Fail a script when the result is not fully pruned and judge-checked | add `--strict` |
@@ -141,8 +142,29 @@ with the checking configuration before it is written.
 
 ### `--no-prune`
 
-Skip pruning: the result is at most `flat`. Use it to compare, or when
-you want the full library code in the submission.
+Keep every declaration, but still resolve preprocessor conditionals for the
+judge and remove inactive `#if` branches (result `flat`, or `raw` if resolution
+or its checks fail). Use `--merge-only` to keep everything. The report says
+`pruning disabled: --no-prune` when pruning is skipped.
+
+### `--merge-only`
+
+Inline local headers only, keeping every preprocessor conditional and every
+line of code. The result is `raw`: resolution, pruning and later renderings
+do not run. Its bytes match the normal raw fallback for the same input and
+comment-stripping option.
+
+The original still builds as the baseline. The exact raw bytes pass the usual
+preprocessing comparison against the original and local-command build checks;
+`--verify-run` compares samples against the baseline. `--judge` is allowed and
+keeps the usual raw check configuration and verification level.
+
+Cannot be combined with `--no-line-markers`, `--compact-whitespace`,
+`--shorten-names`, `--keep`, `--strict` or `--no-assume` (usage error, exit 1).
+`--no-prune` is accepted as redundant. `--strip-comments` is allowed: raw already
+strips comments before its checks, retaining comments needed for directive/line
+safety. The result line says `raw`; the report and stderr say
+`resolution disabled: --merge-only`.
 
 ### `--keep <name>`
 

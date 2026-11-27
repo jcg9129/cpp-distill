@@ -214,7 +214,8 @@ Distill options (before the compiler name):
 | `--keep <name>` | extra root; in source: `// distill: keep` before a declaration |
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--report <file>` | the report (§4.9) |
-| `--no-prune` | inline and resolve only |
+| `--no-prune` | keep every declaration, but still resolve preprocessor conditionals for the judge and remove inactive `#if` branches (result `flat`); use `--merge-only` to keep everything |
+| `--merge-only` | inline local headers only (result `raw`), keeping every conditional and line of code; keep baseline and raw checks, skip resolution, pruning and later renderings |
 | `--no-assume=<name>` | disable a switchable assumption or policy while keeping pruning; repeatable, comma lists accepted; `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), and `unobserved-guard-macros` (A14) are switchable; any other name is a usage error (exit 1) listing switchable names |
 | `--strip-comments` | remove all comments |
 | `--no-line-markers` | omit generated `#line` markers from a `pruned` result when no observation of source positions is possible (§4.4); otherwise keep them and report why |
@@ -243,6 +244,16 @@ target binaries here`, or `not requested`.
 | 3 | `--strict`, a file was written, and it is not `pruned`/`target` |
 
 The result is one line on stderr and the header of the report.
+
+`--merge-only` selects the exact checked `raw` fallback bytes and reports
+`resolution disabled: --merge-only`. The baseline build, raw preprocessing
+comparison against the original, local-command build and `--verify-run` sample
+comparisons against the baseline remain. `--judge` keeps the usual raw check
+configuration and verification level. `--strip-comments` is allowed because raw
+already renders stripped comments before its checks. `--no-prune` is redundant
+and accepted. Combining `--merge-only` with `--no-line-markers`,
+`--compact-whitespace`, `--shorten-names`, `--keep`, `--strict` or `--no-assume`
+is a usage error (exit 1).
 
 ## 3. Pipeline
 

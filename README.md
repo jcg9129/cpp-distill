@@ -103,7 +103,8 @@ must include the target's C/C++ standard headers and libraries.
 | `--judge-check <selector> <output-file>...` | Compare saved judge diagnostics. |
 | `--record <dir>` | With `--judge-check`, save dated observation evidence. |
 | `--report <file>` | Write validation, configuration, conditional and pruning explanations. |
-| `--no-prune` | Inline and resolve only. |
+| `--no-prune` | Keep every declaration, but still resolve preprocessor conditionals for the judge and remove inactive `#if` branches (result `flat`). Use `--merge-only` to keep everything. |
+| `--merge-only` | Inline local headers only (result `raw`), keeping every conditional and line of code. Keep the baseline build and raw preprocessing/build/sample checks; skip resolution, pruning and later renderings. |
 | `--no-assume=<name>` | Disable `instantiation-effects` (A11), `library-spelled-members` (A12), `library-macro-values` (A9 standard macros), `library-spelled-names` (A15), `unspelled-functions` (D3f), `idempotent-standard-headers` (policy), or `unobserved-guard-macros` (A14); repeatable, comma lists accepted. |
 | `--keep <name>` | Add a pruning root by indexed name; repeatable. |
 | `--strip-comments` | Strip comments during checked rendering; directive/line safety may require some to remain. |
@@ -174,7 +175,8 @@ For a fallback, start with `--report report.txt`. Common reason text/prefixes:
 
 | Report reason | What you can do |
 | --- | --- |
-| `pruning disabled: --no-prune` | Omit `--no-prune` to request pruning. |
+| `pruning disabled: --no-prune` | Every declaration is kept; judge conditionals are still resolved and inactive `#if` branches removed (`flat`). Use `--merge-only` to keep everything. |
+| `resolution disabled: --merge-only` | Only local headers are inlined (`raw`); every conditional and line of code is kept. |
 | `unknown conditional in user code` | Inspect the reported `#if`; choose a judge profile with the needed facts, or accept `flat`. |
 | `non-standard system header:` / `unaudited GNU extension header:` | PBDS and other unaudited system headers disable pruning; use audited headers or accept `flat`. |
 | `external library option:` | External code may call user code; remove an unnecessary library option or accept `flat`. |
@@ -210,7 +212,9 @@ assumptions: none
 ```
 
 Later, `baseline: passed` confirms the original build, and
-`pruning disabled: --no-prune` explains why pruning was skipped.
+`pruning disabled: --no-prune` explains why every declaration was kept; preprocessor
+conditionals were still resolved for the judge and inactive `#if` branches removed
+(`flat`). Use `--merge-only` to keep everything (`raw`).
 Checks include the actual configuration argv, compiler and option changes.
 Conditional entries explain resolved/dead/unknown branches and facts. Pruning
 analysis lists `family` retention reasons, dependency causes and byte counts;

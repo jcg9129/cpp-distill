@@ -138,6 +138,7 @@ int run(const std::vector<std::string>& args) {
   DistillOptions options; options.profile = profile ? &*profile : nullptr;
   options.compilerExplicit = parsed.compilerExplicit; options.strict = parsed.strict;
   options.noPrune = parsed.noPrune; options.stripComments = parsed.stripComments; options.keep = parsed.keep;
+  options.mergeOnly = parsed.mergeOnly;
   options.shortenNames = parsed.shortenNames;
   options.assumeLibrarySpelledNames = parsed.assumeLibrarySpelledNames;
   options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;
