@@ -116,6 +116,9 @@ must include the target's C/C++ standard headers and libraries.
 | `--help` | Show help. |
 | `--version` | Print the distill version, source commit and LLVM revision. |
 
+Each option is explained in detail, with recipes and measured size effects, in
+[docs/options.md](docs/options.md).
+
 Judge diagnostics take no compile command or distillation options.
 Output/report paths must differ from the input and each other.
 
