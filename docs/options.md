@@ -296,6 +296,18 @@ might emit, each with the judge's flags, and preprocesses most of them twice for
 comparison. These options make a run faster. They don't change what distill
 checks about the file it writes. The defaults keep the full sequence.
 
+Measured with `--shorten-names` (which implies the other size options), judge
+cses, on a 6-core arm64 machine, one run each; the written file was
+byte-identical in every column:
+
+| Example | default | `--verify=final` | `--jobs=4` | both |
+| --- | ---: | ---: | ---: | ---: |
+| atl segment-tree quick-start (6.4 KB out) | 10.6 s | 7.0 s | 9.0 s | 6.6 s |
+| atl top-tree basic (73 KB out) | 21.1 s | 15.7 s | 18.7 s | 14.6 s |
+
+`--jobs` helps less than the number of cores suggests, because most builds
+depend on the result of the one before.
+
 ### `--verify=all|final`
 
 With the default `all`, every rendering stage is built and checked. With
