@@ -98,7 +98,7 @@ TEST(validate_cli_options) {
   CHECK_EQ(distillVersion(), std::string("distill ") + DISTILL_EXPECTED_VERSION +
       " (commit " + DISTILL_EXPECTED_COMMIT + "; LLVM " + DISTILL_EXPECTED_LLVM_REVISION + ")\n");
   auto defaults = parseDistillOptions({"--keep","first","--keep","second","--strip-comments","main.cpp"});
-  CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(defaults.value().stripComments);
+  CHECK(defaults.ok()); CHECK(!defaults.value().noPrune); CHECK(!defaults.value().mergeOnly); CHECK(defaults.value().stripComments);
   CHECK_EQ(defaults.value().keep,(std::vector<std::string>{"first","second"}));
   CHECK(!defaults.value().noLineMarkers); CHECK(!defaults.value().compactWhitespace);
   const auto compact = parseDistillOptions({"--compact-whitespace","main.cpp"});
@@ -114,6 +114,36 @@ TEST(validate_cli_options) {
   CHECK(parseDistillOptions({"main.cpp"}).ok());
   for (const auto& args : std::vector<std::vector<std::string>>{{"--no-prune"}, {"--no-prune", "-o"}, {"--no-prune", "--bogus"}, {"--keep"}, {"--verify-run"}, {"--strip-comments"}, {"--no-line-markers"}, {"--compact-whitespace"}})
     CHECK(!parseDistillOptions(args).ok());
+}
+
+TEST(validate_merge_only_options) {
+  for (const auto& flags : std::vector<std::vector<std::string>>{
+      {}, {"--no-prune"}, {"--strip-comments"}, {"--judge","codeforces"},
+      {"--verify-run","sample.in"}, {"--no-prune","--strip-comments","--judge","codeforces","--verify-run","sample.in"}}) {
+    auto args = flags; args.insert(args.begin(),"--merge-only"); args.push_back("main.cpp");
+    const auto parsed = parseDistillOptions(args); CHECK(parsed.ok());
+    if (parsed.ok()) CHECK(parsed.value().mergeOnly);
+  }
+  for (const auto& flags : std::vector<std::vector<std::string>>{
+      {"--no-line-markers"}, {"--compact-whitespace"}, {"--shorten-names"},
+      {"--keep","main"}, {"--strict"}, {"--no-assume=instantiation-effects"},
+      {"--no-assume","library-spelled-members"}, {"--no-assume=library-macro-values"},
+      {"--no-assume=unspelled-functions"}, {"--no-assume=library-spelled-names"},
+      {"--no-assume=idempotent-standard-headers"}, {"--no-assume=unobserved-guard-macros"},
+      {"--no-assume=instantiation-effects,library-macro-values"}}) {
+    for (const bool first : {false,true}) {
+      auto args = flags;
+      args.insert(first ? args.begin() : args.end(),"--merge-only"); args.push_back("main.cpp");
+      const auto parsed = parseDistillOptions(args); CHECK(!parsed.ok());
+      if (!parsed.ok()) CHECK_EQ(parsed.error().message,"--merge-only cannot be combined with " + flags.front().substr(0,flags.front().find('=')));
+    }
+  }
+  CHECK(!parseDistillOptions({"--merge-only","--judge-probe","cses"}).ok());
+  CHECK(!parseDistillOptions({"--merge-only","--judge-check","cses","output.txt"}).ok());
+  CHECK(!parseDistillOptions({"--merge-only"}).ok());
+  CHECK(!parseDistillOptions({"--merge-only=yes","main.cpp"}).ok());
+  CHECK(distillHelp().find("--merge-only") != std::string::npos);
+  CHECK(distillHelp().find("remove inactive #if branches (flat)") != std::string::npos);
 }
 
 #include "core/pipeline/pipeline.h"

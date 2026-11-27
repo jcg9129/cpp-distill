@@ -109,6 +109,62 @@ struct Fixture {
   }
 };
 }
+TEST(pipeline_merge_only_matches_raw_and_skips_resolution) {
+  struct NoEvaluation final : ConditionEvaluator {
+    Result<bool> evaluate(const ConditionInput&) override {
+      CHECK(false); return Error{"merge-only must not evaluate conditions"};
+    }
+  };
+  for (const bool strip : {false,true}) {
+    Fixture f("#include \"library.h\"\n#if 1\nint main(){return 0;}\n#else\nint inactive(){return 2;}\n#endif\n");
+    f.temp.write("library.h","#pragma once\n// library comment\nint unused(){return 7;}\n");
+    f.options.noPrune = true; f.options.stripComments = strip;
+    const auto flat = f.run(); CHECK_EQ(flat.artifact,"flat");
+    CHECK(flat.bytes.find("int inactive") == flat.bytes.npos);
+    CHECK(flat.bytes.find("int unused") != flat.bytes.npos);
+    const auto raw = f.built.at("raw");
+    f.evaluator = std::make_unique<NoEvaluation>();
+    f.options.mergeOnly = true;
+    for (const bool redundant : {false,true}) {
+      f.options.noPrune = redundant; f.built.clear();
+      const auto r = f.run(); CHECK_EQ(r.exitCode,0); CHECK_EQ(r.artifact,"raw");
+      CHECK_EQ(r.bytes,raw); CHECK_EQ(r.bytes,f.built.at("raw")); CHECK_EQ(f.built.size(),1u);
+      CHECK(r.bytes.find("#if 1\n") != r.bytes.npos);
+      CHECK(r.bytes.find("#else\n") != r.bytes.npos);
+      CHECK(r.bytes.find("int inactive") != r.bytes.npos);
+      CHECK(r.bytes.find("int unused") != r.bytes.npos);
+      CHECK((r.bytes.find("// library comment") == r.bytes.npos) == strip);
+      CHECK(r.bytes.find("#include \"library.h\"") == r.bytes.npos);
+      CHECK_EQ(r.checks.size(),2u); CHECK_EQ(r.checks[0].artifact,"baseline"); CHECK_EQ(r.checks[1].artifact,"raw");
+      CHECK_EQ(r.diagnostic,"resolution disabled: --merge-only\n");
+      CHECK_EQ(r.resultLine,"distill: wrote raw (local), runtime compared 1 samples");
+      CHECK(r.report.starts_with(r.resultLine + '\n'));
+      CHECK(r.report.find("resolution disabled: --merge-only\n") != r.report.npos);
+      CHECK(!r.pruningModel); CHECK(!r.retention); CHECK(r.resolution.decisions.empty());
+      for (const auto& process : r.processes)
+        CHECK(process.step == "probe local compiler" || process.step == "baseline build" || process.step == "raw checks");
+    }
+  }
+}
+TEST(pipeline_merge_only_judge_and_verify_run_use_raw_checks) {
+  Fixture f("#include <cstdio>\n#if DISTILL_FIXTURE_JUDGE\nint unused(){return 7;}\n#endif\n"
+            "int main(){int n=0;std::scanf(\"%d\",&n);std::printf(\"%d\\n\",n+1);}\n");
+  f.temp.write("sample.in","41\n");
+  auto profile = take(testing::captureProfile(f.gcc,f.temp.path)); f.options.profile = &profile;
+  f.options.noPrune = true;
+  const auto flat = f.run(); CHECK_EQ(flat.artifact,"flat");
+  const auto raw = f.built.at("raw");
+  const auto rawConfiguration = flat.checks[1].configuration->argv;
+  f.options.mergeOnly = true;
+  const auto merged = f.run(); CHECK_EQ(merged.exitCode,0); CHECK_EQ(merged.artifact,"raw");
+  CHECK_EQ(merged.bytes,raw); CHECK_EQ(merged.runtime,"compared 1 samples");
+  CHECK_EQ(merged.checks[1].configuration->argv,rawConfiguration);
+  CHECK(merged.checks[1].configuration->command.localMacros().empty());
+  for (const auto& fault : {"raw-stdout","raw-exit","raw-timeout","raw-cap"}) {
+    const auto rejected = f.run(fault); CHECK_EQ(rejected.exitCode,1); CHECK(rejected.bytes.empty());
+    CHECK(rejected.report.find("raw failed:") != rejected.report.npos);
+  }
+}
 TEST(pipeline_sample_selection_file_directory_order_repetition_and_errors) {
   test::TempDirectory temp;
   std::filesystem::create_directories(temp.path / "samples" / "nested");

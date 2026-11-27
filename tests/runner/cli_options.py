@@ -58,12 +58,53 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--no-prune', '-o', 'main.cpp', 'main.cpp'], 1, 'must differ'),
         (['--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local), runtime not requested'),
         (['--no-prune', '--strict', 'main.cpp'], 3, 'distill: wrote flat (local), runtime not requested'),
+        (['--merge-only'], 1, 'missing compile command'),
+        (['--merge-only', 'main.cpp'], 0, 'distill: wrote raw (local), runtime not requested'),
+        (['--merge-only', '--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote raw (local)'),
+        *[(['--merge-only', *flags, 'main.cpp'], 1,
+           '--merge-only cannot be combined with ' + flags[0].split('=')[0])
+          for flags in [['--no-line-markers'], ['--compact-whitespace'], ['--shorten-names'],
+                        ['--keep', 'main'], ['--strict'], ['--no-assume=instantiation-effects'],
+                        ['--no-assume', 'library-spelled-members'], ['--no-assume=library-macro-values'],
+                        ['--no-assume=unspelled-functions'], ['--no-assume=library-spelled-names'],
+                        ['--no-assume=idempotent-standard-headers'], ['--no-assume=unobserved-guard-macros']]],
     ]:
         with case(repr(args)):
             result = subprocess.run([binary, *args], cwd=root, capture_output=True, text=True, timeout=120)
             check(result.returncode == code, (args, result.returncode, result.stderr))
             check(message in result.stdout + result.stderr, (args, result.stdout, result.stderr))
             check(set(root.iterdir()) == {root / 'main.cpp'}, list(root.iterdir()))
+    with case('merge-only preserves conditionals and checks samples on exact written bytes'):
+        saved = (root / 'main.cpp').read_bytes()
+        (root / 'library.h').write_text('#pragma once\n// library comment\nint unused(){return 7;}\n')
+        (root / 'main.cpp').write_text('#include "library.h"\n#if 1\nint main(){return 0;}\n'
+                                      '#else\nint inactive(){return 2;}\n#endif\n')
+        (root / 'sample.in').write_text('')
+        for flags in [[], ['--strip-comments'], ['--no-prune']]:
+            result = subprocess.run([binary, '--merge-only', *flags, '--verify-run', 'sample.in',
+                                     '--report', 'report.txt', '-o', 'submit.cpp',
+                                     'g++', '-std=gnu++20', 'main.cpp'],
+                                    cwd=root, capture_output=True, timeout=120)
+            check(result.returncode == 0, result.stderr)
+            check(result.stdout == b'', result.stdout)
+            output = (root / 'submit.cpp').read_bytes()
+            report = (root / 'report.txt').read_text()
+            check(b'#if 1\n' in output and b'int inactive' in output and b'int unused' in output, output)
+            check(b'#include "library.h"' not in output, output)
+            check((b'// library comment' not in output) == ('--strip-comments' in flags), output)
+            check(b'resolution disabled: --merge-only\n' in result.stderr, result.stderr)
+            check('resolution disabled: --merge-only\n' in report, report)
+            check('distill: wrote raw (local), runtime compared 1 samples' in report, report)
+            check('baseline: passed\n' in report and 'raw: passed\n' in report, report)
+            check('process resolve conditions ' not in report and 'process flat checks ' not in report
+                  and 'process pruning analysis ' not in report, report)
+        result = subprocess.run([binary, '--no-prune', 'g++', '-std=gnu++20', 'main.cpp'],
+                                cwd=root, capture_output=True, timeout=120)
+        check(result.returncode == 0 and b'wrote flat' in result.stderr, result.stderr)
+        check(b'#if 1\n' not in result.stdout and b'int inactive' not in result.stdout, result.stdout)
+        for name in ['library.h', 'sample.in', 'report.txt', 'submit.cpp']:
+            (root / name).unlink()
+        (root / 'main.cpp').write_bytes(saved)
     with case('instantiation-effects flag reaches the worker and modes do not mix'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('template<class T> struct Effect { friend int supplied(T); };\n'

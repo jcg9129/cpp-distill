@@ -7,7 +7,7 @@ struct RunSample { std::string name; std::filesystem::path input; };
 Result<std::vector<RunSample>> collectRunSamples(const std::vector<std::string>& paths,
                                                 const std::filesystem::path& cwd);
 struct DistillOptions {
-  bool noPrune = false, stripComments = false;
+  bool noPrune = false, mergeOnly = false, stripComments = false;
   bool assumeLibrarySpelledNames = true;
   // Implies comment stripping, marker omission and checked compaction.
   bool shortenNames = false;
