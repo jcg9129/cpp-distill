@@ -34,6 +34,8 @@ Result<std::filesystem::path> runningExecutable();
 Result<ProcessResult> runProcess(const ProcessSpec& spec);
 // Independent jobs only; return slots retain input order. The runner must be
 // safe to call concurrently. Each process keeps its own timeout/output limits.
+// jobs is an upper bound, not a guarantee that callbacks overlap. A callback
+// must finish independently of callbacks that may not have started yet.
 std::vector<Result<ProcessResult>> runProcessBatch(const std::vector<ProcessSpec>&,
                                                   unsigned jobs, ProcessRunner = runProcess);
 using ProcessBatchRunner = std::function<std::vector<Result<ProcessResult>>(const std::vector<ProcessSpec>&)>;

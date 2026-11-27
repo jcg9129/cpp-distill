@@ -6,15 +6,24 @@ if(WIN32)
 endif()
 add_executable(distill_unit_tests main.cpp command_test.cpp process_test.cpp probe_test.cpp lex_test.cpp names_test.cpp inline_test.cpp profile_test.cpp judge_probe_test.cpp resolve_test.cpp validate_test.cpp option_model_test.cpp prune_test.cpp render_test.cpp shorten_names_test.cpp pipeline_test.cpp)
 target_link_libraries(distill_unit_tests PRIVATE distill_core distill_test_evaluate)
+if(DISTILL_HAVE_ADDCHDIR_NP AND NOT DISTILL_FORCE_FORK_SPAWN)
+  target_compile_definitions(distill_unit_tests PRIVATE DISTILL_TEST_HAVE_SPAWN_CHDIR=1)
+endif()
 target_compile_definitions(distill_unit_tests PRIVATE
   DISTILL_EXPECTED_VERSION="${DISTILL_VERSION}"
   DISTILL_EXPECTED_COMMIT="${DISTILL_COMMIT}"
   DISTILL_EXPECTED_LLVM_REVISION="${DISTILL_LLVM_REVISION}")
 target_compile_definitions(distill_unit_tests PRIVATE DISTILL_PIPELINE_CASES="${PROJECT_SOURCE_DIR}/tests/cases/pipeline" DISTILL_EXTENSION_DATA="${PROJECT_SOURCE_DIR}/data/extensions" DISTILL_PROFILE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/profile" DISTILL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/probe")
 add_dependencies(distill_unit_tests distill_test_helper)
-add_test(NAME unit COMMAND distill_unit_tests)
-# Full probe/pipeline units and readable shortening regressions on bounded hosts.
-set_tests_properties(unit PROPERTIES TIMEOUT 240)
+# The jobs/final verification matrices each run many real compiler pipelines.
+# Give them separate timeout budgets instead of charging all of them to unit's
+# existing budget (particularly expensive with Homebrew GCC and Apple's linker).
+# Running the binary without filters still runs the complete suite.
+add_test(NAME unit COMMAND distill_unit_tests
+  --exclude-filter pipeline_jobs_ --exclude-filter pipeline_verify_final_)
+add_test(NAME unit_jobs COMMAND distill_unit_tests --filter pipeline_jobs_)
+add_test(NAME unit_verify_final COMMAND distill_unit_tests --filter pipeline_verify_final_)
+set_tests_properties(unit unit_jobs unit_verify_final PROPERTIES TIMEOUT 240)
 # Replace the baseline object in these test binaries with a synthetic baseline
 # emitted by the real merger/embedder. The committed matrix data stays untouched.
 set(member_fixture "${CMAKE_CURRENT_BINARY_DIR}/embedded_members.cpp")

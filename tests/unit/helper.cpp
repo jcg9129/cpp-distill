@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <io.h>
 #else
+#include <fcntl.h>
 #include <spawn.h>
 #include <unistd.h>
 extern char** environ;
@@ -73,6 +74,10 @@ int run(const std::vector<std::string>& argv) {
       left -= static_cast<unsigned long long>(size);
     }
   } else if (command == "cat-stdin") std::cout << std::cin.rdbuf();
+#ifndef _WIN32
+  else if (command == "fd-open" && argv.size() == 3)
+    return fcntl(std::stoi(argv[2]), F_GETFD) >= 0 ? 1 : 0;
+#endif
 #ifdef _WIN32
   else if (command == "export-pipe-handles" && argv.size() == 3) {
     // Keep writers alive outside the runner's job, in the unit-test process.

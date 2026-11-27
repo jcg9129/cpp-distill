@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
+#include "rendezvous.h"
 #include "core/pipeline/pipeline.h"
 #include "core/validate/preprocess.h"
 #include "evaluate.h"
@@ -9,7 +10,6 @@
 #include <mutex>
 #include <regex>
 #include <sstream>
-#include <condition_variable>
 #include <thread>
 
 using namespace distill;
@@ -707,15 +707,15 @@ TEST(pipeline_jobs_baseline_exceptions_roll_back_results_and_progress) {
     const auto serialProgress = std::exchange(progress,{});
     for (const unsigned jobs : {2u,4u}) {
       f.options.jobs = jobs;
-      std::mutex mutex; std::condition_variable ready; bool rawLaunched = false;
+      bool rawLaunched = false;
       f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
         if (!entering) return;
         const auto output = std::find(spec.argv.begin(),spec.argv.end(),"-o");
         if (output == spec.argv.end() || output + 1 == spec.argv.end()) return;
         const auto name = pathFromUtf8(*(output + 1)).filename();
-        std::unique_lock lock(mutex);
-        if (name == "raw.exe") { rawLaunched = true; ready.notify_all(); }
-        if (name == "baseline.exe") ready.wait_for(lock,std::chrono::seconds(3),[&] { return rawLaunched; });
+        // Raw work is speculative until finishBaseline(), even if the baseline
+        // runner has already thrown. No scheduling rendezvous is needed.
+        if (name == "raw.exe") rawLaunched = true;
       };
       const auto parallel = f.run(fault); CHECK(rawLaunched);
       CHECK_EQ(parallel.exitCode,1); CHECK(parallel.bytes.empty()); CHECK(!parallel.keptWork);
@@ -859,23 +859,33 @@ TEST(pipeline_jobs_global_bound_and_baseline_raw_overlap) {
   for (const unsigned jobs : {2u,4u}) {
     Fixture f("int main(){return 0;}\n");
     f.options.samples.clear(); f.options.noPrune = true; f.options.jobs = jobs;
-    std::mutex mutex; std::condition_variable ready;
-    unsigned active = 0, peak = 0; bool baselineActive = false, rawEntered = false, overlap = false;
+    std::mutex mutex;
+    test::Rendezvous builds(2);
+    unsigned active = 0, peak = 0;
+    bool baselineActive = false, rawActive = false, baselineEntered = false, rawEntered = false, overlap = false;
     f.observeProcess = [&](const ProcessSpec& spec, bool entering) {
       const auto output = std::find(spec.argv.begin(),spec.argv.end(),"-o");
       const auto name = output == spec.argv.end() || output + 1 == spec.argv.end() ? std::string{} :
           pathToUtf8(pathFromUtf8(*(output + 1)).filename());
-      std::unique_lock lock(mutex);
-      if (!entering) { --active; if (name == "baseline.exe") baselineActive = false; return; }
-      ++active; peak = (std::max)(peak,active);
-      if (name == "raw.exe") { rawEntered = true; overlap = baselineActive; ready.notify_all(); }
-      if (name == "baseline.exe") {
-        baselineActive = true;
-        ready.wait_for(lock,std::chrono::seconds(3),[&] { return rawEntered; });
+      {
+        std::lock_guard lock(mutex);
+        if (!entering) {
+          --active;
+          if (name == "baseline.exe") baselineActive = false;
+          if (name == "raw.exe") rawActive = false;
+          return;
+        }
+        ++active; peak = (std::max)(peak,active);
+        if (name == "baseline.exe") baselineEntered = baselineActive = true;
+        if (name == "raw.exe") rawEntered = rawActive = true;
+        overlap |= baselineActive && rawActive;
       }
+      if (name == "baseline.exe" || name == "raw.exe") builds.arriveAndWait();
     };
     const auto result = f.run();
-    CHECK_EQ(result.exitCode,0); CHECK(overlap); CHECK_EQ(active,0u); CHECK_EQ(peak,jobs);
+    CHECK_EQ(result.exitCode,0); CHECK(baselineEntered); CHECK(rawEntered);
+    CHECK_EQ(active,0u); CHECK(peak >= 1u && peak <= jobs);
+    if (builds.completed()) CHECK(overlap);
   }
 }
 

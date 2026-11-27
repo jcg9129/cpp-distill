@@ -9,6 +9,7 @@
 #include <climits>
 #include <cstring>
 #include <fcntl.h>
+#include <mutex>
 #include <poll.h>
 #include <signal.h>
 #include <spawn.h>
@@ -20,6 +21,12 @@ extern char** environ;
 namespace distill::detail {
 namespace {
 using Clock = std::chrono::steady_clock;
+#ifndef __linux__
+// pipe()+fcntl(CLOEXEC) is not atomic. Keep another runner from spawning in
+// between those calls and inheriting a pipe writer until its own exit.
+// Linux uses atomic pipe2(O_CLOEXEC) instead.
+std::mutex spawnMutex;
+#endif
 struct Fd {
   int value = -1;
   Fd() = default;
@@ -93,6 +100,9 @@ struct Child {
 } // namespace
 Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::path& executable) {
   const auto start = Clock::now();
+#ifndef __linux__
+  std::unique_lock spawnLock(spawnMutex);
+#endif
   Fd outRead, outWrite, errRead, errWrite;
   if (!makePipe(outRead, outWrite) || !makePipe(errRead, errWrite)) return osError("pipe");
   if (fcntl(outRead.value, F_SETFL, O_NONBLOCK) < 0 || fcntl(errRead.value, F_SETFL, O_NONBLOCK) < 0)
@@ -113,11 +123,17 @@ Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::
   rc = posix_spawnattr_init(&setup.attr);
   if (rc) return osError("spawn attributes", rc);
   setup.attrReady = true;
+  short flags = POSIX_SPAWN_SETPGROUP;
+#ifdef __APPLE__
+  // Also exclude unrelated descriptors opened concurrently outside this runner.
+  // Only the explicitly opened/duplicated stdin/out/err belong in the child.
+  flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
   if ((rc = posix_spawn_file_actions_addchdir_np(&setup.actions, cwd.c_str())) ||
       (rc = posix_spawn_file_actions_addopen(&setup.actions, STDIN_FILENO, stdinPath.c_str(), O_RDONLY, 0)) ||
       (rc = posix_spawn_file_actions_adddup2(&setup.actions, outWrite.value, STDOUT_FILENO)) ||
       (rc = posix_spawn_file_actions_adddup2(&setup.actions, errWrite.value, STDERR_FILENO)) ||
-      (rc = posix_spawnattr_setflags(&setup.attr, POSIX_SPAWN_SETPGROUP)) ||
+      (rc = posix_spawnattr_setflags(&setup.attr, flags)) ||
       (rc = posix_spawnattr_setpgroup(&setup.attr, 0))) return osError("spawn setup", rc);
   rc = posix_spawn(&pid, executable.c_str(), &setup.actions, &setup.attr, argv.data(), environ);
   if (rc) return osError("posix_spawn", rc);
@@ -153,6 +169,11 @@ Result<ProcessResult> runNative(const ProcessSpec& spec, const std::filesystem::
   }
 #endif
   Child child{pid};
+#ifndef __linux__
+  // The child has its descriptor snapshot. Never serialize process execution,
+  // pipe draining, or waiting for the fork/exec error report under this lock.
+  spawnLock.unlock();
+#endif
 #ifndef DISTILL_HAVE_ADDCHDIR_NP
   execWrite.reset();
   int execError = 0;

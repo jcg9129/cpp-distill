@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "support.h"
+#include "rendezvous.h"
 #include "core/process/process.h"
 #include <future>
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <mutex>
 #include <thread>
 #ifdef _WIN32
@@ -13,6 +13,7 @@
 #include <windows.h>
 #else
 #include <csignal>
+#include <unistd.h>
 #endif
 
 using namespace distill;
@@ -208,6 +209,21 @@ TEST(process_thread_safety) {
     CHECK_EQ(result.value().stdoutText, "1:" + std::to_string(i) + '\n');
   }
 }
+TEST(process_macos_spawn_excludes_unlisted_pipe_writers) {
+#if defined(__APPLE__) && defined(DISTILL_TEST_HAVE_SPAWN_CHDIR)
+  // Model the pipe()+fcntl(CLOEXEC) window deterministically: leave this writer
+  // inheritable while another process is spawned. It must not survive exec.
+  int fds[2];
+  if (pipe(fds) != 0) throw std::runtime_error("cannot create test pipe");
+  struct Pipe {
+    int read, write;
+    ~Pipe() { close(read); close(write); }
+  } pipeGuard{fds[0],fds[1]};
+  CHECK_EQ(run(spec({"fd-open",std::to_string(fds[1])})).exitCode,0);
+#else
+  throw test::Skip{"macOS close-on-exec default"};
+#endif
+}
 TEST(process_exec_failures_are_errors) {
 #ifdef _WIN32
   throw test::Skip{"POSIX exec failure reporting"};
@@ -234,27 +250,29 @@ TEST(process_memory_limit_smoke) {
 }
 
 TEST(process_batch_bounded_concurrent_order_and_errors) {
-  // Synchronize the first wave instead of relying on timing to prove overlap.
+  // jobs is an upper bound, not a scheduling guarantee. When the first wave
+  // meets, also check that it filled the available slots.
   for (const unsigned jobs : {1u,2u,4u}) {
-    std::mutex mutex; std::condition_variable ready;
-    unsigned active = 0, peak = 0, arrived = 0;
+    std::mutex mutex;
+    test::Rendezvous firstWave(jobs);
+    unsigned active = 0, peak = 0;
     std::vector<ProcessSpec> specs(9);
     for (std::size_t i = 0; i < specs.size(); ++i) specs[i].argv = {std::to_string(i)};
     auto results = runProcessBatch(specs,jobs,[&](const ProcessSpec& input) -> Result<ProcessResult> {
       const auto index = std::stoul(input.argv[0]);
       {
-        std::unique_lock lock(mutex);
+        std::lock_guard lock(mutex);
         ++active; peak = (std::max)(peak,active);
-        ++arrived; ready.notify_all();
-        if (index < jobs) ready.wait_for(lock,2s,[&] { return arrived >= jobs; });
       }
-      std::this_thread::sleep_for(2ms);
+      if (index < jobs) firstWave.arriveAndWait();
       { std::lock_guard lock(mutex); --active; }
       if (index == 3) return Error{"ordered failure"};
       if (index == 5) throw std::runtime_error("runner failure");
       ProcessResult r; r.exitCode = static_cast<int>(index); return r;
     });
-    CHECK_EQ(peak,jobs); CHECK_EQ(results.size(),specs.size()); CHECK_EQ(active,0u);
+    CHECK(peak >= 1u && peak <= jobs);
+    if (firstWave.completed()) CHECK_EQ(peak,jobs);
+    CHECK_EQ(results.size(),specs.size()); CHECK_EQ(active,0u);
     for (std::size_t i = 0; i < specs.size(); ++i) {
       if (i == 3) CHECK_EQ(results[i].error().message,"ordered failure");
       else if (i == 5) CHECK_EQ(results[i].error().message,"runner failure");
@@ -269,4 +287,46 @@ TEST(process_batch_preserves_each_process_limits) {
   CHECK(results[0].ok()); CHECK(results[0].value().timedOut);
   CHECK_EQ(results[1].value().stdoutText.size(),32u); CHECK(results[1].value().stdoutTruncated);
   CHECK_EQ(results[2].value().exitCode,7);
+}
+
+TEST(process_batch_empty_oversized_and_throwing_runners) {
+  CHECK(runProcessBatch({},4).empty());
+  for (const unsigned jobs : {0u,1u,4u}) {
+    std::atomic<unsigned> finished{0};
+    auto results = runProcessBatch(std::vector<ProcessSpec>(3),jobs,[&](const ProcessSpec&) -> Result<ProcessResult> {
+      const auto index = finished.fetch_add(1);
+      if (index == 0) throw Error{"runner error"};
+      if (index == 1) throw std::runtime_error("runner exception");
+      throw 42;
+    });
+    CHECK_EQ(finished.load(),3u);
+    std::vector<std::string> errors;
+    for (const auto& result : results) {
+      CHECK(!result.ok());
+      errors.push_back(result.error().message);
+    }
+    std::sort(errors.begin(),errors.end());
+    CHECK_EQ(errors,(std::vector<std::string>{"process runner threw an unknown exception","runner error","runner exception"}));
+    // A subsequent batch can reenter the runner without a scheduler lock.
+    auto nested = runProcessBatch(std::vector<ProcessSpec>(2),jobs,[&](const ProcessSpec&) -> Result<ProcessResult> {
+      return runProcessBatch(std::vector<ProcessSpec>(1),1,[](const ProcessSpec&) -> Result<ProcessResult> {
+        ProcessResult result; result.exitCode = 7; return result;
+      }).front();
+    });
+    for (const auto& result : nested) { CHECK(result.ok()); CHECK_EQ(result.value().exitCode,7); }
+  }
+}
+
+TEST(process_batch_rendezvous_timeout_still_joins_workers) {
+  for (const unsigned jobs : {1u,2u}) {
+    test::Rendezvous gate(3,1ms); // Deliberately more participants than tasks.
+    std::atomic<unsigned> finished{0};
+    auto results = runProcessBatch(std::vector<ProcessSpec>(2),jobs,[&](const ProcessSpec&) -> Result<ProcessResult> {
+      gate.arriveAndWait();
+      ++finished;
+      ProcessResult result; result.exitCode = 0; return result;
+    });
+    CHECK(!gate.completed()); CHECK_EQ(finished.load(),2u);
+    for (const auto& result : results) { CHECK(result.ok()); CHECK_EQ(result.value().exitCode,0); }
+  }
 }
