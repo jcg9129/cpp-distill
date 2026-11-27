@@ -121,7 +121,7 @@ std::vector<Result<ProcessResult>> runProcessBatch(const std::vector<ProcessSpec
     }
   };
   std::vector<std::future<void>> workers;
-  const auto count = std::min<std::size_t>(std::max(1u, jobs), specs.size());
+  const auto count = std::min<std::size_t>((std::max)(1u, jobs), specs.size());
   for (std::size_t i = 1; i < count; ++i) workers.push_back(std::async(std::launch::async, work));
   work();
   for (auto& worker : workers) worker.get();

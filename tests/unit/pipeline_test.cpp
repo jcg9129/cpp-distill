@@ -867,7 +867,7 @@ TEST(pipeline_jobs_global_bound_and_baseline_raw_overlap) {
           pathToUtf8(pathFromUtf8(*(output + 1)).filename());
       std::unique_lock lock(mutex);
       if (!entering) { --active; if (name == "baseline.exe") baselineActive = false; return; }
-      ++active; peak = std::max(peak,active);
+      ++active; peak = (std::max)(peak,active);
       if (name == "raw.exe") { rawEntered = true; overlap = baselineActive; ready.notify_all(); }
       if (name == "baseline.exe") {
         baselineActive = true;
@@ -913,7 +913,7 @@ TEST(pipeline_jobs_unmodelled_flags_keep_processes_serial) {
   std::mutex mutex;
   f.observeProcess = [&](const ProcessSpec&, bool entering) {
     std::lock_guard lock(mutex);
-    if (entering) { ++active; peak = std::max(peak,active); } else --active;
+    if (entering) { ++active; peak = (std::max)(peak,active); } else --active;
   };
   const auto parallel = f.run(); CHECK_EQ(peak,1u); CHECK_EQ(active,0u);
   CHECK_EQ(parallel.bytes,serial.bytes); CHECK_EQ(parallel.exitCode,serial.exitCode);

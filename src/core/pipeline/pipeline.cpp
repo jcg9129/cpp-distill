@@ -186,9 +186,9 @@ struct Pipeline {
     const auto program = work.path / "baseline.exe";
     std::filesystem::remove(program);
     ProcessSpec spec; spec.argv = argv(c,command.source,program,false); spec.cwd = command.cwd;
-    spec.timeout = std::min(options.stepTimeout,std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()));
+    spec.timeout = (std::min)(options.stepTimeout,std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()));
     if (spec.timeout.count() <= 0) throw Error{currentStep + ": step deadline exceeded in " + pathToUtf8(spec.cwd)};
-    spec.maxOutputBytes = std::min(spec.maxOutputBytes,options.maxProcessOutput);
+    spec.maxOutputBytes = (std::min)(spec.maxOutputBytes,options.maxProcessOutput);
     baselineRecord = {currentStep,spec}; result.processes.push_back(baselineRecord);
     const auto phaseDeadline = deadline;
     baselineBuild = std::async(std::launch::async,[spec,program,source = command.source,phaseDeadline,run = runner]() -> Result<ProcessResult> {

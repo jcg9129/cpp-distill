@@ -244,7 +244,7 @@ TEST(process_batch_bounded_concurrent_order_and_errors) {
       const auto index = std::stoul(input.argv[0]);
       {
         std::unique_lock lock(mutex);
-        ++active; peak = std::max(peak,active);
+        ++active; peak = (std::max)(peak,active);
         ++arrived; ready.notify_all();
         if (index < jobs) ready.wait_for(lock,2s,[&] { return arrived >= jobs; });
       }
