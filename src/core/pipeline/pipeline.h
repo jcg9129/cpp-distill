@@ -14,10 +14,6 @@ struct DistillOptions {
   // Independent compiler invocations only; custom ProcessRunners must be safe
   // to call concurrently when jobs > 1. Reports retain serial order.
   unsigned jobs = 1;
-  // The baseline executable is used only for sample comparisons. Raw still
-  // passes its preprocessing and full build checks. Rejected with samples,
-  // assembly, modules, unmodelled flags or external library options.
-  bool skipBaseline = false;
   // Defer intermediate rendering builds/runs, retaining every invariant and
   // all raw/flat/pruned checks. Check deferred renderings in reverse on failure.
   bool verifyFinal = false;

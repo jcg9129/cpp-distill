@@ -21,7 +21,7 @@ macOS one) and asks for real GCC; a Clang named explicitly is accepted and noted
 - [Pruning](#pruning): `--no-prune`, `--merge-only`, `--keep`, `--no-assume`
 - [Size and layout](#size-and-layout): `--strip-comments`, `--no-line-markers`, `--compact-whitespace`, `--shorten-names`
 - [Checking](#checking): `--verify-run`, `--strict`
-- [Speed](#speed): `--verify`, `--jobs`, `--baseline`
+- [Speed](#speed): `--verify`, `--jobs`
 - [Information](#information): `--help`, `--version`
 - [Exit codes](#exit-codes)
 
@@ -329,24 +329,6 @@ diagnostics are the same as with one job; only the wall time changes. Commands
 with compiler flags distill doesn't model stay serial, because such flags can
 share files or load plugins. Each parallel job is a full compiler, so limit N to
 what the machine's memory allows.
-
-### `--baseline=build|skip`
-
-By default distill first builds your original program, in its own directory.
-`skip` omits that build. The raw file's preprocessing comparison and full build
-still run, so a compile error in the original is still caught, as a raw
-failure. The baseline executable is only needed to compare sample runs, so
-`skip` is rejected together with `--verify-run`.
-
-`skip` is also refused for inputs whose build may depend on the working
-directory or on external files:
-- assembly in the source, an inlined file or a system header;
-- modules (`-fmodules`);
-- compiler flags distill doesn't model;
-- external library options such as `-L` or a custom `-l`.
-
-For those, distill keeps building the original where it is. The report says
-`option baseline=skip`.
 
 ## Information
 

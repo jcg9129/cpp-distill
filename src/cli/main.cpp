@@ -140,7 +140,7 @@ int run(const std::vector<std::string>& args) {
   options.noPrune = parsed.noPrune; options.stripComments = parsed.stripComments; options.keep = parsed.keep;
   options.mergeOnly = parsed.mergeOnly;
   options.shortenNames = parsed.shortenNames;
-  options.jobs = parsed.jobs; options.skipBaseline = parsed.skipBaseline;
+  options.jobs = parsed.jobs;
   options.verifyFinal = parsed.verifyFinal;
   options.assumeLibrarySpelledNames = parsed.assumeLibrarySpelledNames;
   options.assumeInstantiationEffects = parsed.assumeInstantiationEffects;

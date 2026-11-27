@@ -15,7 +15,6 @@ struct CliOptions {
   bool assumeLibrarySpelledNames = true;
   bool shortenNames = false;
   unsigned jobs = 1;
-  bool skipBaseline = false;
   bool verifyFinal = false;
   bool assumeInstantiationEffects = true, assumeLibrarySpelledMembers = true, assumeLibraryMacroValues = true, assumeUnspelledFunctions = true;
   bool assumeIdempotentStandardHeaders = true, assumeUnobservedGuardMacros = true;

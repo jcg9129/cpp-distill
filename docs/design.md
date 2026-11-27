@@ -214,7 +214,6 @@ Distill options (before the compiler name):
 | `--keep <name>` | extra root; in source: `// distill: keep` before a declaration |
 | `--verify-run <path>` | also compare runs on a sample input (a file, or a directory of `*.in`, sorted, no recursion); repeatable |
 | `--jobs=N`, `-j N` | Run independent compiler invocations concurrently, at most N at a time (default 1). Options precede the compiler; compiler arguments are left intact. |
-| `--baseline=build\|skip` | Build the original by default; `skip` omits that build when no runtime samples are requested. Cannot be combined with `--verify-run`; every emitted artifact still passes a full build. |
 | `--verify=all\|final` | Check every rendering by default; `final` defers intermediate rendering builds and runs, checking them in reverse if the last fails. Raw, flat and pruned checks and every transformation invariant remain mandatory (§4.8). |
 | `--report <file>` | the report (§4.9) |
 | `--no-prune` | keep every declaration, but still resolve preprocessor conditionals for the judge and remove inactive `#if` branches (result `flat`); use `--merge-only` to keep everything |
@@ -295,23 +294,8 @@ artifact builds remain verification gates for their successors by default;
 unmodelled flags stay serial because those flags may introduce shared side
 effects.
 
-`--baseline=skip` is valid only without `--verify-run`. The baseline executable
-has no consumer in that case: `execute` returns immediately for empty samples,
-and only sample comparisons read its saved runs. Skipping removes the separate
-original-build gate; raw preprocessing comparison and raw's full compile/link
-check remain mandatory. The default `--baseline=build` retains the original
-behavior. To preserve original validation for context-dependent assembly and
-file inputs, `skip` is refused when the source or any inlined file contains
-`asm`, `__asm` or `__asm__` identifiers, even in inactive branches. The original
-preprocessed text is also checked for assembly, including macro expansions
-and system headers. Modules (`-fmodules`), unmodelled compiler flags and
-external library options (`-L`, custom `-l`) are refused
-because they may read files relative to cwd. Modelled include search options
-remain supported; command options already rejected by the parser, such as
-`-include`, remain rejected. These restrictions also apply with `--verify=final`.
-Reports omit scheduling metadata (`--jobs`) and default check selections;
-`skip` adds `option baseline=skip` and an explicit skipped-baseline option line.
-Default reports retain their existing format, including explicit `build`/`all`.
+Reports omit scheduling metadata (`--jobs`) and default check selections.
+Default reports retain their existing format, also with explicit `--verify=all`.
 
 `--verify=all` (default) retains the existing sequential rendering checks.
 `--verify=final` keeps every raw, flat and pruned check, including builds,
@@ -331,8 +315,7 @@ where `all` would stop at an earlier one. Every emitted artifact has passed a
 full build and all checks of its own stage. Rendering checks use the same
 selected flat configuration and judge flags as `all`.
 This does not permit bypassing flat's build: a pruned program can link after
-deleting a dead function even when flat cannot link. It works with `--jobs`
-and `--baseline=skip` (the latter still excludes runtime samples). Reports
+deleting a dead function even when flat cannot link. It works with `--jobs`. Reports
 include `option verify=final` only for the non-default mode and exactly one
 `verify: <stage> build skipped (--verify=final)` line per deferred stage
 (`unmarked`, `compact`), even if a later failure causes it to be checked on

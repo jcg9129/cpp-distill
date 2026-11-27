@@ -114,7 +114,6 @@ must include the target's C/C++ standard headers and libraries.
 | `--verify-run <path>` | Compare runs on a file or sorted directory `*.in`; repeatable. |
 | `--verify=all\|final` | `final` skips the builds of intermediate renderings (marker removal, compaction) when a later rendering is requested; the written file is always fully checked. See [Speed](docs/options.md#speed). |
 | `--jobs=N`, `-j N` | Run independent compiler invocations concurrently, at most N at a time (default 1). Options precede the compiler; compiler arguments are left intact. |
-| `--baseline=build\|skip` | Build the original by default; `skip` omits that build when no runtime samples are requested. Cannot be combined with `--verify-run`; every emitted artifact still passes a full build. |
 | `--strict` | Exit 3 unless the written artifact is `pruned` with `target` verification. |
 | `-v` | Show progress on stderr. |
 | `--help` | Show help. |

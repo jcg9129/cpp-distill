@@ -57,16 +57,6 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
       if (value != "all" && value != "final") return Error{"--verify requires all or final"};
       o.verifyFinal = value == "final";
     }
-    else if (a == "--baseline" || a.starts_with("--baseline=")) {
-      speedOptionSpecified = true;
-      std::string value;
-      if (a == "--baseline") {
-        if (++i == args.size()) return Error{"missing value for --baseline"};
-        value = args[i];
-      } else value = a.substr(11);
-      if (value != "build" && value != "skip") return Error{"--baseline requires build or skip"};
-      o.skipBaseline = value == "skip";
-    }
     else if (a == "--strict") o.strict = true;
     else if (a == "-v") o.verbose = true;
     else if (a == "--strip-comments") o.stripComments = true;
@@ -111,7 +101,6 @@ Result<CliOptions> parseDistillOptions(const std::vector<std::string>& args) {
              !o.assumeIdempotentStandardHeaders || !o.assumeUnobservedGuardMacros) conflict = "--no-assume";
     if (conflict) return Error{std::string("--merge-only cannot be combined with ") + conflict};
   }
-  if (o.skipBaseline && !o.verifyRun.empty()) return Error{"--baseline=skip cannot be combined with --verify-run"};
   if (o.part || o.record) return Error{"--part/--record require a judge diagnostic command"};
   if (o.compile.empty() && o.judge == "list") return o;
   if (o.compile.empty()) return Error{"missing compile command or source file"};
@@ -147,8 +136,6 @@ std::string distillHelp() {
       "  --shorten-names    readably shorten identifiers in a checked pruned artifact;\n"
       "                     implies --strip-comments --no-line-markers --compact-whitespace\n"
       "  --jobs=N, -j N     concurrent independent compiler processes (default 1)\n"
-      "  --baseline=build|skip build the original (default build); skip requires no samples\n"
-      "                     and no assembly, modules, unmodelled flags or external library options\n"
       "  --verify=all|final check all renderings (default all), or only the last,\n"
       "                     checking earlier renderings on failure; raw/flat/pruned unchanged\n"
       "  --verify-run <path> compare runs on a file or sorted directory *.in (repeatable)\n"

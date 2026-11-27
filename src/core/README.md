@@ -569,14 +569,6 @@ Commands with unmodelled flags stay serial: those flags can request shared
 side-effect files or compiler plugins that make invocations dependent.
 Custom `ProcessRunner` callbacks must support concurrent calls with jobs > 1.
 
-`--baseline=skip` is accepted only without samples. The baseline executable is
-only read by `execute`, which returns immediately when `samples` is empty;
-its cached results are only used for runtime comparison. Skipping deliberately
-omits the separate original-build gate. The original/raw preprocessing check
-and raw compile/link check remain, and every emitted artifact is still built.
-Reports record both selected options with `option ...` lines, and explicitly
-mark the baseline check skipped. Default `--baseline=build` is unchanged.
-
 Final-only verification requires a contract decision before implementation.
 A passing final build does not prove the earlier stages would pass: a judge
 macro can introduce an undefined reference in an unused function, causing flat

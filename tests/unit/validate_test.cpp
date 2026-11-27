@@ -427,35 +427,37 @@ TEST(validate_pp_trimming_options) {
 
 TEST(validate_speed_options_and_compiler_boundary) {
   const auto defaults = parseDistillOptions({"main.cpp"});
-  CHECK_EQ(defaults.value().jobs,1u); CHECK(!defaults.value().skipBaseline); CHECK(!defaults.value().verifyFinal);
+  CHECK_EQ(defaults.value().jobs,1u); CHECK(!defaults.value().verifyFinal);
   for (const auto& args : std::vector<std::vector<std::string>>{
-      {"--jobs=4","--baseline=skip","main.cpp"},
-      {"--jobs","4","--baseline","skip","main.cpp"},
-      {"-j","4","--baseline=skip","main.cpp"}}) {
+      {"--jobs=4","main.cpp"},
+      {"--jobs","4","main.cpp"},
+      {"-j","4","main.cpp"}}) {
     const auto r = parseDistillOptions(args); CHECK(r.ok());
-    CHECK_EQ(r.value().jobs,4u); CHECK(r.value().skipBaseline);
+    CHECK_EQ(r.value().jobs,4u);
   }
   CHECK(!parseDistillOptions({"-j4","main.cpp"}).ok());
-  const auto compiler = parseDistillOptions({"g++","--jobs=4","--baseline=skip","-j","4","main.cpp"});
-  CHECK_EQ(compiler.value().jobs,1u); CHECK(!compiler.value().skipBaseline);
-  CHECK_EQ(compiler.value().compile,(std::vector<std::string>{"g++","--jobs=4","--baseline=skip","-j","4","main.cpp"}));
+  const auto compiler = parseDistillOptions({"g++","--jobs=4","-j","4","main.cpp"});
+  CHECK_EQ(compiler.value().jobs,1u);
+  CHECK_EQ(compiler.value().compile,(std::vector<std::string>{"g++","--jobs=4","-j","4","main.cpp"}));
   for (const auto& args : std::vector<std::vector<std::string>>{
       {"--jobs"}, {"--jobs=0","main.cpp"}, {"--jobs=-1","main.cpp"},
       {"--jobs=+2","main.cpp"}, {"--jobs=1.5","main.cpp"}, {"--jobs=4x","main.cpp"},
       {"--jobs=","main.cpp"}, {"--jobs=99999999999999999999","main.cpp"},
-      {"--baseline"}, {"--baseline=","main.cpp"}, {"--baseline=syntax","main.cpp"},
-      {"--baseline=skip","--verify-run","sample.in","main.cpp"},
       {"--jobs=4","--judge-probe","cses"}, {"--jobs=1","--judge-probe","cses"},
-      {"--baseline=build","--judge-probe","cses"}, {"--baseline=skip","--judge-check","cses","result.txt"}})
+      {"--jobs=4","--judge-check","cses","result.txt"}})
     CHECK(!parseDistillOptions(args).ok());
   CHECK(distillHelp().find("--jobs=N") != std::string::npos);
-  CHECK(distillHelp().find("--baseline=build|skip") != std::string::npos);
+  CHECK(distillHelp().find("--baseline") == std::string::npos);
+  for (const auto* flag : {"--baseline", "--baseline=build", "--baseline=skip"}) {
+    const auto removed = parseDistillOptions({flag,"main.cpp"});
+    CHECK(!removed.ok()); CHECK(removed.error().message.starts_with("unknown distill option: "));
+  }
 }
 
 TEST(validate_verify_options_and_compiler_boundary) {
   for (const auto& args : std::vector<std::vector<std::string>>{
       {"--verify=final","main.cpp"}, {"--verify","final","main.cpp"},
-      {"--verify=final","--jobs=4","--baseline=skip","--shorten-names","main.cpp"},
+      {"--verify=final","--jobs=4","--shorten-names","main.cpp"},
       {"--verify=final","--verify-run","sample.in","main.cpp"}}) {
     const auto r = parseDistillOptions(args); CHECK(r.ok()); CHECK(r.value().verifyFinal);
   }

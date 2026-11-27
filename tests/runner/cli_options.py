@@ -57,13 +57,14 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         (['--jobs=0', 'main.cpp'], 1, '--jobs requires a positive integer'),
         (['--jobs=-2', 'main.cpp'], 1, '--jobs requires a positive integer'),
         (['--jobs=2x', 'main.cpp'], 1, '--jobs requires a positive integer'),
-        (['--baseline=syntax', 'main.cpp'], 1, '--baseline requires build or skip'),
+        (['--baseline=build', 'main.cpp'], 1, 'unknown distill option: --baseline=build'),
         (['--verify'], 1, 'missing value for --verify'),
         (['--verify=', 'main.cpp'], 1, '--verify requires all or final'),
         (['--verify=none', 'main.cpp'], 1, '--verify requires all or final'),
-        (['--baseline=skip', '--verify-run', 'main.cpp', 'main.cpp'], 1, 'cannot be combined with --verify-run'),
+        (['--baseline=skip', 'main.cpp'], 1, 'unknown distill option: --baseline=skip'),
+        (['--baseline', 'build', 'main.cpp'], 1, 'unknown distill option: --baseline'),
         (['--jobs=4', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
-        (['-j', '2', '--baseline=skip', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
+        (['-j', '2', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--verify=final', '--no-prune', 'main.cpp'], 0, 'distill: wrote flat (local)'),
         (['--verify-run', 'missing.in', 'main.cpp'], 1, 'not a sample file or directory'),
         (['--no-prune', '--strip-comments', 'main.cpp'], 0, 'distill: wrote flat (local)'),
@@ -118,23 +119,6 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
         for name in ['library.h', 'sample.in', 'report.txt', 'submit.cpp']:
             (root / name).unlink()
         (root / 'main.cpp').write_bytes(saved)
-    with case('baseline skip refuses cwd-dependent assembly without publishing'):
-        saved = (root / 'main.cpp').read_bytes()
-        assembly = 'asm(".pushsection .rodata\\n.incbin \\\"raw.cpp\\\"\\n.popsection");\n'
-        (root / 'payload.h').write_text(assembly)
-        for source in [assembly + 'int main(){return 0;}\n',
-                       '#include "payload.h"\nint main(){return 0;}\n']:
-            (root / 'main.cpp').write_text(source)
-            for jobs in [1, 4]:
-                result = subprocess.run([binary, '--no-prune', '--baseline=skip', '--verify=final',
-                                         '--jobs=' + str(jobs), '-o', 'submit.cpp',
-                                         'g++', '-std=gnu++20', 'main.cpp'],
-                                        cwd=root, capture_output=True, text=True, timeout=120)
-                check(result.returncode == 1 and not result.stdout, result)
-                check('--baseline=skip cannot be used with assembly' in result.stderr, result.stderr)
-                check(not (root / 'submit.cpp').exists(), list(root.iterdir()))
-        (root / 'main.cpp').write_bytes(saved)
-        (root / 'payload.h').unlink()
     with case('verbose link failure preserves serial progress'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('extern int missing();\nint main(){return missing();}\n')
@@ -160,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                 outputs = []
                 for mode in ['all', 'final']:
                     result = subprocess.run([binary, rendering, '--verify=' + mode, '--jobs=4',
-                                             '--baseline=skip', '--report', 'report.txt',
+                                             '--report', 'report.txt',
                                              'g++', '-std=gnu++20', 'main.cpp'],
                                             cwd=root, capture_output=True, timeout=120)
                     check(result.returncode == 0, result.stderr)
@@ -182,7 +166,7 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
                 check(outputs[0] == outputs[1], outputs)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
-    with case('jobs preserve bytes and report order; baseline skip retains full artifact checks'):
+    with case('jobs preserve bytes and report order'):
         saved = (root / 'main.cpp').read_bytes()
         (root / 'main.cpp').write_text('int unused(){return 7;}\nint main(){int longLocalName=0;return longLocalName;}\n')
         reference = None
@@ -193,19 +177,12 @@ with tempfile.TemporaryDirectory(prefix='.distill-cli-options-', dir=Path.cwd())
             check(result.returncode == 0, result.stderr)
             report = (root / 'report.txt').read_text()
             stable = re.sub(r'\.distill-(work|probe|prune)-[0-9]+-[0-9]+', r'.distill-\1-TEMP', report)
-            check('option jobs=' not in report and 'option baseline=' not in report, report)
+            check('option jobs=' not in report, report)
+            check('process baseline build ' in report and 'baseline: passed' in report, report)
             if reference is None:
                 reference = (result.stdout, stable)
             else:
                 check((result.stdout, stable) == reference, 'output or ordered report differs with ' + repr(flags))
-        skipped = subprocess.run([binary, '--shorten-names', '--jobs=4', '--baseline=skip',
-                                  '--report', 'report.txt', 'g++', '-std=gnu++20', 'main.cpp'],
-                                 cwd=root, capture_output=True, timeout=120)
-        report = (root / 'report.txt').read_text()
-        check(skipped.returncode == 0 and skipped.stdout == reference[0], skipped.stderr)
-        check('process baseline build ' not in report and 'baseline: passed' not in report, report)
-        check('option baseline check: skipped (no runtime samples)' in report, report)
-        check('raw: passed' in report and 'pruned with shortened names: passed' in report, report)
         (root / 'main.cpp').write_bytes(saved)
         (root / 'report.txt').unlink()
     with case('instantiation-effects flag reaches the worker and modes do not mix'):

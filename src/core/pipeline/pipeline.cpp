@@ -3,7 +3,6 @@
 #include "core/report/report.h"
 #include "core/render/render.h"
 #include "core/render/shorten_names.h"
-#include "core/lex/scan.h"
 #include "core/validate/preprocess.h"
 #include "core/path.h"
 #include "core/temporary.h"
@@ -45,12 +44,6 @@ bool runnable(const Configuration& c) {
 bool independentCompilerCommand(const CompileCommand& command) {
   // Unknown flags can name shared side-effect files or load compiler plugins.
   return std::none_of(command.args.begin(),command.args.end(),[](const auto& a) { return a.classification == Class::unmodelled; });
-}
-void rejectSkippedAssembly(std::string_view text) {
-  const auto scanned = take(scanDirectives(text));
-  for (const auto& token : scanned.identifiers)
-    if (token.text == "asm" || token.text == "__asm" || token.text == "__asm__")
-      throw Error{"--baseline=skip cannot be used with assembly; use --baseline=build to validate external file dependencies"};
 }
 void checkedBytes(const std::filesystem::path& p, std::string_view expected) {
   std::ifstream f(p, std::ios::binary);
@@ -488,9 +481,6 @@ struct Pipeline {
                const std::filesystem::path& b, const InlineResult& raw, const Configuration* baseline = nullptr) {
     prefetchPreprocessing(baseline ? *baseline : c,a,!original,c,b);
     auto left = preprocess(baseline ? *baseline : c, a, !original), right = preprocess(c, b, true);
-    // Macro expansion (including token pasting and command-line definitions)
-    // can introduce assembly absent from the inlined source's identifiers.
-    if (options.skipBaseline && original) rejectSkippedAssembly(left);
     take(comparePreprocessed(left, right, originalFileMapper(raw)));
   }
   void changes(Configuration& c) {
@@ -501,15 +491,9 @@ struct Pipeline {
       c.changes.push_back({{f}, "profile link option omitted for local fallback; local link options retained"});
   }
   PipelineResult run() {
-    if (options.skipBaseline) result.optionLines.push_back("baseline=skip");
     if (options.verifyFinal) result.optionLines.push_back("verify=final");
     try {
       if (!options.jobs) throw Error{"--jobs requires a positive integer"};
-      if (options.skipBaseline && !options.samples.empty()) throw Error{"--baseline=skip cannot be combined with --verify-run"};
-      if (options.skipBaseline) for (const auto& arg : command.args)
-        if (arg.classification == Class::unmodelled || arg.classification == Class::libraries || arg.option == "-fmodules")
-          throw Error{"--baseline=skip cannot be used with option " + arg.spelling.front() +
-                      "; external file dependencies require --baseline=build"};
       for (const auto& arg : command.args) if (arg.option == "-shared" || arg.option == "-r")
         throw Error{"compile command does not build an executable: " + arg.option};
       step("probe local compiler");
@@ -521,25 +505,20 @@ struct Pipeline {
         result.diagnostic += "explicitly named Clang accepted\n";
       if (options.profile && command.dialect() && *command.dialect() != options.profile->dialect.name)
         result.diagnostic += "warning: profile dialect " + options.profile->dialect.name + " overrides " + *command.dialect() + " for flat\n";
-      step(options.skipBaseline ? "baseline skipped" : "baseline build");
+      step("baseline build");
       try {
-        if (!options.skipBaseline) {
-          if (options.jobs > 1 && options.samples.empty() && independentCompilerCommand(command)) startBaseline(local);
-          else runs["baseline"] = execute(local,build(local, command.source, false,"baseline"));
-        }
+        if (options.jobs > 1 && options.samples.empty() && independentCompilerCommand(command)) startBaseline(local);
+        else runs["baseline"] = execute(local,build(local, command.source, false,"baseline"));
       }
       catch (const Error& e) {
         result.checks.push_back({"baseline", e.message, local, {}});
         throw Error{"baseline failed: " + e.message};
       }
-      if (!options.skipBaseline) result.checks.push_back({"baseline", "passed", local, {}});
-      else result.optionLines.push_back("baseline check: skipped (no runtime samples)");
+      result.checks.push_back({"baseline", "passed", local, {}});
       step("inline");
       InlineOptions io; if (options.profile) io.libraries = options.profile->libraries;
       io.deadline = deadline;
       auto raw = take(inlineSources(command, take(buildIncludeSearch(command, local.probe.searchLists)), io));
-      if (options.skipBaseline && raw.flags.assembly)
-        throw Error{"--baseline=skip cannot be used with assembly; use --baseline=build to validate external file dependencies"};
       if (Clock::now() >= deadline) throw Error{"inline deadline exceeded"};
       raw.keepOffsets = take(captureKeepOffsets(raw.text));
       auto rawChecked = strip(sourceModel(raw.text,raw.lineMap,raw.keepOffsets));
